@@ -15,7 +15,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
+import type {
+  GroupSignaler,
+  SubjectHostProbe,
+} from '../src/campaign/dispatcher.ts';
 import {
   electWriter,
   type JournalFsOps,
@@ -67,6 +70,26 @@ function mortalGroup(): { signal: GroupSignaler; sent: NodeJS.Signals[] } {
 const CAMPAIGN_CHILD: CampaignChildProbe = {
   commandLine: () => childCommandLine('a1'),
 };
+
+/** The in-flight run's private gauntlet tmux server — the process the group
+ *  kill never reaches (C10). Dies on kill-server unless `immortal`. */
+function subjectHost(
+  opts: { immortal?: boolean } = {},
+): SubjectHostProbe & { kills: string[] } {
+  const dead = new Set<string>();
+  const kills: string[] = [];
+  return {
+    kills,
+    find: (runDir) => {
+      const name = `gauntlet-${basename(runDir)}-subject`;
+      return dead.has(name) ? null : name;
+    },
+    kill: (server) => {
+      kills.push(server);
+      if (opts.immortal !== true) dead.add(server);
+    },
+  };
+}
 
 function lastEvent(dir: string): { type: string; payload: unknown } | null {
   const r = openJournalRead(dir);
@@ -354,6 +377,77 @@ test('post-crash cancel PROCEEDS past a BENIGN reclamation — a reused leader p
   const types = journaledTypes(dir, 2);
   expect(types).toContain('aborted');
   expect(types[types.length - 1]).toBe('campaign_cancelled');
+});
+
+test("post-crash cancel kills the in-flight run's tmux subject host after its group (C10: the group's death never reaches the subject)", async () => {
+  const { dir } = publishedCampaign();
+  const host = subjectHost();
+  const result = await cancelCampaign({
+    campaignDir: dir,
+    reason: 'operator test',
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    child: CAMPAIGN_CHILD,
+    signal: mortalGroup().signal,
+    graceSeconds: 0,
+    lockPath: lockDir('l15.d'),
+    stream: { write: () => {} },
+    resultsRoot: join(dir, 'results'),
+    subjectHost: host,
+  });
+  expect(result.cancelled).toBe(true);
+  expect(host.kills).toEqual(['gauntlet-r1-subject']);
+  const types = journaledTypes(dir, 2);
+  expect(types).toContain('aborted');
+  expect(types[types.length - 1]).toBe('campaign_cancelled');
+});
+
+test("post-crash cancel REFUSES to journal aborted/campaign_cancelled when a run's tmux subject host survives kill-server", async () => {
+  const { dir } = publishedCampaign();
+  const loud: string[] = [];
+  const result = await cancelCampaign({
+    campaignDir: dir,
+    reason: 'operator test',
+    clock: new FakeClock(1),
+    identity: ALIVE_AT_5,
+    child: CAMPAIGN_CHILD,
+    signal: mortalGroup().signal, // the group dies...
+    graceSeconds: 0,
+    lockPath: lockDir('l16.d'),
+    stream: { write: (s) => loud.push(s) },
+    resultsRoot: join(dir, 'results'),
+    subjectHost: subjectHost({ immortal: true }), // ...the subject does not
+  });
+  expect(result.cancelled).toBe(false);
+  const types = journaledTypes(dir, 2);
+  expect(types).not.toContain('aborted');
+  expect(types).not.toContain('campaign_cancelled');
+  expect(loud.join('')).toMatch(/gauntlet-r1-subject/);
+  expect(loud.join('')).toMatch(/cancel incomplete/);
+  expect(existsSync(join(dir, 'cancel-request'))).toBe(true);
+});
+
+test("resume REFUSES when an in-flight run's tmux subject host survives kill-server (live spend)", async () => {
+  const { dir } = publishedCampaign();
+  await expect(
+    resumeCampaign({
+      campaignDir: dir,
+      credentials: {},
+      evalsCheckout: dir,
+      gauntletCheckout: dir,
+      superpowersCheckout: dir,
+      clock: new FakeClock(1),
+      identity: ALIVE_AT_5,
+      child: CAMPAIGN_CHILD,
+      signal: mortalGroup().signal,
+      graceSeconds: 0,
+      lockPath: lockDir('l17.d'),
+      stream: { write: () => {} },
+      resultsRoot: join(dir, 'results'),
+      subjectHost: subjectHost({ immortal: true }),
+    }),
+  ).rejects.toThrow(/gauntlet-r1-subject/);
+  expect(journaledTypes(dir, 2)).not.toContain('block_replaced');
 });
 
 test('resume REFUSES when a journaled process group survives TERM+KILL (live spend)', async () => {

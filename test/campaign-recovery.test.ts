@@ -1,9 +1,12 @@
 import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { SidecarLine } from '../src/campaign/contention.ts';
-import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
+import type {
+  GroupSignaler,
+  SubjectHostProbe,
+} from '../src/campaign/dispatcher.ts';
 import { type EventInput, replayEvents } from '../src/campaign/journal.ts';
 import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import {
@@ -14,6 +17,7 @@ import {
   readRunDirIdentities,
   rederiveContentionSuffix,
   terminalEvidenceActions,
+  unverifiedSubjectHosts,
 } from '../src/campaign/recovery.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
 import type { CampaignUniverse } from '../src/contracts/campaign/crash-windows.ts';
@@ -51,6 +55,43 @@ const ALIVE_AT_5: ProcessIdentityProbe = {
   startTimeMs: () => 5,
 };
 
+/** Never read: the subject-host seam is faked, so no run dir is probed. */
+const RESULTS_ROOT = '/results';
+/** Nothing hosts any run — for tests that are not about the subject host. */
+const NO_SUBJECT_HOST: SubjectHostProbe = { find: () => null, kill: () => {} };
+/** C10 subject-host fake: every run dir is hosted by its own private
+ *  gauntlet server (`gauntlet-<runId>-subject`) until killed, unless
+ *  `immortal`. Fake servers never reach real tmux. */
+function fakeSubjectHost(
+  opts: { immortal?: boolean } = {},
+): SubjectHostProbe & { finds: string[]; kills: string[] } {
+  const dead = new Set<string>();
+  const finds: string[] = [];
+  const kills: string[] = [];
+  return {
+    finds,
+    kills,
+    find: (runDir) => {
+      finds.push(runDir);
+      const name = `gauntlet-${basename(runDir)}-subject`;
+      return dead.has(name) ? null : name;
+    },
+    kill: (server) => {
+      kills.push(server);
+      if (opts.immortal !== true) dead.add(server);
+    },
+  };
+}
+/** The child dies on TERM and answers ESRCH thereafter. */
+function mortalGroup(): GroupSignaler {
+  const dead = new Set<number>();
+  return (pgid, sig) => {
+    if (dead.has(pgid)) return 'esrch';
+    if (sig === 'SIGTERM') dead.add(pgid);
+    return 'ok';
+  };
+}
+
 function inFlightEvents(): JournalEvent[] {
   SEQ = 0;
   return [
@@ -84,6 +125,8 @@ test('killJournaledPgids: every journaled pgid without a terminal is TERMed and 
   const report = await killJournaledPgids({
     events: inFlightEvents(),
     campaignId: CAMPAIGN_ID,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
     identity: ALIVE_AT_5,
     child: {
       commandLine: (pgid) => (pgid === 111 ? childCommandLine('a1') : null),
@@ -113,6 +156,8 @@ test('killJournaledPgids: a recycled pgid and an uninspectable group are reclaim
     const report = await killJournaledPgids({
       events: inFlightEvents(),
       campaignId: CAMPAIGN_ID,
+      resultsRoot: RESULTS_ROOT,
+      subjectHost: NO_SUBJECT_HOST,
       identity: ALIVE_AT_5,
       child: { commandLine },
       signal: (pgid, sig) => {
@@ -151,6 +196,8 @@ test('killJournaledPgids: a group surviving TERM+KILL is reported survived (neve
   const survivor = await killJournaledPgids({
     events: inFlightEvents(),
     campaignId: CAMPAIGN_ID,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
     identity: ALIVE_AT_5,
     child: { commandLine: () => childCommandLine('a1') },
     signal: () => 'ok', // never dies
@@ -165,6 +212,8 @@ test('killJournaledPgids: a group surviving TERM+KILL is reported survived (neve
     killJournaledPgids({
       events: inFlightEvents(),
       campaignId: CAMPAIGN_ID,
+      resultsRoot: RESULTS_ROOT,
+      subjectHost: NO_SUBJECT_HOST,
       identity: ALIVE_AT_5,
       child: { commandLine: () => childCommandLine('a1') },
       signal: () => {
@@ -187,6 +236,8 @@ test('killJournaledPgids: a dead LEADER is not a dead group — a leaderless gro
   const live = await killJournaledPgids({
     events: inFlightEvents(),
     campaignId: CAMPAIGN_ID,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
     identity: leaderGone,
     child: { commandLine: () => null }, // no leader to inspect
     signal: (pgid, sig) => {
@@ -206,6 +257,8 @@ test('killJournaledPgids: a dead LEADER is not a dead group — a leaderless gro
   const gone = await killJournaledPgids({
     events: inFlightEvents(),
     campaignId: CAMPAIGN_ID,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
     identity: leaderGone,
     child: { commandLine: () => null },
     signal: () => 'esrch',
@@ -229,6 +282,8 @@ test('killJournaledPgids: a leader that dies between the identity check and the 
   const report = await killJournaledPgids({
     events: inFlightEvents(),
     campaignId: CAMPAIGN_ID,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
     identity: dyingLeader,
     child: { commandLine: () => childCommandLine('a1') },
     signal: (_pgid, sig) => {
@@ -243,6 +298,96 @@ test('killJournaledPgids: a leader that dies between the identity check and the 
   expect(report.reclaimedUnsafe).toEqual([111]);
   expect(signalled).toEqual([0]); // group probe only — no TERM, no KILL
   expect(loud.join('')).toMatch(/still answers/);
+});
+
+// The group's death never reaches the subject (C10): gauntlet hosts every
+// Coding-Agent in a private tmux server that setsid()s out of the child's
+// group, so verified death must ALSO reach the run's tmux subject host.
+test("killJournaledPgids: after the group is verified dead, the run's tmux subject host is killed and VERIFIED gone", async () => {
+  const host = fakeSubjectHost();
+  const report = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: ALIVE_AT_5,
+    child: {
+      commandLine: (pgid) => (pgid === 111 ? childCommandLine('a1') : null),
+    },
+    signal: mortalGroup(),
+    clock: new FakeClock(),
+    graceSeconds: 5,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: host,
+  });
+  expect(report.killed).toEqual([111]);
+  expect(report.subjectHostsKilled).toEqual([
+    { attempt_id: 'a1', run_id: 'r1', server: 'gauntlet-r1-subject' },
+  ]);
+  expect(report.subjectHostsSurvived).toEqual([]);
+  expect(host.kills).toEqual(['gauntlet-r1-subject']);
+  // Only the non-terminal attempt's run is probed: a terminaled run's
+  // gauntlet ran its own teardown.
+  expect(host.finds.length).toBeGreaterThan(0);
+  expect(host.finds.every((d) => d === join(RESULTS_ROOT, 'r1'))).toBe(true);
+});
+
+test('killJournaledPgids: a group that was already dead STILL gets its tmux subject host killed — the crash-path orphan (R-RCV-1)', async () => {
+  // The dispatcher crashed and the child died with it; gauntlet's tmux
+  // server (ppid 1) kept the subject running and spending.
+  const host = fakeSubjectHost();
+  const report = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: { exists: () => 'esrch', startTimeMs: () => null },
+    child: { commandLine: () => null },
+    signal: () => 'esrch',
+    clock: new FakeClock(),
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: host,
+  });
+  expect(report.alreadyDead).toEqual([111]);
+  expect(report.subjectHostsKilled).toEqual([
+    { attempt_id: 'a1', run_id: 'r1', server: 'gauntlet-r1-subject' },
+  ]);
+  expect(host.kills).toEqual(['gauntlet-r1-subject']);
+  // A run nothing hosts is simply not a subject-host kill.
+  const unhosted = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: { exists: () => 'esrch', startTimeMs: () => null },
+    child: { commandLine: () => null },
+    signal: () => 'esrch',
+    clock: new FakeClock(),
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
+  });
+  expect(unhosted.subjectHostsKilled).toEqual([]);
+  expect(unhosted.subjectHostsSurvived).toEqual([]);
+});
+
+test('killJournaledPgids: a tmux subject host surviving kill-server is reported survived (never counted killed) and blocks both verbs like a surviving group', async () => {
+  const host = fakeSubjectHost({ immortal: true });
+  const loud: string[] = [];
+  const report = await killJournaledPgids({
+    events: inFlightEvents(),
+    campaignId: CAMPAIGN_ID,
+    identity: ALIVE_AT_5,
+    child: { commandLine: () => childCommandLine('a1') },
+    signal: mortalGroup(),
+    clock: new FakeClock(),
+    graceSeconds: 0,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: host,
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(report.killed).toEqual([111]); // the group did die...
+  expect(report.subjectHostsKilled).toEqual([]);
+  expect(report.subjectHostsSurvived).toEqual([
+    { attempt_id: 'a1', run_id: 'r1', server: 'gauntlet-r1-subject' },
+  ]);
+  expect(unverifiedSubjectHosts(report)).toEqual([
+    'tmux server gauntlet-r1-subject (attempt a1, run r1)',
+  ]);
+  expect(loud.join('')).toMatch(/subject verify-death FAILED/);
 });
 
 // ---------------------------------------------------------------------------

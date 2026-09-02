@@ -55,12 +55,15 @@ import {
   estimateInflightTotal,
   type GroupSignaler,
   killGroupVerified,
+  killSubjectHostVerified,
   nextRerunInstanceId,
   readVerdictSummary,
   realGroupSignaler,
   realSamplerSeam,
+  realSubjectHostProbe,
   runCampaignDispatch,
   runCostFromArtifacts,
+  type SubjectHostProbe,
 } from './dispatcher.ts';
 import {
   assertFingerprintMatch,
@@ -312,12 +315,35 @@ export interface KillJournaledPgidsReport {
   readonly reclaimedUnsafe: number[];
   /** Signaled but survived TERM+KILL — the caller must refuse to proceed. */
   readonly survived: number[];
+  /** Runs whose tmux subject host (gauntlet's private server, which the
+   *  group kill never reaches — C10) was killed and VERIFIED gone. */
+  readonly subjectHostsKilled: SubjectHostRecord[];
+  /** Runs whose tmux subject host survived kill-server — still spending
+   *  under a dead gauntlet; the caller must refuse to proceed. */
+  readonly subjectHostsSurvived: SubjectHostRecord[];
+}
+
+export interface SubjectHostRecord {
+  readonly attempt_id: string;
+  readonly run_id: string;
+  readonly server: string;
 }
 
 /** Every group the report could not prove dead. Both verbs gate on this:
  *  resume refuses to re-admit, cancel refuses to journal a terminal. */
 export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
   return [...report.survived, ...report.reclaimedUnsafe];
+}
+
+/** Every tmux subject host the report could not prove gone, named for the
+ *  operator (`tmux -L <server> kill-server`). Gates both verbs exactly like
+ *  unverifiedGroups. */
+export function unverifiedSubjectHosts(
+  report: KillJournaledPgidsReport,
+): string[] {
+  return report.subjectHostsSurvived.map(
+    (h) => `tmux server ${h.server} (attempt ${h.attempt_id}, run ${h.run_id})`,
+  );
 }
 
 /** R-RCV-1: on crash restart, kill every journaled pgid of an attempt
@@ -328,13 +354,21 @@ export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
  *  TERM->wait->KILL->verify primitive (killGroupVerified, C10) — a group
  *  that fails the guard is recorded reclaimed-without-kill (loud), never
  *  signaled blind, and a group that survives is reported, never counted
- *  killed. Signal errors propagate; nothing is swallowed. */
+ *  killed. Whatever the group's disposition, the attempt's run then has its
+ *  tmux subject host killed and verified gone (the group's death never
+ *  reaches the subject; after a dispatcher crash the group is typically
+ *  already dead while the subject is still spending). Signal errors
+ *  propagate; nothing is swallowed. */
 export async function killJournaledPgids(args: {
   events: readonly JournalEvent[];
   campaignId: string;
+  /** Absolute run-dir root: the subject host is located by run dir. */
+  resultsRoot: string;
   identity?: ProcessIdentityProbe;
   child?: CampaignChildProbe;
   signal?: GroupSignaler;
+  /** C10 subject-host seam; production default realSubjectHostProbe. */
+  subjectHost?: SubjectHostProbe;
   clock?: Clock;
   stream?: { write(s: string): void };
   graceSeconds?: number;
@@ -345,6 +379,7 @@ export async function killJournaledPgids(args: {
   const identity = args.identity ?? realProcessIdentityProbe;
   const child = args.child ?? realCampaignChildProbe;
   const signal = args.signal ?? realGroupSignaler;
+  const subjectHost = args.subjectHost ?? realSubjectHostProbe;
   const clock = args.clock ?? new RealClock();
   const graceSeconds = args.graceSeconds ?? KILL_GRACE_SECONDS;
 
@@ -359,6 +394,8 @@ export async function killJournaledPgids(args: {
   const reclaimedBenign: number[] = [];
   const reclaimedUnsafe: number[] = [];
   const survived: number[] = [];
+  const subjectHostsKilled: SubjectHostRecord[] = [];
+  const subjectHostsSurvived: SubjectHostRecord[] = [];
   /** A reclamation is BENIGN only when no campaign child can still be
    *  running under this pgid; every other reclamation leaves live spend on
    *  the table and blocks the caller. */
@@ -409,11 +446,11 @@ export async function killJournaledPgids(args: {
       'unsafe',
     );
   };
-  for (const event of args.events) {
-    if (event.type !== 'run_allocated') continue;
-    const attemptId = event.payload.attempt_id;
-    if (terminalAttempts.has(attemptId)) continue;
-    const pgid = event.payload.pgid;
+  /** The identity-guarded group disposition for one journaled pgid. */
+  const disposeGroup = async (
+    pgid: number,
+    attemptId: string,
+  ): Promise<void> => {
     const exists = identity.exists(pgid);
     if (exists === 'esrch') {
       groupDisposition(
@@ -422,7 +459,7 @@ export async function killJournaledPgids(args: {
         'the recorded leader is gone (ESRCH)',
         'already-dead',
       );
-      continue;
+      return;
     }
     if (exists === 'unknown') {
       reclaim(
@@ -431,7 +468,7 @@ export async function killJournaledPgids(args: {
         'process identity unknown (neither alive nor ESRCH)',
         'unsafe',
       );
-      continue;
+      return;
     }
     const commandLine = child.commandLine(pgid);
     if (commandLine === null) {
@@ -441,7 +478,7 @@ export async function killJournaledPgids(args: {
         'command line unreadable — campaign-child shape uninspectable',
         'unsafe',
       );
-      continue;
+      return;
     }
     if (!isCampaignChild(commandLine, args.campaignId, attemptId)) {
       // Pid reuse is not, by itself, proof that OUR child is gone: the same
@@ -454,7 +491,7 @@ export async function killJournaledPgids(args: {
         'group leader is not this campaign child (pid reuse)',
         'benign-reclaim',
       );
-      continue;
+      return;
     }
     // Identity established: the verified kill re-reads the OS start time and
     // refuses on any drift between this check and the signal.
@@ -492,6 +529,37 @@ export async function killJournaledPgids(args: {
         );
         break;
     }
+  };
+  for (const event of args.events) {
+    if (event.type !== 'run_allocated') continue;
+    const attemptId = event.payload.attempt_id;
+    if (terminalAttempts.has(attemptId)) continue;
+    await disposeGroup(event.payload.pgid, attemptId);
+    // The subject outlives its group (C10): reach the run's tmux host on
+    // every disposition — a group that is already gone is the crash-path
+    // norm, and its subject is exactly the orphan still spending.
+    const runId = event.payload.run_id;
+    const host = await killSubjectHostVerified({
+      runDir: join(args.resultsRoot, runId),
+      host: subjectHost,
+      clock,
+      stream,
+      graceSeconds,
+    });
+    if (host.status === 'none') continue;
+    const record = {
+      attempt_id: attemptId,
+      run_id: runId,
+      server: host.server,
+    };
+    if (host.status === 'dead') {
+      subjectHostsKilled.push(record);
+      continue;
+    }
+    subjectHostsSurvived.push(record);
+    stream.write(
+      `orphan tmux server ${host.server} (attempt ${attemptId}, run ${runId}) survived kill-server — operator action: kill it manually before resuming; its subject is still spending\n`,
+    );
   }
   return {
     killed,
@@ -499,6 +567,8 @@ export async function killJournaledPgids(args: {
     reclaimedBenign,
     reclaimedUnsafe,
     survived,
+    subjectHostsKilled,
+    subjectHostsSurvived,
   };
 }
 
@@ -1767,6 +1837,10 @@ export interface ResumeArgs {
   readonly signal?: GroupSignaler;
   /** R-RCV-1 campaign-child shape probe; production default is `ps`. */
   readonly child?: CampaignChildProbe;
+  /** THE tmux subject-host seam for the whole verb (C10): the R-RCV-1
+   *  orphan kill and the dispatcher's own kills. Production omits it
+   *  (realSubjectHostProbe); tests never reach real tmux. */
+  readonly subjectHost?: SubjectHostProbe;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
 }
@@ -1934,8 +2008,14 @@ export async function resumeCampaign(
       clock,
       identity,
       ...(args.lockPath !== undefined ? { lockPath: args.lockPath } : {}),
+      ...(args.resultsRoot !== undefined
+        ? { resultsRoot: args.resultsRoot }
+        : {}),
       ...(args.signal !== undefined ? { signal: args.signal } : {}),
       ...(args.child !== undefined ? { child: args.child } : {}),
+      ...(args.subjectHost !== undefined
+        ? { subjectHost: args.subjectHost }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { graceSeconds: args.graceSeconds }
         : {}),
@@ -1997,11 +2077,15 @@ export async function resumeCampaign(
       killReport = await killJournaledPgids({
         events,
         campaignId: campaign.campaign_id,
+        resultsRoot,
         identity,
         clock,
         stream,
         ...(args.signal !== undefined ? { signal: args.signal } : {}),
         ...(args.child !== undefined ? { child: args.child } : {}),
+        ...(args.subjectHost !== undefined
+          ? { subjectHost: args.subjectHost }
+          : {}),
         ...(args.graceSeconds !== undefined
           ? { graceSeconds: args.graceSeconds }
           : {}),
@@ -2018,6 +2102,16 @@ export async function resumeCampaign(
           `resume refused: process group(s) ${unverified.join(
             ', ',
           )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — they may still be spending; identify and kill them by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
+        );
+      }
+      // The same precondition for the subject the group never held (C10):
+      // a tmux host that outlived kill-server is still spending.
+      const unverifiedHosts = unverifiedSubjectHosts(killReport);
+      if (unverifiedHosts.length > 0) {
+        throw new RecoveryError(
+          `resume refused: ${unverifiedHosts.join(
+            ', ',
+          )} survived kill-server — the subject may still be spending; kill it by hand (\`tmux -L <server> kill-server\`), then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
         );
       }
       plan = planRecovery({ universe, events });
@@ -2353,8 +2447,12 @@ export async function resumeCampaign(
       }),
       ...(args.spawner !== undefined ? { spawner: args.spawner } : {}),
       // One C10 seam for the verb: the dispatcher's kills and pgid probes
-      // ride the same signaler recovery just killed the orphans with.
+      // ride the same signaler (and subject-host probe) recovery just
+      // killed the orphans with.
       ...(args.signal !== undefined ? { signalGroup: args.signal } : {}),
+      ...(args.subjectHost !== undefined
+        ? { subjectHost: args.subjectHost }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { killGraceSeconds: args.graceSeconds }
         : {}),
@@ -2407,9 +2505,13 @@ export interface CancelArgs {
   readonly clock: Clock;
   readonly identity: ProcessIdentityProbe;
   readonly lockPath?: string;
+  /** Run-dir root the post-crash kill locates each run's tmux subject host
+   *  under (see ResumeArgs). */
+  readonly resultsRoot?: string;
   /** R-RCV-1 kill seams (see ResumeArgs). */
   readonly signal?: GroupSignaler;
   readonly child?: CampaignChildProbe;
+  readonly subjectHost?: SubjectHostProbe;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
   /** Durability seam for the cancel-request marker (see StoragePauseArgs). */
@@ -2577,11 +2679,15 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
     const killReport = await killJournaledPgids({
       events,
       campaignId: campaign.campaign_id,
+      resultsRoot: resolveCampaignResultsRoot(args.resultsRoot),
       identity: args.identity,
       clock: args.clock,
       stream,
       ...(args.signal !== undefined ? { signal: args.signal } : {}),
       ...(args.child !== undefined ? { child: args.child } : {}),
+      ...(args.subjectHost !== undefined
+        ? { subjectHost: args.subjectHost }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { graceSeconds: args.graceSeconds }
         : {}),
@@ -2597,6 +2703,17 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
         `cancel: process group(s) ${unverified.join(
           ', ',
         )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — operator action: identify and kill them by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
+      );
+      return { cancelled: false, postCrash: true };
+    }
+    // The same precondition for the subject the group never held (C10): a
+    // tmux host that outlived kill-server is still spending.
+    const unverifiedHosts = unverifiedSubjectHosts(killReport);
+    if (unverifiedHosts.length > 0) {
+      stream.write(
+        `cancel: ${unverifiedHosts.join(
+          ', ',
+        )} survived kill-server — operator action: kill it by hand (\`tmux -L <server> kill-server\`), then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the subject may still be spending\n`,
       );
       return { cancelled: false, postCrash: true };
     }

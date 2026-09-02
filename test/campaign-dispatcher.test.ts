@@ -2153,7 +2153,7 @@ test("killSubjectHostVerified (C10): finds the run's tmux server, kills it, and 
       stream: silent,
       graceSeconds: 5,
     }),
-  ).toBe('none');
+  ).toEqual({ status: 'none' });
   expect(none.kills).toEqual([]);
   // A hosted run: kill-server once, then the re-probe proves it gone.
   const hosted = fakeSubjectHost(subjectServerFor);
@@ -2165,7 +2165,7 @@ test("killSubjectHostVerified (C10): finds the run's tmux server, kills it, and 
       stream: silent,
       graceSeconds: 5,
     }),
-  ).toBe('dead');
+  ).toEqual({ status: 'dead', server: 'gauntlet-run-1-subject' });
   expect(hosted.kills).toEqual(['gauntlet-run-1-subject']);
   expect(hosted.finds.length).toBe(2); // the locate + the verifying re-probe
   // A server that still hosts the run past the grace is reported alive —
@@ -2180,7 +2180,7 @@ test("killSubjectHostVerified (C10): finds the run's tmux server, kills it, and 
       stream: { write: (s) => written.push(s) },
       graceSeconds: 0.05,
     }),
-  ).toBe('alive');
+  ).toEqual({ status: 'alive', server: 'gauntlet-run-1-subject' });
   expect(immortal.kills).toEqual(['gauntlet-run-1-subject']);
   expect(written.join('')).toMatch(/gauntlet-run-1-subject/);
   expect(written.join('')).toMatch(/verify-death FAILED/);

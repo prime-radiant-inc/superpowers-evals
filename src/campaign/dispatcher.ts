@@ -566,24 +566,28 @@ export interface KillSubjectHostArgs {
   readonly graceSeconds: number;
 }
 
+export type SubjectHostKill =
+  | { readonly status: 'none' }
+  | { readonly status: 'dead' | 'alive'; readonly server: string };
+
 /** The second half of verified death (C10): the run's tmux subject host.
  *  Locate the server hosting the run dir -> kill-server -> re-probe on the
  *  injected Clock until no server hosts the run (the pty hang-up reaps the
  *  pane's subject) or the grace expires. 'none' (nothing hosted the run —
  *  gauntlet never started, or its own teardown ran) and 'dead' are the only
- *  permitting results; 'alive' means the server outlived kill-server and
- *  the caller must abort its enclosing operation loudly. Independent of the
- *  group kill so it also covers a group that was already gone. */
+ *  permitting results; 'alive' means the named server outlived kill-server
+ *  and the caller must abort its enclosing operation loudly. Independent of
+ *  the group kill so it also covers a group that was already gone. */
 export async function killSubjectHostVerified(
   args: KillSubjectHostArgs,
-): Promise<'none' | 'dead' | 'alive'> {
+): Promise<SubjectHostKill> {
   const server = args.host.find(args.runDir);
-  if (server === null) return 'none';
+  if (server === null) return { status: 'none' };
   args.host.kill(server);
   const pollSeconds = 0.05;
   const deadline = args.clock.now() + args.graceSeconds;
   for (;;) {
-    if (args.host.find(args.runDir) === null) return 'dead';
+    if (args.host.find(args.runDir) === null) return { status: 'dead', server };
     const target = args.clock.now() + pollSeconds;
     if (target > deadline) break;
     await args.clock.sleepUntil(target);
@@ -591,7 +595,7 @@ export async function killSubjectHostVerified(
   args.stream.write(
     `kill: tmux server ${server} still hosts ${args.runDir} past ${args.graceSeconds}s grace after kill-server — subject verify-death FAILED (operator: \`tmux -L ${server} kill-server\`, then confirm \`tmux -L ${server} list-panes -a\` fails)\n`,
   );
-  return 'alive';
+  return { status: 'alive', server };
 }
 
 // --- C5: the shared instance-graph validator -------------------------------
@@ -1726,9 +1730,9 @@ export async function runCampaignDispatch(
             stream,
             graceSeconds: killGrace,
           });
-          if (host === 'alive') {
+          if (host.status === 'alive') {
             failures.push(
-              `tmux subject host of ${sample.attemptId} (run ${sample.runId}: alive)`,
+              `tmux server ${host.server} hosting ${sample.attemptId} (run ${sample.runId}: alive)`,
             );
             continue;
           }
