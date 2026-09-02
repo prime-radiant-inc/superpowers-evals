@@ -1,11 +1,12 @@
 # 2026-09-02 Opus 5 signature — first real campaign on the platform
 
-**Status:** CANCELLED by operator at 01:25:36Z (launched 2026-09-02
-00:48:04Z; 40 of 136 samples bound, $41.02 spent) — a validity-critical
-dispatcher bug surfaced on the first behavioral `fail` (below); the grid is
-re-run in full on the fixed platform rather than read out by hand
-(Drew's call: a clean campaign report over a partial one). Relaunch entry:
-_pending_ (same suite, same arms, same grader; new campaign id).
+**Status:** launch 1 (`85089661`) CANCELLED by operator at 01:25:36Z
+(launched 2026-09-02 00:48:04Z; 40 of 136 samples bound, $41.02 spent) — a
+validity-critical dispatcher bug surfaced on the first behavioral `fail`
+(below); the grid was re-run in full on the fixed platform rather than read
+out by hand (Drew's call: a clean campaign report over a partial one).
+**Launch 2 (`417f45dd`) RUNNING** from 02:16:40Z — same suite, arms, and
+grader; see "Relaunch" below. Results section pending its seal.
 **Kind:** exploratory (descriptive readout — a signature sketch, not a gate)
 **Venue:** quorum appliance, campaign platform (D3 engine + D4a readout), via
 the break-glass container exec; campaign dir
