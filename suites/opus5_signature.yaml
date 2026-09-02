@@ -1,0 +1,26 @@
+# Opus 5 model signature — a descriptive readout of claude on Opus 5 against
+# Opus 4.8, both on superpowers main over the funded Mantle route: the
+# claude-eligible sentinel tier at n=5 (the cheap cells, where sample size buys
+# resolution) plus the workhorse SDD cell at n=3. Exploratory on purpose: a
+# signature sketch, not a gate. Deliberately out: sdd-go-fractals-opus48 (the
+# corpus already holds n=10 per model — Opus 5 ≈ 3× cost, 3.4× wall time) and
+# sdd-escalates-broken-plan (settled Opus 5 propensity, 0/10 on both arms in
+# the 08-06 gate). The grader rides sonnet5_bedrock so the grading instrument
+# matches the corpus (claude-sonnet-5 throughout) and sits in its own pool.
+schema_version: 1
+name: opus5_signature
+kind: exploratory
+budget_usd: 200
+grader:
+  credential: sonnet5_bedrock
+  model: anthropic.claude-sonnet-5
+comparisons:
+  - baseline: claude_opus_bedrock_main
+    treatment: claude_opus5_bedrock_main
+    scenarios: tier=sentinel
+    n: 5
+  - baseline: claude_opus_bedrock_main
+    treatment: claude_opus5_bedrock_main
+    scenarios:
+      - sdd-breaker-rules-and-continues
+    n: 3

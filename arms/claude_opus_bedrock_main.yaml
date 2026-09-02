@@ -1,0 +1,8 @@
+# Claude on Opus 4.8 over the funded Mantle route with superpowers main — the
+# baseline seat for model-signature readouts (the appliance's default claude
+# column, so its cells compare directly against the corpus).
+schema_version: 1
+name: claude_opus_bedrock_main
+agent: claude
+credential: opus_bedrock
+superpowers: main
