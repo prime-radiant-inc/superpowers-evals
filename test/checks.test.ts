@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
+  codingAgentsDirectiveFromChecks,
+  osDirectiveFromChecks,
   parseCodingAgentsDirective,
   parseOsDirective,
   runPhase,
@@ -487,6 +489,24 @@ test('parseCodingAgentsDirective honors a directive on the 21st physical line', 
     `${filler}\n# coding-agents: claude\npre() { :; }\npost() { :; }\n`,
   );
   expect(parseCodingAgentsDirective(checksSh)).toEqual(['claude']);
+});
+
+// The campaign intake reads checks.sh bytes out of the git object store (no
+// file on disk), so the directive readers must also work over TEXT, with the
+// path-based readers as thin wrappers — one scanner, no drift.
+test('the text-based directive readers agree with the path-based ones', () => {
+  const body =
+    '# coding-agents: claude, codex\n# os: Windows, Linux\npre() { :; }\npost() { :; }\n';
+  expect(codingAgentsDirectiveFromChecks(body)).toEqual(['claude', 'codex']);
+  expect(osDirectiveFromChecks(body)).toEqual(['windows', 'linux']);
+  expect(codingAgentsDirectiveFromChecks('pre() { :; }\n')).toBeUndefined();
+  expect(osDirectiveFromChecks('pre() { :; }\n')).toBeUndefined();
+  expect(codingAgentsDirectiveFromChecks('# coding-agents: ,\n')).toEqual([]);
+  const checksSh = checksShWith(body);
+  expect(parseCodingAgentsDirective(checksSh)).toEqual(
+    codingAgentsDirectiveFromChecks(body),
+  );
+  expect(parseOsDirective(checksSh)).toEqual(osDirectiveFromChecks(body));
 });
 
 // Negative-assertion empty-capture guard (oracle 0f6af56, in the

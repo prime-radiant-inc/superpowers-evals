@@ -168,6 +168,7 @@ function scenario(
     requires_superpowers: false,
     coupling: 'arm-independent',
     os: undefined,
+    coding_agents: undefined,
     ...overrides,
   };
 }
@@ -928,6 +929,49 @@ test('R-REG-14 legs: credential os_support and scenario os directive rejections'
   );
 });
 
+// PAR §Suites: a scenario dropped by its `# coding-agents:` directive is
+// dropped within its comparison for BOTH arms, loudly in excluded_cells.
+test('scenario coding-agents directive: an arm agent outside it drops the cell for both arms; inside admits; [] drops all', () => {
+  const codexArmB = {
+    arm_a: arm('arm_a'),
+    arm_b: arm('arm_b', { agent: 'codex', credential: 'cred_b' }),
+  };
+  let prep = prepareRegistration(
+    input({
+      arms: codexArmB,
+      scenarios: [scenario('scn-a', { coding_agents: ['claude'] })],
+    }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.samples).toEqual([]);
+  expect(prep.excluded_cells).toHaveLength(1);
+  expect(prep.excluded_cells[0]?.cell).toBe('c1:scn-a');
+  expect(prep.excluded_cells[0]?.reason).toMatch(
+    /arm arm_b agent codex outside the scenario's coding-agents directive \(claude\)/,
+  );
+  // Both agents listed: admitted.
+  prep = prepareRegistration(
+    input({
+      arms: codexArmB,
+      scenarios: [scenario('scn-a', { coding_agents: ['claude', 'codex'] })],
+    }),
+  );
+  expect(prep.cells).toHaveLength(1);
+  expect(prep.excluded_cells).toEqual([]);
+  // No directive: any agent.
+  prep = prepareRegistration(input({ arms: codexArmB }));
+  expect(prep.cells).toHaveLength(1);
+  // A matched-but-empty directive (`# coding-agents: ,`) admits no agent —
+  // the run-all matrix reading of [].
+  prep = prepareRegistration(
+    input({ scenarios: [scenario('scn-a', { coding_agents: [] })] }),
+  );
+  expect(prep.cells).toEqual([]);
+  expect(prep.excluded_cells[0]?.reason).toMatch(
+    /coding-agents directive \(\)/,
+  );
+});
+
 test('override pricing preserves the fallback tier confidence — no manufactured high, surcharge still applies (R-REG-3)', () => {
   const prep = prepareRegistration(
     input({
@@ -1108,6 +1152,10 @@ test('every exclusion reason names the operator next step', () => {
     [
       { scenarios: [scenario('scn-a', { requires_superpowers: true })] },
       /R-REG-16/,
+    ],
+    [
+      { scenarios: [scenario('scn-a', { coding_agents: ['codex'] })] },
+      /coding-agents directive/,
     ],
     [
       {
@@ -1667,6 +1715,52 @@ test('intake bytes come from the frozen SHA, and the materialized tree is verifi
   );
   expect(materialized).toContain('cred_a:');
   expect(materialized).not.toContain('corrupted');
+});
+
+// Both intake readers (object store for the digest, materialized tree for
+// the authoritative recompute) must read the scenario directives, or a tier
+// selector spends on cells the arm's agent cannot run. A published
+// registration exercises both and their digest agreement.
+test('scenario `# coding-agents:` and `# os:` directives reach the intake at the frozen SHA and drop cells loudly', () => {
+  const evals = evalsRepo();
+  const directiveScenarios = [
+    ['scn-codex', '# coding-agents: codex\n'],
+    ['scn-win', '# os: windows\n'],
+  ] as const;
+  for (const [name, header] of directiveScenarios) {
+    mkdirSync(join(evals.dir, 'scenarios', name), { recursive: true });
+    writeFileSync(
+      join(evals.dir, 'scenarios', name, 'story.md'),
+      '---\nquorum_tier: full\n---\nDo the thing.\n',
+    );
+    writeFileSync(
+      join(evals.dir, 'scenarios', name, 'checks.sh'),
+      `${header}pre() { :; }\npost() { :; }\n`,
+    );
+  }
+  git(evals.dir, ['add', '.']);
+  git(evals.dir, ['commit', '-qm', 'directive scenarios']);
+  const result = registerCampaign(
+    registerArgs({
+      evalsCheckout: evals.dir,
+      evalsRef: git(evals.dir, ['rev-parse', 'HEAD']),
+      suiteRaw: SUITE_RAW.replace('scenarios: [scn-a]', 'scenarios: tier=full'),
+    }),
+  );
+  expect(result.published).toBe(true);
+  expect(result.printed).toMatch(/grid: 1 cells, 2 samples, 1 blocks/);
+  expect(result.excluded_cells.map((e) => e.cell).sort()).toEqual([
+    'c1:scn-codex',
+    'c1:scn-win',
+  ]);
+  const reasonOf = (cell: string): string =>
+    result.excluded_cells.find((e) => e.cell === cell)?.reason ?? '';
+  expect(reasonOf('c1:scn-codex')).toMatch(
+    /arm arm_a agent claude outside the scenario's coding-agents directive \(codex\)/,
+  );
+  expect(reasonOf('c1:scn-win')).toMatch(
+    /os linux unsupported by scenario directive \(windows\)/,
+  );
 });
 
 test('C3 public intake: pricingOverrides persist into campaign.json pricing_overrides', () => {

@@ -24,6 +24,10 @@ import type { CommandRunner } from '../agents/command-runner.ts';
 import { superpowersCapability } from '../agents/index.ts';
 import { resolveSuperpowersRef } from '../appliance/git.ts';
 import {
+  codingAgentsDirectiveFromChecks,
+  osDirectiveFromChecks,
+} from '../checks/index.ts';
+import {
   type AgentConfig,
   agentRuntimeFamily,
   parseAgentConfigForValidation,
@@ -234,6 +238,9 @@ export interface ScenarioIntake {
     | 'arm-independent';
   /** Scenario `# os:` directive; undefined = run-anywhere. */
   readonly os: readonly string[] | undefined;
+  /** Scenario `# coding-agents:` directive; undefined = any agent, [] (a
+   *  matched-but-empty directive) = no agent — the run-all matrix reading. */
+  readonly coding_agents: readonly string[] | undefined;
 }
 
 export interface RegistrationInput {
@@ -597,6 +604,14 @@ function rejectCell(
     if (scen.os !== undefined && !scen.os.includes(armOs)) {
       return `arm ${armName} os ${armOs} unsupported by scenario directive (${scen.os.join(', ')}) (R-REG-14) — align the scenario's os directive or drop the scenario from this comparison`;
     }
+    // PAR §Suites: a scenario dropped by its `# coding-agents:` directive is
+    // dropped within its comparison for both arms.
+    if (
+      scen.coding_agents !== undefined &&
+      !scen.coding_agents.includes(armDef.agent)
+    ) {
+      return `arm ${armName} agent ${armDef.agent} outside the scenario's coding-agents directive (${scen.coding_agents.join(', ')}) — drop the scenario from this comparison or add the agent to the directive`;
+    }
     // R-REG-9: none/ref arms on adapters without the capability.
     const cap = input.capability(input.agentFamily(armDef.agent));
     if (armDef.superpowers === 'none' ? !cap.none : !cap.ref) {
@@ -910,6 +925,32 @@ function minimalGitEnv(): Readonly<Record<string, string | undefined>> {
   };
 }
 
+/** One scenario's intake from its consumed bytes — shared by the object-store
+ *  and materialized-tree readers so the two can never disagree on a
+ *  directive. `checks` is undefined for a story-only scenario dir (no
+ *  directives, run-anywhere, any agent). */
+function scenarioIntakeOf(
+  name: string,
+  story: string,
+  checks: string | undefined,
+  combined: string,
+  hasSkillsFixtures: boolean,
+): ScenarioIntake {
+  return {
+    name,
+    tier: quorumTierFromStory(story),
+    requires_superpowers: requiresSuperpowersFromStory(story) ?? false,
+    coupling:
+      couplingFromStory(story) ??
+      couplingDefaultFrom(combined, hasSkillsFixtures),
+    os: checks === undefined ? undefined : osDirectiveFromChecks(checks),
+    coding_agents:
+      checks === undefined
+        ? undefined
+        : codingAgentsDirectiveFromChecks(checks),
+  };
+}
+
 /** Authoritative intake read from the MATERIALIZED final-path evals tree
  *  (Blocker C): arms/, credentials.yaml, scenarios/<name>/, coding-agents/
  *  via plain file reads, parsed by the same string-based readers the
@@ -958,23 +999,16 @@ function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
         );
       }
       const story = files[`scenarios/${entry}/story.md`] as string;
+      const checks = files[`scenarios/${entry}/checks.sh`];
       const combined =
-        story +
-        (files[`scenarios/${entry}/setup.sh`] ?? '') +
-        (files[`scenarios/${entry}/checks.sh`] ?? '');
+        story + (files[`scenarios/${entry}/setup.sh`] ?? '') + (checks ?? '');
       const skillsFixturesDir = join(scenarioDir, 'fixtures', 'skills');
       const hasSkillsFixtures =
         existsSync(skillsFixturesDir) &&
         statSync(skillsFixturesDir).isDirectory();
-      scenarios.push({
-        name: entry,
-        tier: quorumTierFromStory(story),
-        requires_superpowers: requiresSuperpowersFromStory(story) ?? false,
-        coupling:
-          couplingFromStory(story) ??
-          couplingDefaultFrom(combined, hasSkillsFixtures),
-        os: undefined,
-      });
+      scenarios.push(
+        scenarioIntakeOf(entry, story, checks, combined, hasSkillsFixtures),
+      );
     }
   }
   const agentsDir = join(evalsRoot, 'coding-agents');
@@ -1054,23 +1088,16 @@ function readSnapshotIntake(
     if (name === '') continue; // unreachable by the path regex; keeps the type sound
     const story = readAt(p);
     const setup = `scenarios/${name}/setup.sh`;
-    const checks = `scenarios/${name}/checks.sh`;
+    const checksPath = `scenarios/${name}/checks.sh`;
+    const checks = paths.includes(checksPath) ? readAt(checksPath) : undefined;
     const combined =
-      story +
-      (paths.includes(setup) ? readAt(setup) : '') +
-      (paths.includes(checks) ? readAt(checks) : '');
+      story + (paths.includes(setup) ? readAt(setup) : '') + (checks ?? '');
     const hasSkillsFixtures = paths.some((x) =>
       x.startsWith(`scenarios/${name}/fixtures/skills/`),
     );
-    scenarios.push({
-      name,
-      tier: quorumTierFromStory(story),
-      requires_superpowers: requiresSuperpowersFromStory(story) ?? false,
-      coupling:
-        couplingFromStory(story) ??
-        couplingDefaultFrom(combined, hasSkillsFixtures),
-      os: undefined,
-    });
+    scenarios.push(
+      scenarioIntakeOf(name, story, checks, combined, hasSkillsFixtures),
+    );
   }
   for (const p of paths.filter((x) => /^coding-agents\/[^/]+\.yaml$/.test(x))) {
     readAt(p);

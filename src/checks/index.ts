@@ -236,16 +236,15 @@ function readRecords(sink: string, phase: CheckPhase): CheckRecord[] {
 const CODING_AGENTS_DIRECTIVE_RE = /^\s*#\s*coding-agents:\s*(.+?)\s*$/;
 const OS_DIRECTIVE_RE = /^\s*#\s*os:\s*(.+?)\s*$/;
 
-// Scan the first 21 lines of a checks.sh for the first line matching `re` and
-// return its trimmed, comma-split, non-empty members. A line that matches but
-// lists only separators (e.g. `,`) is a matched-but-empty directive returning
-// `[]`; a true absence (no matching line, or a missing checks.sh — a story-only
-// scenario dir) returns `undefined`.
-function scanCsvDirective(checksSh: string, re: RegExp): string[] | undefined {
-  if (!existsSync(checksSh)) {
-    return undefined;
-  }
-  const head = readFileSync(checksSh, 'utf8').split('\n').slice(0, 21);
+// Scan the first 21 lines of a checks.sh TEXT for the first line matching `re`
+// and return its trimmed, comma-split, non-empty members. A line that matches
+// but lists only separators (e.g. `,`) is a matched-but-empty directive
+// returning `[]`; a true absence (no matching line) returns `undefined`.
+function scanCsvDirectiveText(
+  checksText: string,
+  re: RegExp,
+): string[] | undefined {
+  const head = checksText.split('\n').slice(0, 21);
   for (const line of head) {
     const csv = re.exec(line)?.[1];
     if (csv !== undefined) {
@@ -258,26 +257,49 @@ function scanCsvDirective(checksSh: string, re: RegExp): string[] | undefined {
   return undefined;
 }
 
-/**
- * Read a leading `# coding-agents: a, b` directive from a checks.sh, returning the
- * trimmed CSV members. A matched-but-empty directive returns `[]` (the matrix
- * gate reads `[]` as skip-all-agents); a true absence returns `undefined`.
- */
-export function parseCodingAgentsDirective(
-  checksSh: string,
-): string[] | undefined {
-  return scanCsvDirective(checksSh, CODING_AGENTS_DIRECTIVE_RE);
+// The path-based readers treat a missing checks.sh (a story-only scenario
+// dir) as a true absence, `undefined`.
+function readChecksText(checksSh: string): string | undefined {
+  return existsSync(checksSh) ? readFileSync(checksSh, 'utf8') : undefined;
 }
 
 /**
- * Read a leading `# os: linux, windows` directive from a checks.sh, returning the
- * lower-cased OS names the scenario supports. Absence returns `undefined`,
- * meaning "no OS restriction" — the matrix treats that as run-anywhere
- * (back-compat). The matrix skips a cell ('os') when this is set and does not
- * include the run OS (currently always linux).
+ * Read a leading `# coding-agents: a, b` directive from checks.sh TEXT,
+ * returning the trimmed CSV members. A matched-but-empty directive returns
+ * `[]` (the matrix gate reads `[]` as skip-all-agents); a true absence returns
+ * `undefined`.
  */
-export function parseOsDirective(checksSh: string): string[] | undefined {
-  return scanCsvDirective(checksSh, OS_DIRECTIVE_RE)?.map((s) =>
+export function codingAgentsDirectiveFromChecks(
+  checksText: string,
+): string[] | undefined {
+  return scanCsvDirectiveText(checksText, CODING_AGENTS_DIRECTIVE_RE);
+}
+
+/** {@link codingAgentsDirectiveFromChecks} over the checks.sh at `checksSh`. */
+export function parseCodingAgentsDirective(
+  checksSh: string,
+): string[] | undefined {
+  const text = readChecksText(checksSh);
+  return text === undefined ? undefined : codingAgentsDirectiveFromChecks(text);
+}
+
+/**
+ * Read a leading `# os: linux, windows` directive from checks.sh TEXT,
+ * returning the lower-cased OS names the scenario supports. Absence returns
+ * `undefined`, meaning "no OS restriction" — the matrix treats that as
+ * run-anywhere (back-compat). The matrix skips a cell ('os') when this is set
+ * and does not include the run OS (currently always linux).
+ */
+export function osDirectiveFromChecks(
+  checksText: string,
+): string[] | undefined {
+  return scanCsvDirectiveText(checksText, OS_DIRECTIVE_RE)?.map((s) =>
     s.toLowerCase(),
   );
+}
+
+/** {@link osDirectiveFromChecks} over the checks.sh at `checksSh`. */
+export function parseOsDirective(checksSh: string): string[] | undefined {
+  const text = readChecksText(checksSh);
+  return text === undefined ? undefined : osDirectiveFromChecks(text);
 }
