@@ -417,23 +417,49 @@ list — it is only visible by reading `coverage 0` in the table.
 `observed []` (known); no per-arm tallies (the extractor above exists
 because of this — D4b candidate).
 
-## Debts surfaced (not started; need Drew's word)
+## Follow-up disposition
 
-- `triggering-writing-plans`: check `skill-before-tool superpowers:writing-plans
-  Write` is stricter than the AC — a design-doc `Write` before the Skill
-  counts as a fail. Decide whether the AC or the check is the intent.
-- `global-tool-mapping-comprehension`: the subject's root-anchored Glob trips
-  the host contention sensor whenever the cell runs concurrently; the cell
-  is uninformative in any campaign until the fixture or the sensor's
-  scoping changes.
+- `triggering-writing-plans` now enforces the acceptance criterion as written:
+  the skill must precede implementation edits/writes, while a design document
+  may be written first. Commit `1b07ab4`; live Opus 5 appliance run
+  `triggering-writing-plans-claude-opus5_bedrock-linux-20260902T171710Z-3a63`
+  passed the Gauntlet-Agent and all three post-checks.
+- `global-tool-mapping-comprehension` now tells the subject to load
+  `superpowers:using-superpowers` through the platform skill mechanism and use
+  the skill base path already supplied there, with no filesystem discovery.
+  The first narrower wording in `082b341` still let Opus 5 run `find /`; the
+  root-cause correction is `29d30c1`. Live run
+  `global-tool-mapping-comprehension-claude-opus5_bedrock-linux-20260902T173231Z-5839`
+  passed. Runtime sampling and the persisted trajectory showed zero `find`,
+  `bfs`, filesystem-search, or root-anchored search calls; load stayed below
+  0.63 on the eight-core appliance.
+- The blessed credential bundle was reconciled through the canonical SSM
+  parameters over Tailscale, without rotating any key. Terraform commit
+  `165855a` grants the appliance role and its permissions boundary
+  `ssm:PutParameter` only on `credentials-env` and its companion
+  `metadata-json`. The metadata was restored from durable provenance, the
+  missing `QUORUM_GRADER_ANTHROPIC_API_KEY` alias was derived from the existing
+  direct Anthropic secret without printing either value, and the installed
+  mode-0600 bundle exactly matched SSM version 8 by SHA-256. Appliance doctor
+  was green afterward.
+- The fixed cancellation path has live appliance proof on disposable campaign
+  `79e51b8e-pri2875_cancel_proof`. Before cancel, the journaled run owned live
+  process group 1605, tmux server `gauntlet-1788370609937-v7hg1z`, pane PID
+  1843, and Claude descendant PID 1896. `campaign cancel --reason "PRI-2875
+  live teardown proof"` removed all four authorities; the journal ended with
+  `aborted`, a budget event, then exactly one `campaign_cancelled`, and recorded
+  zero spend. A later `campaign run` observed `cancel-request` first, completed
+  the already-terminal cancellation instead of resuming, admitted no work, and
+  left both the 194-event journal and zero-spend total unchanged. Exit 0 is the
+  pinned R-RCV-7 contract for successful idempotent cancellation completion,
+  not evidence that execution resumed.
+
+## Remaining debts
+
 - Exploratory suites have no reserves; contention can only invalidate.
 - Report: denominator-0 cells absent from `failed_cells`/`cannot_answer`;
   float rendering; per-arm tallies; Provenance lists all arms.
 - Campaigns do not honor story `status: draft`.
-- Finding 2's fix (`880db97`) has no live confirmation (D3 item 3 wants a
-  cancel on the fixed platform); the sibling appliance
-  `interruptHostProcessGroup` hole is still suspected, unverified.
 - Container image: root-owned `$BUN_INSTALL/install/cache`.
-- Operational: SSM reconcile of the hand-rotated blessed Anthropic key;
-  rotate the key that printed into tool output; estimates rebuild before
-  2026-09-08 (R-REG-21).
+- Operational: the explicitly deferred key rotation and estimates rebuild
+  before 2026-09-08 (R-REG-21).
