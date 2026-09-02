@@ -1,12 +1,13 @@
 # Campaign Appliance V2 Design
 
-**Status:** In-chat design approved by Drew on 2026-09-02; written-spec review
-pending.
+**Status:** Amended after staff design review on 2026-09-02; final written-spec
+review pending before child implementation.
 
 **Supersedes for new campaigns:** the V1 campaign execution and budget-bearing
 contracts in the 2026-08-17 campaign-platform design and its D1-D4a child
-specifications. Existing V1 artifacts remain untouched but are not readable,
-resumable, or otherwise supported by V2.
+specifications. Existing V1 artifacts remain byte-for-byte preserved, although
+the drained V2 namespace migration may relocate them into a read-only legacy
+root. They are not readable, resumable, or otherwise supported by V2.
 
 **Related designs:**
 
@@ -15,6 +16,7 @@ resumable, or otherwise supported by V2.
 - `2026-08-26-kernel-d3-campaign-engine-design.md`
 - `2026-08-31-kernel-d4a-descriptive-readout-design.md`
 - `2026-06-18-shared-eval-appliance-design.md`
+- `../../experiments/2026-08-19-f13-filesystem-credential-scoping.md`
 
 ## Decision
 
@@ -24,23 +26,28 @@ attempt.
 
 The host owns campaign identity, journal state, authoritative telemetry,
 credential projection, worker lifecycle, recovery, report publication, and
-cost aggregation. A worker receives only the frozen inputs and the two role
-credentials required for its one attempt. It cannot read the credential
-bundle, campaign journal, sibling inputs, sibling results, or mutable source
-checkouts.
+cost aggregation. The installed host controller may roll forward within the
+fixed V2 durable contract; the experimental payload and every policy that can
+affect sample composition or readout remain frozen. A worker receives only the
+frozen inputs and the two role credentials required for its one attempt. It
+cannot read the credential bundle, campaign journal, sibling inputs, sibling
+results, or mutable source checkouts.
+
+One campaign may own live execution on an appliance at a time. That campaign
+may run multiple attempts in parallel subject to the frozen campaign cap,
+per-credential concurrency, and launch-spacing rules.
 
 V2 is intentionally narrow:
 
 - Linux appliance only;
 - exploratory campaigns using `descriptive_v1` only;
-- environment-backed API-key credentials, including the current Bedrock/Mantle
-  route, only;
-- explicit operator resume after interruption;
+- environment-backed `api-key` and `bedrock-bearer` credentials only;
+- explicit operator `run` after interruption;
 - no automatic release decision;
 - no OAuth or subscription credentials;
 - no fleet, remote worker, or multi-operator control plane;
 - no dollar budget, budget admission, or dollar-based stop behavior;
-- no V1 reader or migration path.
+- no V1 schema reader or artifact conversion.
 
 Cost is a measurement, never an execution control. V2 records and aggregates
 all observable subject and grader cost, including failed, excluded, retried,
@@ -68,8 +75,8 @@ requires. It does not revive the original supervisor program.
 ## Goals
 
 1. Make `evals-appliance campaign ...` the routine production interface for
-   registering, running, resuming, cancelling, inspecting, reporting, costing,
-   and cleaning up campaigns.
+   registering, discovering, running, cancelling, inspecting, reporting,
+   costing, abandoning, and cleaning up campaigns.
 2. Preserve one durable campaign identity across multiple appliance command
    invocations and controller processes.
 3. Give every attempt exactly its subject credential, its distinct grader
@@ -89,7 +96,8 @@ requires. It does not revive the original supervisor program.
 
 ## Non-goals
 
-- Supporting or migrating V1 campaign documents, journals, or reports.
+- Supporting, parsing, or converting V1 campaign documents, journals, or
+  reports.
 - Supporting `release_gate_v1` or producing `SHIP`/`NO_SHIP` decisions.
 - Supporting OAuth, subscription, or ambient-home credentials.
 - Automatically resuming work after a process exit, host restart, or container
@@ -102,6 +110,7 @@ requires. It does not revive the original supervisor program.
 - Dashboard campaign controls or campaign rendering.
 - Automatic deletion of measurement evidence.
 - Backward-compatible reads by an older helper after V2 deployment.
+- Provider-specific Internet egress allowlists.
 
 ## Trust boundary
 
@@ -113,21 +122,31 @@ evals safe for untrusted public submissions.
 The boundaries are:
 
 1. **Host appliance adapter:** accepts operator commands, validates paths and
-   IDs, records invocation jobs, and dispatches the campaign-frozen controller.
+   IDs, records invocation jobs, and dispatches the installed V2 controller.
 2. **Host campaign controller:** is the sole journal writer during execution,
-   owns admission and recovery, and has no Coding-Agent toolchain requirement.
+   owns admission and recovery, executes only frozen measurement-policy
+   versions, and has no Coding-Agent toolchain requirement.
 3. **Host credential broker:** reads one pinned bundle generation and stages
    only the two role scopes for one attempt.
 4. **Attempt worker container:** executes one Quorum run using frozen inputs and
    one isolated output directory.
-5. **Coding-Agent subject:** runs without the grader credential and without
-   privilege to inspect the grader process or files.
-6. **Gauntlet/grader:** runs without the subject credential and without access
-   to the host bundle or campaign journal.
+5. **Coding-Agent subject:** receives no grader role slot or configuration and
+   has no privilege to inspect the grader process or files.
+6. **Gauntlet/grader:** receives no subject role slot or configuration and has
+   no access to the host bundle or campaign journal.
 
-The Docker socket is host-only. Workers receive no Docker socket, no host PID
-namespace, no ambient provider environment, no full credential bundle, and no
-Linux capability not required by the selected Coding-Agent.
+The Docker socket is host-only. Workers receive no Docker socket, host PID
+namespace, ambient provider environment, full credential bundle, instance
+metadata route, host-control route, or sibling-container network. Public
+Internet access remains available because Coding-Agents and providers require
+it. V2 does not claim provider-only egress confinement.
+
+The role boundary protects against a permissive or hostile Coding-Agent
+directly reading the grader's files, environment, home, or process state. It
+also protects attempts from one another and from host credentials. It does not
+protect against a kernel or container-runtime escape, side channels, denial of
+service, a hostile public scenario, or exfiltration of the subject's own
+credential.
 
 ## Architecture
 
@@ -160,9 +179,18 @@ host campaign controller                                  |
 
 The appliance adapter and campaign controller are separate responsibilities.
 The adapter uses the current installed helper to authenticate the appliance
-configuration, create a job record, and dispatch a command. Campaign logic runs
-from the evals snapshot frozen at registration, so a later mutable checkout
-does not silently change an in-progress campaign's execution semantics.
+configuration, create a job record, and dispatch the installed V2 controller.
+Each invocation records the exact helper and controller SHA.
+
+The controller may be repaired and redeployed without abandoning dormant
+campaigns, but it may not reinterpret their experiment. Registration freezes
+the worker entrypoint, suite and expanded grid, scenarios and checks, agent
+configurations, evals/Gauntlet/Superpowers inputs, dependency and tool
+identities, worker image and hardening profile, failure-classification table,
+contention policy, report fold, cost aggregation policy, and their digests.
+Every V2 controller must replay every valid V2 durable prefix identically under
+those frozen policy versions. A durable grammar or semantic break requires V3;
+V2 has no migrations and no V1 reader.
 
 Each mutating invocation gets a new appliance job ID. All such jobs link to one
 full campaign ID. The campaign journal, not the latest invocation job, is the
@@ -175,32 +203,38 @@ The production paths are separate by purpose:
 ```text
 /srv/quorum/repos/                 managed source repositories
 /srv/quorum/data/campaigns/        V2 campaign authorities and snapshots
+/srv/quorum/data/attempts/         durable in-progress attempt evidence
 /srv/quorum/data/results/          published run artifacts
+/srv/quorum/data/legacy-v1/        preserved, unsupported V1 artifacts
 /srv/quorum/state/jobs/            appliance invocation jobs and logs
+/srv/quorum/state/abandonments/    external terminal records for corrupt journals
 /srv/quorum/state/credentials/     immutable credential generations
 /srv/quorum/runtime/               disposable staging and worker state
 ```
 
-All durable paths live on the persistent `/srv/quorum` data volume. No durable
-campaign or result path is nested beneath a Git checkout. Terminus repository
-refresh may fetch, repair, or replace only paths beneath `/srv/quorum/repos`.
+All durable paths live on the persistent `/srv/quorum` data volume. Attempt and
+results roots are on the same filesystem so publication can use an atomic
+rename. No durable campaign, attempt, or result path is nested beneath a Git
+checkout. Terminus repository refresh may fetch, repair, or replace only paths
+beneath `/srv/quorum/repos`.
 
 The configured paths are canonicalized and checked with no-follow filesystem
 operations. External IDs are closed basename components. CLI callers provide a
 full campaign ID, never an arbitrary campaign-directory path.
 
-The appliance config gains explicit `campaigns_root`, `results_root`,
-`repos_root`, `runtime_root`, `credential_generations_root`, and
-`live_spend_lock` fields. `doctor` refuses overlapping namespaces, paths that
-escape `/srv/quorum`, symlinked path components, unsafe ownership or modes, a
-results mount that disagrees with the worker mount, or a live-spend lock that
-is not shared by every top-level spender.
+The appliance config gains explicit `campaigns_root`, `attempts_root`,
+`results_root`, `repos_root`, `runtime_root`,
+`credential_generations_root`, and `live_spend_lock` fields. `doctor` refuses
+overlapping namespaces, paths that escape `/srv/quorum`, symlinked path
+components, unsafe ownership or modes, attempt and results roots on different
+filesystems, a results mount that disagrees with the worker mount, or a
+live-spend lock that is not shared by every top-level spender.
 
 ## Source repositories and frozen inputs
 
 `/srv/quorum/repos/{evals,gauntlet,superpowers}` are persistent source
 repositories. Sync fetches refs and fast-forwards only configured mutable
-branches. It never runs while an appliance live-job lock is active.
+branches. It never runs while the existing appliance `run.lock` is active.
 
 Registration resolves these identities to full SHAs:
 
@@ -208,22 +242,36 @@ Registration resolves these identities to full SHAs:
 - Gauntlet;
 - every Superpowers arm, or the literal `none`.
 
-The campaign ID covers the resolved ref set, suite, expanded cells and samples,
-scenario/check identities, concurrency declaration, execution surface, and
-other behavioral inputs. Cost forecasts, registration time, operator label,
-and observed cost do not affect identity.
+Every successful registration receives a unique opaque campaign ID. A separate
+deterministic `input_digest` covers the resolved ref set, suite, expanded cells
+and samples, scenario/check identities, concurrency declaration, execution
+surface, frozen measurement policies, and other behavioral inputs. Cost
+forecasts, registration time, operator label, and observed cost affect neither
+value. Registering the same inputs after cancellation therefore creates a new
+campaign ID with the same `input_digest` rather than colliding with the old
+campaign.
 
 Registration creates self-contained frozen trees under the campaign directory.
 They must not use linked-worktree metadata owned by a replaceable source
 checkout. A source repository can therefore be repaired without invalidating a
-registered campaign. The frozen trees include executable evals and Gauntlet
-code, scenario/check inputs, agent configuration, and one Superpowers tree per
-distinct arm SHA.
+registered campaign. The frozen trees include executable worker-side evals and
+Gauntlet code, scenario/check inputs, agent configuration, and one Superpowers
+tree per distinct arm SHA.
+
+Registration also creates compact content-addressed archives before
+publication: a verified Git bundle for every referenced Git object set and a
+deterministic manifest/archive for non-Git inputs and materialized runtime
+dependencies. Each archive is restored into a temporary directory and checked
+against the same input manifest before it is trusted. Referenced archives and
+the pinned worker image cannot be pruned while a campaign is nonterminal.
 
 Before publication, registration re-reads the frozen trees, verifies their
-commit and tree identities, reconstructs the campaign digest, initializes the
-journal, and publishes `campaign.json` last as the registration-complete
-marker.
+commit and tree identities, verifies the compact archives, reconstructs the
+input digest, initializes the journal, and publishes `campaign.json` last as
+the registration-complete marker. The unique ID is preallocated before any
+write. A directory without `campaign.json` is an incomplete registration, not
+a campaign; `campaign list` reports it separately and cleanup may remove it
+only through the incomplete-registration cleanup path.
 
 ## V2 campaign contracts
 
@@ -248,7 +296,7 @@ V2 removes `budget_usd`. No replacement dollar-control field exists.
 
 The V2 campaign retains the frozen suite, refs, grader identity, cells,
 samples, comparisons, blocks, contention declaration, execution surface,
-registration metadata, and digest.
+registration metadata, unique campaign ID, and deterministic input digest.
 
 It removes the V1 `budget` object and budget-authorizing pricing overrides.
 Optional cost-rate overrides may exist only as measurement metadata. They must
@@ -261,12 +309,32 @@ and destination environment names. Secret values never enter `campaign.json`.
 
 ### Journal
 
-The V2 journal removes budget stops, budget events, and budget-raise
-amendments. It retains durable sample/attempt/run identity, admission,
-exposure, completion, typed instrument failures, replacement, cancellation,
-storage pause, cost observation references, and sealing.
+The V2 journal is append-only and has this closed event vocabulary:
 
-`run_allocated` gains a closed execution handle containing:
+- `campaign_opened` and `credential_generation_pinned` establish authority;
+- `block_admitted`, `attempt_created`, `run_allocated`, and
+  `exposure_started` establish execution identity and exposure;
+- `run_completed`, `instrument_failure`, `block_replaced`,
+  `sample_disposition`, `slot_exhausted`, `skew_excluded`, `pool_blocked`,
+  `adjudication`, and `quarantined` record evidence and experimental fate;
+- `controller_restarted`, `storage_paused`, and `storage_resumed` record
+  recovery-relevant control events;
+- `cancel_requested`, `campaign_cancelled`, and `campaign_abandoned` record
+  operator termination; and
+- `sealed` records the irreversible complete-report digest.
+
+No budget stop, budget event, budget amendment, or generic catch-all event
+exists. Cost observation references are fields on the attempt evidence events,
+not execution-authorizing events. Unknown event types fail closed.
+
+The host allocates the attempt ID, run ID, deterministic container name,
+credential-stage ID, and complete secret-free container-spec/input digest
+before Docker creation. `attempt_created` durably records that pre-create
+authority, including block/sample identity, image digest, container name,
+credential-stage ID, container-spec digest, and input-manifest digest. The
+controller then creates a stopped container with non-secret campaign, attempt,
+and run labels, inspects its exact immutable ID, and commits `run_allocated`
+with a closed execution handle containing:
 
 - run ID;
 - immutable container ID;
@@ -277,17 +345,67 @@ storage pause, cost observation references, and sealing.
 - credential-generation ID and manifest digest;
 - secret-free mount/input manifest digest.
 
-The container is created without starting. `run_allocated` and its execution
-handle commit before `docker start`, closing the pre-provider identity window.
+`run_allocated` commits before `docker start`, followed by a final cancellation
+and credential-revocation check. Reconciliation uses the deterministic name and
+labels to find a created-but-unbound container, verifies its complete spec
+digest, and either binds that exact stopped container or removes it and its
+credential stage. It never starts a container without matching durable
+`attempt_created` authority.
+
+The V2 contract includes an executable transition table and durable-prefix
+corpus. For each event it specifies legal predecessor states, journal effects,
+derived operator state, retry behavior, and the result of a crash immediately
+before and after the append. Every installed V2 controller must pass that
+corpus before deployment. The status and recovery rules below are the parent
+contract that the executable table implements.
+
+The closed parent transition rules are:
+
+| Event | Required durable predecessor | Effect |
+|---|---|---|
+| `campaign_opened` | initialized empty journal matching unpublished registration | establishes the sole first anchor |
+| `credential_generation_pinned` | opened, never-run campaign | pins one generation exactly once |
+| `block_admitted` | pinned, nonterminal campaign with no pause/cancel marker | reserves the complete atomic block |
+| `attempt_created` | admitted block with an available sample/attempt slot | preallocates immutable attempt/run/container-name authority |
+| `run_allocated` | matching `attempt_created` and exact stopped container | binds immutable container/image/credential/input identity once |
+| `exposure_started` | matching allocated container observed started | establishes paid exposure for that attempt |
+| `run_completed` or `instrument_failure` | matching attempt without terminal evidence | closes worker evidence once |
+| replacement/adjudication/disposition events | closed attempt or blocked slot required by frozen policy | determine experimental inclusion without changing exposure history |
+| `storage_paused` | any nonterminal state without cancel intent | blocks admission and requires verified worker stop |
+| `storage_resumed` | most recent storage-control event is `storage_paused` and all recovery predicates pass | reopens admission |
+| `cancel_requested` | any nonterminal campaign | permanently blocks new admission |
+| `campaign_cancelled` | cancel intent plus verified controller/worker death and reconciled evidence | terminal incomplete outcome |
+| `campaign_abandoned` or external abandonment record | nonsealed campaign plus verified execution safety | terminal permanently incomplete outcome |
+| `sealed` | every frozen sample/integrity obligation terminal and report digest verified | terminal complete outcome |
+
+An event with a missing predecessor, duplicate single-assignment identity,
+post-terminal append, or impossible ordering fails closed. Reconciliation may
+append only the event justified by already durable external evidence; it never
+rewrites or deletes an event.
+
+The minimum crash-prefix outcomes are:
+
+| Durable cut | Recovery behavior |
+|---|---|
+| registration directory before `campaign.json` | list as incomplete registration; never runnable |
+| `attempt_created` before Docker create | reuse the same attempt/run authority and create once |
+| Docker create before `run_allocated` | discover the stopped labelled container; bind only on exact spec match, otherwise remove |
+| `run_allocated` before Docker start | start that exact stopped container only after cancel/revocation recheck |
+| Docker start before `exposure_started` | stop and inspect; never claim exposure without provider evidence or the durable event |
+| `exposure_started` before worker terminal | preserve partial evidence, stop the worker, and classify under the frozen table |
+| result publication before terminal journal append | verify and reuse the exact published result before deciding replacement |
+| `sealed` before both report peers exist | regenerate only missing digest-matching peers |
+| cancel marker before terminal cancellation | `run` refuses; repeated cancel continues the fenced stop/reconcile path |
+| cleanup plan before or during apply | no deletion without the plan; repeated apply revalidates and resumes only named actions |
 
 ### Job records
 
 Appliance job records add the mutating kinds:
 
 - `campaign-register`;
-- `campaign-start`;
-- `campaign-resume`;
+- `campaign-run`;
 - `campaign-cancel`;
+- `campaign-abandon`;
 - `campaign-report`;
 - `campaign-cleanup`.
 
@@ -316,11 +434,18 @@ update secret storage is not authority to execute arbitrary shell as
 `quorum-runner`.
 
 Registration validates public credential definitions but reads no secret
-values. First start pins the current immutable generation to the campaign and
+values. First `run` pins the current immutable generation to the campaign and
 journals the secret-free campaign authority before admission. Rotation creates
 a new generation for future campaigns; it does not alter a pinned campaign.
-Pinned generations cannot be removed until every referencing campaign is
-terminal.
+The non-secret manifest of a referenced generation cannot be removed.
+
+A generation may be marked revoked at any time. Revocation prevents new
+attempt admission immediately, including admission by a controller that was
+already running. A revoked or missing pinned generation makes `run` refuse.
+V2 has no credential-repin operation: the recovery is cancellation followed by
+registration of a new campaign. Secret bytes may be deleted only after no
+controller or worker can still hold or use that generation; the non-secret
+generation manifest and its campaign references remain durable.
 
 The authority is the intersection of:
 
@@ -333,18 +458,39 @@ Any missing or mismatched member refuses the entire campaign before a worker
 starts. The adapter never silently drops a cell or substitutes a default
 credential.
 
-V2 accepts only credentials with environment-backed API-key delivery. It
-rejects OAuth, subscription, ambient-home, and unrecognized auth kinds during
-registration. Subject and grader credentials must be separately named, and
-their resolved secret values must differ. This comparison occurs in broker
-memory; values and value-derived hashes are never logged or persisted.
+V2 accepts exactly the `api-key` and `bedrock-bearer` auth kinds, each delivered
+from an environment-named value in the immutable generation. It rejects OAuth,
+subscription, ambient-home, and unrecognized auth kinds during registration.
+The grader credential must also have an API/auth shape supported by the frozen
+Gauntlet adapter. Subject and grader credential names and role-slot IDs must be
+distinct, and every delivery descriptor is role-scoped. Destination
+environment names may be the same because they exist in separate role
+processes. The generation manifest explicitly binds each role credential to a
+secret-member ID.
+
+The two role credentials may intentionally reference the same secret member,
+as the current Bedrock bearer route does. Registration freezes and provenance
+reports `secret_member_isolation: distinct | shared`; it does not compare,
+hash, or persist secret values. A shared member still receives filesystem,
+environment, home, and process isolation, but it is not provider-credential
+separation: either role already holds equivalent provider authority. Distinct
+provider authority requires distinct generation members and out-of-band key
+provisioning; V2 does not infer it from byte inequality.
+
+Credential concurrency remains part of execution safety rather than budget
+control. The frozen public definition records the limiter key, maximum
+concurrency, launch spacing, and any key-pool membership. Admission applies the
+most restrictive matching campaign, credential, and appliance cap. No pricing
+or observed-cost field participates in that decision.
 
 ## Per-attempt credential projection
 
 For each admitted attempt, the broker creates a private staging directory with
-fixed subject and grader slots. The slots contain only the values and public
-configuration needed for that attempt. Files are mode `0400`; the directory is
-mode `0700`; ownership matches the role identity inside the container.
+fixed subject and grader subdirectories and slots. The slots contain only the
+values and public configuration needed for that attempt. Slot files are mode
+`0400`; role directories are mode `0700`; each is owned by its consuming role
+identity inside the container. The container never receives the parent staging
+directory as one shared readable mount.
 
 Secret values are never placed in:
 
@@ -355,20 +501,32 @@ Secret values are never placed in:
 - campaign JSON or journal events;
 - provenance or cost records;
 - structured phase events;
-- sanitized status output.
+- sanitized status output;
+- retained or published run homes and agent configuration.
 
-The worker receives the two slots as read-only file mounts at fixed paths. A
-role launcher supplies subject values only to the Coding-Agent and grader
-values only to Gauntlet. The subject and grader execute under distinct
-unprivileged identities. The subject cannot inspect the grader's environment,
-credential files, or process state; the grader cannot inspect the subject's
-credential file. The container has no privilege-escalation path available to
-either role.
+The worker receives the two role slots as separate read-only file mounts at
+fixed paths. A minimal root-owned PID 1 validates the immutable attempt
+manifest, opens a fixed one-shot control channel, and pre-forks the subject and
+grader entrypoints. It begins with only the identity-switching and signal
+authority required for that closed startup/reaping job. Before either role
+entrypoint executes, it sets the declared UID/GID, clears supplementary groups
+and all role capabilities, sets `no_new_privs`, and installs separate homes and
+runtime/tmux directories. PID 1 closes credential descriptors after handoff and
+exposes no command channel beyond the one-shot start proxy. No setuid or
+file-capability binary exists in the image.
 
-The role launcher is a closed mechanism, not a general privileged command
-server. Its allowed commands, identities, environment destinations, and paths
-come from the frozen attempt manifest. It rejects all caller-supplied command
-or path substitution.
+Gauntlet invokes a fixed unprivileged proxy rather than a privileged command
+server. That proxy can send one `start` message to the already-bound subject
+runner; it cannot supply argv, environment, paths, credentials, or an identity.
+Those values come only from the frozen attempt manifest. After startup, PID 1
+only relays termination and reaps children. The hardened image and `doctor`
+verify that cross-UID ptrace and `/proc` environment reads are unavailable.
+
+The subject and grader therefore execute under distinct unprivileged
+identities. Neither can read the other's credential slot, environment, home,
+or process state. The closed launcher performs only manifest-pinned privilege
+drops; neither role has an escalation path through it. This is the concrete
+mechanism behind the narrower threat-model claim above.
 
 The private staging directory is removed only after the exact immutable
 container is confirmed stopped and crash evidence has been captured.
@@ -382,13 +540,16 @@ One fresh worker container executes one attempt. It receives:
   configuration;
 - the selected scenario and check inputs;
 - the secret-free attempt manifest and complete campaign identity;
-- one isolated writable attempt/run staging directory;
+- one isolated writable durable attempt directory at
+  `/srv/quorum/data/attempts/<campaign-id>/<attempt-id>`;
+- one disposable attempt runtime directory beneath `/srv/quorum/runtime`;
 - the subject and grader credential slots;
 - declared attempt time and count limits.
 
-All frozen inputs are read-only. The attempt directory is the only general
-writable bind. Container temporary files use an attempt-local runtime mount or
-bounded tmpfs and never a shared campaign directory.
+All frozen inputs are read-only. The durable attempt directory is the only
+general writable bind. Container temporary files use the attempt-local runtime
+mount or bounded tmpfs and never a shared campaign directory. Only the durable
+directory may satisfy an evidence obligation.
 
 The worker does not receive:
 
@@ -400,6 +561,16 @@ The worker does not receive:
 - host credential generations;
 - the Docker socket;
 - host runtime or lock directories.
+
+Agent homes exist only inside the attempt's writable space while the worker is
+live. The runner extracts the declared transcript and measurement artifacts
+into the positive result manifest, then excludes the homes and agent-auth
+configuration from publication. Provisioning consumes role slots directly and
+must not seed a secret-bearing environment or configuration file into a home.
+The host runs a secret-value scan over every proposed published artifact before
+accepting the manifest. Because a model or provider may echo a secret into raw
+logs, a match quarantines the artifact for restricted operator handling rather
+than claiming that no sensitive evidence exists.
 
 ## Artifact commit protocol
 
@@ -421,7 +592,7 @@ The commit order is:
 5. Let the worker exit.
 6. Have the host re-parse the manifest and schemas, verify all digests and
    identities, and reject unexpected path types or symlinks.
-7. Atomically publish the staged run directory under
+7. Atomically publish the positive-manifest artifact set under
    `/srv/quorum/data/results/<run-id>` and fsync the results directory.
 8. Append the terminal journal event and cost-record references in one fenced
    journal transaction.
@@ -433,13 +604,13 @@ blindly launches another attempt.
 
 ## Logs and crash evidence
 
-Every attempt writes directly to its host-mounted attempt directory from
-startup. The evidence set contains:
+Every attempt writes directly to its durable host-mounted attempt directory
+from process start. The evidence set contains:
 
 - raw stdout and stderr in separate mode-`0600` files;
 - a structured append-only worker phase log;
 - tool, image, runner, agent, and model readback;
-- resource samples and high-water marks;
+- host-sampled cgroup resource observations and high-water marks;
 - partial trajectory, token, and result artifacts as they become available;
 - the sanitized container-exit record.
 
@@ -471,120 +642,206 @@ records the last phase, measures available cost, and classifies the attempt
 without manufacturing a verdict. Retry or replacement follows only the closed
 typed-failure table.
 
+If normalization cannot complete, the evidence manifest records the trajectory
+or role log as unavailable rather than treating an empty file as evidence. The
+exact crash-time home and session-log paths remain in the durable attempt
+directory until manual cleanup so an operator can inspect them under sensitive
+artifact handling. A cleanup plan must name their deletion explicitly, and the
+partial report permanently retains the resulting missing-evidence disposition.
+
 ## Host telemetry
 
-The host controller, not a worker container, samples authoritative appliance
-CPU, memory, swap, PID, filesystem, and load state. Attempt workers additionally
-record cgroup-local CPU, memory, PID, and I/O observations.
+The host controller, not a worker process, samples authoritative appliance CPU,
+memory, swap, PID, filesystem, load, and per-container cgroup state. V2 does not
+add a second continuous sampler inside each worker; the host captures bounded
+periodic observations and the final cgroup high-water/exit snapshot.
 
 Telemetry can invalidate or explain measurement evidence according to the
 campaign's descriptive contention contract. It is not a cost or budget control.
 Missing required telemetry remains visible and cannot be silently treated as a
 clean host.
 
+## Storage exhaustion
+
+The appliance maintains a small physically allocated emergency reserve on the
+same filesystem as the journal and attempt evidence. Sparse allocation does not
+satisfy this requirement. Its size and free-space admission floor are appliance
+configuration, not campaign budgets.
+
+On `ENOSPC`, `SQLITE_FULL`, or a failed durable fsync, the controller stops new
+admission, releases the reserve, persists the smallest valid `storage_paused`
+record and attempt dispositions it can, stops and verifies exact worker
+containers, fsyncs the journal and evidence directories, and exits
+nonterminal. If even the pause record cannot land, status reports
+`recovery_required` with degraded storage evidence; it must not infer that a
+durable pause exists.
+
+An explicit `campaign run` may leave storage pause only after the configured
+free-space floor is met, the reserve is recreated and verified physically
+allocated, every prior handle is reconciled, and `storage_resumed` commits.
+
 ## Locks and concurrency
 
-The lock authorities remain distinct:
+The design reuses the appliance's existing `run.lock`; it does not introduce a
+third name for the same authority. The distinct authorities are:
 
-- the appliance live-job lock prevents `prepare`, `run`, `run-all`, repository
-  refresh, and another campaign controller from mutating the shared runtime;
-- the host-wide live-spend lock excludes every other top-level spender,
-  including break-glass commands;
-- the campaign-local journal lease fences journal writers.
+- `run.lock`, which excludes `prepare`, direct `run`, `run-all`, repository
+  refresh, registration, cleanup, and another campaign controller;
+- `sync.lock`, acquired after `run.lock` when a command reads or mutates managed
+  repository/image state;
+- the host-wide live-spend lock, which excludes every other top-level spender,
+  including break-glass commands; and
+- the campaign-local journal lease, which fences journal writers.
 
-Spend-producing start/resume commands acquire locks in this fixed order:
+One controller holds `run.lock` and the live-spend lock for the full period in
+which any attempt could spend. Attempt workers are covered children and never
+acquire host locks. The fixed acquisition order is `run.lock`, `sync.lock` when
+needed, live-spend lock, then campaign journal lease.
 
-1. appliance live-job lock;
-2. host-wide live-spend lock;
-3. campaign journal lease.
+Controller-PID death alone never makes the live-spend lock stealable. Its
+campaign ownership remains effective while any durable execution handle may
+still name a live container. Reclaim requires `run.lock` plus exact container
+reconciliation; no other spender may enter between controller death and that
+proof.
 
-Attempt workers are children covered by the controller and never acquire the
-host-wide lock.
+| Command | Lock behavior |
+|---|---|
+| `register` | `run.lock`, then `sync.lock`; no live-spend lock |
+| `run` | `run.lock`, live-spend lock, journal lease; controller retains them while live |
+| `cancel` | marker without those locks; signal/wait; after controller death acquire `run.lock`, live-spend lock, then journal lease |
+| `abandon` | same fencing path as cancel, but only after execution safety is established |
+| `report` | `run.lock`; journal is terminal and remains immutable |
+| `cleanup` | `run.lock`; terminal journal remains immutable |
+| `list`, `status`, `costs` | read-only; no writer or live-execution lock |
 
-`campaign cancel` is the deliberate exception to live-job-lock acquisition. It
-must remain able to write durable cancellation intent while a controller holds
-that lock. Cancel writes the marker first, signals the exact controller, then
-uses the campaign's fenced post-crash path to stop and verify workers and append
-the terminal event. It never admits or starts work.
+Before acquiring `run.lock`, `run` may inspect its authenticated holder. If the
+holder is the same campaign's verified live controller, the command returns the
+idempotent no-op status. Any other live holder produces the normal typed busy
+response. After that observation, all mutation still requires normal lock
+acquisition and revalidation.
 
-Read-only status, show, and costs take no writer or live-job lock.
+Cancellation never fences a controller that may still be running. It first
+atomically creates a campaign-local cancel-request sidecar without taking the
+journal lease. The live controller observes that sidecar, stops admission, and
+may append `cancel_requested`; after controller death the cancel invocation may
+append the event itself under the lease. Cancel signals the exact recorded
+process, waits for bounded cooperative exit, escalates, and verifies death.
+Only then may it acquire the locks, stop and verify exact containers, reconcile
+evidence, and append the terminal event. If controller death or worker safety
+cannot be proved, the command returns nonzero with state `cancel_requested`;
+it does not race a new writer or claim cancellation.
 
 ## Operator commands
 
 The V2 surface is nested under `evals-appliance campaign`.
+
+Every command accepts a selector that is a full campaign ID, an unambiguous ID
+prefix, or an exact unambiguous operator label. Ambiguity is a typed refusal
+that returns the matching IDs and labels. Human and JSON responses come from
+the same structured result and include exactly one `next_action` when operator
+work remains.
 
 ### `register`
 
 ```text
 evals-appliance campaign register \
   --suite <repo-relative-path> \
-  --estimates <repo-relative-path> \
-  --global-cap <n> \
+  [--estimates <repo-relative-path>] \
+  [--label <text>] \
+  [--global-cap <n>] \
+  [--include-drafts] \
   [--dry-run] [--json]
 ```
 
 Paths must resolve beneath configured, frozen input roots. A normal invocation
 registers; `--dry-run` performs validation, ref resolution, eligibility, grid
-expansion, capacity checks, and cost forecasting without writing a campaign.
-Registration never starts a worker.
+expansion, capacity checks, and optional cost forecasting without writing a
+campaign. Estimates are never required. The global cap defaults to the
+appliance configuration and an override may only lower it. Draft scenarios are
+excluded unless `--include-drafts` is explicit, and their frozen draft status
+is part of the input digest. Registration never starts a worker.
 
-### `start`
-
-```text
-evals-appliance campaign start <full-campaign-id> [--foreground] [--json]
-```
-
-Start accepts only a registered, never-started campaign. It is detached by
-default. Exit zero from detached submission means the invocation job and
-controller identity were durably recorded, not that the campaign completed.
-
-### `resume`
+### `list`
 
 ```text
-evals-appliance campaign resume <full-campaign-id> [--foreground] [--json]
+evals-appliance campaign list [--json]
 ```
 
-Resume accepts only a nonterminal campaign whose reconciliation reports
-`resumable: true`. It is detached by default. It refuses while worker safety is
-unverified, the frozen snapshot fails verification, the pinned credential
-generation is unavailable, or another spender owns the host lock.
+List reports campaign ID, label, input-digest prefix, primary state, last
+activity, known cost subtotal, unknown-cost count, and next action. It also
+reports incomplete registration directories as non-campaign cleanup candidates
+without inventing campaign state for them.
+
+### `run`
+
+```text
+evals-appliance campaign run <selector> [--json]
+```
+
+Run is detached and idempotent. There is no foreground mode:
+
+- `registered`: pin the credential generation, durably record the invocation
+  and controller identity, and begin;
+- `running` with the recorded controller live: return `changed: false` and the
+  current status;
+- `recovery_required`: acquire the locks, reconcile every durable execution
+  handle, stop and verify any surviving worker rather than adopting it, then
+  continue only if all safety predicates pass;
+- `storage_paused`: perform the storage and reconciliation checks, append
+  `storage_resumed`, then continue; and
+- any terminal state or durable cancel marker: refuse and name the appropriate
+  read, report, cleanup, or re-registration action.
+
+Run does not require a pre-existing `resumable` assertion. Reconciliation is
+the operation that determines whether continuation is safe. Exit zero from
+submission means the invocation job and controller identity were durably
+recorded, not that the campaign completed.
 
 ### `cancel`
 
 ```text
-evals-appliance campaign cancel <full-campaign-id> \
+evals-appliance campaign cancel <selector> \
   [--reason <text>] [--json]
 ```
 
 Cancel is campaign-aware and remains available after controller loss. It writes
-intent before signaling anything. Success means every exact worker and subject
-host is verified stopped and `campaign_cancelled` is the terminal journal
-event. Wrapper exit alone is not cancellation.
+intent before signaling anything. Success means every exact worker container
+and both role processes are verified stopped and `campaign_cancelled` is the
+terminal journal event. Wrapper exit alone is not cancellation.
+
+### `abandon`
+
+```text
+evals-appliance campaign abandon <selector> \
+  --reason <text> --acknowledge-incomplete-evidence [--json]
+```
+
+Abandon is the terminal escape for a campaign whose journal, document,
+evidence, or report cannot be completed. Identity must be established either
+by the authenticated campaign document or by its immutable registration job
+and published campaign-ID/input-digest envelope. It first uses the cancellation
+fencing path and requires proof that no related controller, container, or role
+process can still spend. When the journal is writable it appends
+`campaign_abandoned`; otherwise it writes one external append-only record under
+`/srv/quorum/state/abandonments`, preserving the last authenticated journal
+anchor, operator/job identity, reason, execution-safety proof, and evidence
+digest. It never repairs or rewrites a corrupt journal and every resulting
+report is permanently stamped `complete: false`.
 
 ### `status`
 
 ```text
-evals-appliance campaign status <full-campaign-id> [--json]
+evals-appliance campaign status <selector> [--json]
 ```
 
 Status is read-only, credential-independent, and reconstructs state from the
 authenticated campaign document, journal, invocation jobs, execution handles,
-Docker state, and report artifacts. It never repairs or resumes work.
-
-### `show`
-
-```text
-evals-appliance campaign show <full-campaign-id> [--json]
-```
-
-Show is read-only. It renders a sealed descriptive report. Before sealing it
-returns the operational state and states that no report is available; it does
-not publish or regenerate artifacts.
+Docker state, and report artifacts. It never repairs or continues work.
 
 ### `costs`
 
 ```text
-evals-appliance campaign costs <full-campaign-id> [--json]
+evals-appliance campaign costs <selector> [--json]
 ```
 
 Costs is read-only and available during execution. It reports observed and
@@ -593,80 +850,76 @@ unknown cost without changing campaign state.
 ### `report`
 
 ```text
-evals-appliance campaign report <full-campaign-id> [--json]
+evals-appliance campaign report <selector> [--json]
 ```
 
-Report verifies the sealed digest and existing peers. It may regenerate a
-missing report peer from the sealed journal and retained evidence, but refuses
-any divergence. It cannot seal an unsealed campaign.
+Report verifies the terminal authority and existing peer digests. It may
+regenerate a missing peer from a sealed journal or from a
+cancelled/abandoned campaign's retained evidence, but refuses any divergence.
+The sealed event is the authority for a complete report digest; a partial
+report publishes its own immutable sidecar digest without altering the terminal
+journal. Complete seals render `complete: true`; cancelled and abandoned
+campaigns render descriptive partial reports with `complete: false`. Report
+never seals or continues a campaign.
 
 ### `cleanup`
 
 ```text
-evals-appliance campaign cleanup <full-campaign-id> [--apply] [--json]
+evals-appliance campaign cleanup <selector> [--json]
+evals-appliance campaign cleanup --apply <plan-id> [--json]
 ```
 
-Cleanup defaults to a dry run. `--apply` is accepted only for a sealed or
-successfully cancelled campaign with no live controller or worker and a
-complete measurement-evidence manifest.
-
-No V2 `list` command, automatic cleanup, or standalone `seal` command is added.
+The selector form is always a dry run and writes a digest-bound cleanup plan.
+Apply accepts only that plan ID, re-authenticates every source and retained
+artifact, and refuses if paths, digests, state, or execution safety changed.
+Cleanup is available for sealed, cancelled, or abandoned campaigns and for
+identified incomplete registrations. It is never automatic. V2 has no
+`start`, `resume`, `show`, foreground, standalone `seal`, or automatic-cleanup
+command.
 
 ## Status model
 
-Status keeps independent axes instead of flattening process state into campaign
-state.
+Human status leads with one primary state:
 
-### Campaign state
+- `registered`;
+- `running`;
+- `recovery_required`;
+- `storage_paused`;
+- `cancel_requested`;
+- `sealing`;
+- `sealed`;
+- `cancelled`; or
+- `abandoned`.
 
-- `registered`
-- `running`
-- `interrupted`
-- `storage_paused`
-- `cancel_requested`
-- `cancelled`
-- `sealed`
-- `corrupt`
+JSON preserves the facts behind that projection: authenticated journal state,
+integrity (`ok | failed | unknown`), controller observation, exact worker
+observations, report state, cleanup state, cost coverage, blockers, allowed
+actions, and one `next_action`. Integrity failure is not a lifecycle state. It
+prevents `run` and complete sealing while leaving status, costs, cancellation,
+abandonment after execution-safety proof, and conservative cleanup available.
 
-### Controller state
+Projection uses this precedence:
 
-- `none`
-- `starting`
-- `running`
-- `exited`
-- `lost`
+1. an authenticated terminal `sealed` or `campaign_cancelled` event, or a valid
+   external abandonment record, wins;
+2. a durable cancel marker yields `cancel_requested`;
+3. a most-recent storage-control event of `storage_paused` yields
+   `storage_paused`;
+4. a live controller yields `running` or `sealing` from its journal phase;
+5. any nonterminal campaign with prior execution but no verified controller,
+   an unbound handle, or an unverified worker yields `recovery_required`; and
+6. a never-run campaign yields `registered`.
 
-### Worker safety
+If authentication fails and no valid abandonment record exists, primary state
+is `unknown`, integrity is `failed`, and the response names only actions safe
+under the remaining evidence. A valid abandonment record projects `abandoned`
+while retaining `integrity: failed`. Status never repairs. `run` performs
+reconciliation and either continues or returns a typed blocking predicate.
 
-- `none`
-- `live`
-- `reconciling`
-- `safe`
-- `unverified`
-
-### Report state
-
-- `absent`
-- `publishing`
-- `published`
-- `divergent`
-
-### Cleanup state
-
-- `not_requested`
-- `eligible`
-- `pending`
-- `complete`
-- `failed`
-
-`resumable` is a derived permission, not a campaign state. It is true
-only when the campaign is nonterminal, no worker may still be running, every
-execution handle has been reconciled, the snapshot and journal authenticate,
-the credential generation remains available, and no cancel marker exists.
-
-Every JSON response is schema-versioned and returns the full campaign ID,
-latest relevant invocation job ID, all five state axes, `resumable`, sanitized
-summary, cost coverage, and any required operator action.
+Command idempotency is part of the V2 contract: repeated `run` against a live
+controller is a no-op; repeated cancel or abandon returns the same terminal
+identity; report only restores missing digest-matching peers; cleanup apply
+reuses its plan/receipt; and all read commands are side-effect free.
 
 ## Cancellation and interruption
 
@@ -674,24 +927,25 @@ Workers use no Docker restart policy. Docker or host restart never starts paid
 work automatically.
 
 On controller interruption, an already-started worker may still be live. Status
-reports that fact without claiming the campaign is resumable. Explicit resume
-performs the pinned recovery order:
+reports `recovery_required` without guessing that continuation is safe. An
+explicit `run` performs the pinned recovery order:
 
 1. honor a cancel marker first;
 2. authenticate campaign and journal;
-3. acquire the live locks;
+3. acquire the locks in their fixed order;
 4. inspect each immutable execution handle;
 5. capture remaining logs and exit state;
 6. stop and verify surviving workers rather than adopting them;
 7. reconcile published or partial artifacts;
-8. validate snapshot and credential generation;
+8. validate frozen inputs, worker image, policies, and credential generation;
 9. only then admit replacement or remaining work.
 
-Cancellation follows marker first, stop admission, signal controller, stop
-exact worker containers, verify role processes dead, reconcile partial
-artifacts, append attempt/block dispositions, and append
-`campaign_cancelled` last. If any worker cannot be verified dead, cancellation
-returns nonzero and does not append the terminal event.
+Cancellation follows marker first, stop admission, signal and wait/escalate the
+controller, prove it dead, acquire the locks, stop exact worker containers,
+verify role processes dead, reconcile partial artifacts, append attempt/block
+dispositions, and append `campaign_cancelled` last. If any controller or worker
+cannot be verified dead, cancellation returns nonzero and does not append the
+terminal event. Abandonment uses the same execution-safety proof.
 
 ## Cost measurement
 
@@ -710,6 +964,7 @@ execution_attempt_id
 run_id | null
 role = subject | grader
 credential
+credential_generation_id
 endpoint
 registered_model
 observed_model | null
@@ -727,16 +982,22 @@ The basis is not a confidence hierarchy that silently replaces one value with
 another. Raw observations stay available, and the aggregation policy is
 versioned. Invalid or missing inputs yield `unknown`, not zero.
 
-The campaign costs view reports:
+The campaign costs view is timestamped and reports:
 
-- gross total for all attempts;
+- known USD subtotal for all attempts as of that timestamp;
 - included-evidence total;
 - excluded/replaced/failed-attempt total;
 - subject and grader totals;
 - per-arm, cell, credential, model, and attempt breakdowns;
-- unknown record count and the affected identities;
-- registration forecast, clearly labelled as a forecast;
-- measured-minus-forecast difference, with no pass/fail meaning.
+- pending and permanently unknown record counts and their affected identities;
+- coverage as known records over expected role records; and
+- an optional registration forecast, clearly labelled as non-authoritative,
+  only when estimates were supplied.
+
+The view never labels a partial known subtotal as a gross total and does not
+compute measured-minus-forecast. A stable record identity prevents duplicate
+ingestion across reconciliation. Credential generation is attribution metadata,
+not a grouping that changes campaign identity.
 
 Report generation may include the same descriptive totals, but report outcome
 and campaign execution never depend on them.
@@ -745,9 +1006,9 @@ and campaign execution never depend on them.
 
 V2 supports only `descriptive_v1`. The controller seals after all required
 sample dispositions and integrity obligations are terminal. Sealing verifies
-the frozen snapshot, journal, measurement evidence, cost-record references,
-contention coverage, and report fold before appending one irreversible sealed
-event containing the report digest.
+the frozen inputs and policies, journal, measurement evidence, cost-record
+references, contention coverage, and report fold before appending one
+irreversible sealed event containing the report digest.
 
 Report publication remains recoverable: Markdown may land before JSON, but the
 canonical JSON peer is the publication-complete marker. Reconciliation may
@@ -755,16 +1016,27 @@ regenerate missing peers only when the refolded digest matches the sealed
 digest. Divergent peers produce `report_state: divergent` and are never
 overwritten.
 
-Sealing does not clean up inputs, workers, or generated code.
+Cancellation and abandonment do not produce a complete seal. They may produce
+a digest-bearing partial descriptive report from authenticated evidence, but it
+is permanently marked `complete: false`, names every missing obligation, and
+cannot be used as a release decision.
+
+After host evidence closure, the controller removes the exact stopped worker
+container and its credential staging immediately. Sealing does not remove
+frozen inputs, generated code, homes, caches, or retained evidence.
 
 ## Manual cleanup
 
-Cleanup is an explicit destructive operation with a dry-run default. Before
-`--apply`, it authenticates the campaign and journal, verifies terminal state,
-proves no related process or container live, verifies reports or cancellation
-evidence, and verifies the measurement-evidence manifest.
+Cleanup is an explicit destructive operation with a mandatory plan/apply split.
+Before planning and again before apply, it authenticates the campaign and
+journal or valid abandonment record, verifies terminal state, proves no related
+process or container live, verifies reports or termination evidence, and
+verifies the measurement-evidence manifest. Apply must match the exact stored
+plan digest and source facts.
 
-The retained measurement closure contains:
+The retained measurement closure contains each produced item below plus an
+explicit unavailable disposition for every required item that could not be
+produced:
 
 - campaign document and journal;
 - report and provenance;
@@ -785,12 +1057,19 @@ Cleanup may remove:
 - run homes and agent-local state;
 - dependency and tool caches;
 - temporary staging and runtime files;
-- stopped worker containers;
-- any unreferenced artifact omitted from the retained-evidence allowlist.
+- verified stopped container stragglers left by an earlier controller crash.
 
-The compact input archive records each path, type, mode, link target, and
-content digest. Cleanup restores it into a temporary directory and re-runs the
-snapshot verifier before deleting expanded trees.
+Those are the complete removable classes. Cleanup never derives deletion
+authority from absence in an allowlist and never recursively sweeps an
+unrecognized path. The compact input archive uses verified Git bundles for Git
+objects and a deterministic positive manifest for non-Git inputs, recording
+each path, type, mode, link target, and content digest. Cleanup restores it into
+a temporary directory and re-runs the input verifier before deleting expanded
+trees.
+
+Incomplete-registration cleanup may remove only the exact preallocated
+campaign directory and runtime paths proven to belong to that registration; it
+cannot use campaign terminal-state claims because no published campaign exists.
 
 If any step fails, cleanup stops, retains the source material, returns nonzero,
 and leaves an idempotent `cleanup.json` sidecar with state `cleanup_pending`.
@@ -799,8 +1078,8 @@ campaign journal is immutable after sealing. Cleanup failure does not
 invalidate a sealed campaign. A repeated dry run or apply resumes from durable
 cleanup state without broad recursive deletion.
 
-After cleanup, `status`, `show`, `costs`, and report verification must still
-work. Start and resume remain impossible because cleanup is terminal-only.
+After cleanup, `list`, `status`, `costs`, and report verification must still
+work. `run` remains impossible because cleanup is terminal-only.
 
 ## Repository refresh and deployment
 
@@ -813,15 +1092,28 @@ The feature spans two repositories:
   credential generation materialization, host packages, helper installation,
   refresh, backup configuration, and the private deployment runbook.
 
-Refresh acquires the appliance mutation lock and refuses while a controller or
-worker is active. It records current and target helper SHA, image digest, repo
-SHAs, config digest, and credential-generation pointer before changing
+Refresh acquires `run.lock` and then `sync.lock`, and refuses while a controller
+or worker is active. It records current and target helper SHA, image digest,
+repo SHAs, config digest, and credential-generation pointer before changing
 anything. It never deletes a durable namespace.
 
-A registered but never-started campaign can survive refresh because its
-behavioral inputs and campaign controller are frozen. Start revalidates the
-current appliance adapter's V2 support and dispatches the frozen controller.
-An active or resumable campaign blocks refresh until it seals or is cancelled.
+A registered, interrupted, or storage-paused campaign can survive refresh
+because its experimental inputs, measurement policies, archives, and worker
+image are retained. Only a live controller or worker blocks refresh. Before
+deployment, the new installed controller must pass the V2 durable-prefix replay
+corpus; afterward `run` revalidates the retained inputs and image before
+reconciliation. Image and archive garbage collection refuses every digest
+referenced by a nonterminal campaign.
+
+The initial V2 deployment is a drained namespace migration. Terminus snapshots
+the volume, acquires `run.lock`, creates the new repositories and data roots,
+and moves existing V1 result material out of the replaceable evals checkout
+into a read-only `/srv/quorum/data/legacy-v1/` preservation root. V2 never
+imports or reads those artifacts. Existing `state/jobs` remains preserved;
+legacy credential-scoping staging must be empty before migration. A durable
+migration plan and receipt name every moved or created path. Rollback restores
+the pre-migration volume snapshot or stays within the V2 floor; it does not
+guess at reverse path moves.
 
 Terminus user-data changes are not deployment proof for the existing host.
 Deployment must explicitly install refreshed scripts/configuration or replace
@@ -835,18 +1127,30 @@ on the snapshotted `/srv/quorum` data volume. `doctor` reports snapshot policy
 and freshness when the host has read authority, but absence of that authority
 is distinguished from a healthy snapshot.
 
+An older restored volume cannot identify itself using state stored on that same
+volume. Terminus therefore materializes a root-owned
+`/etc/quorum/volume-state.json` outside the data volume from deployment/restore
+metadata. It names the attached volume ID, source snapshot when any, and mode
+`current | restored`. The helper treats `restored` as authoritative read-only
+mode and refuses live execution if the marker is missing, malformed, or
+disagrees with the mounted volume. Normal same-volume host replacement is
+explicitly materialized as `current`; V2 does not infer either class.
+
 V2 recovery classes are:
 
 1. **Same attached volume after process/container/host restart:** reconcile
-   durable state and permit explicit resume when every safety predicate holds.
+   durable state and permit explicit `run` when every safety predicate holds.
 2. **Older snapshot restore:** read-only inspection, report verification, cost
    reading, and export only. Every unsealed campaign is recovery-unknown and
-   cannot start or resume.
+   cannot run.
+
+Docker live-restore and worker restart policies are disabled. The restore drill
+also proves that no container from the source host can be adopted or restarted.
 
 The restore drill opens every campaign journal, checks SQLite and WAL
 integrity, replays projections, authenticates campaign documents, verifies
 sealed reports and referenced result manifests, reads cost totals, and proves
-that unsealed restored campaigns refuse resume.
+that unsealed restored campaigns refuse `run`.
 
 ## Error handling
 
@@ -859,20 +1163,20 @@ Important refusal classes include:
 
 - unsupported campaign version/profile/auth;
 - unsafe ID or path;
-- campaign digest or journal-anchor mismatch;
+- campaign document/input digest or journal-anchor mismatch;
 - snapshot/ref drift;
 - credential-generation unavailable or mismatched;
-- subject/grader credential equality;
-- live-job or live-spend lock busy;
+- missing or implicit subject/grader secret-member binding;
+- `run.lock`, `sync.lock`, or live-spend lock busy;
 - worker identity unverified;
 - result manifest incomplete or corrupt;
 - report divergence;
 - storage pause or unsafe capacity;
-- campaign not startable, resumable, cancellable, reportable, or cleanable.
+- campaign not runnable, cancellable, abandonable, reportable, or cleanable.
 
 Nonterminal controller outcomes return structured state rather than generic
-success. `storage_paused`, `resumable`, and `cancel_requested` cannot be
-reported as completed. Missing cost does not fail execution, but it degrades
+success. `storage_paused`, `recovery_required`, and `cancel_requested` cannot
+be reported as completed. Missing cost does not fail execution, but it degrades
 cost coverage visibly.
 
 ## Verification strategy
@@ -886,16 +1190,25 @@ Docker and clock seams. They cover:
 - loud V1 rejection;
 - removal of budget fields, events, states, and dispatcher imports;
 - cost aggregation across all attempt dispositions and explicit unknowns;
-- full-ID lookup and no-follow path confinement;
+- full-ID, unique-prefix, label, ambiguity, and no-follow path behavior;
 - registration publication and digest idempotence;
+- incomplete-registration discovery and narrowly scoped cleanup;
 - credential authority intersection and immutable-generation pinning;
-- subject/grader equality rejection without value disclosure;
+- credential revocation refusal and absence of any re-pin path;
+- credential concurrency and launch spacing without price imports;
+- explicit shared/distinct role-member classification without value comparison
+  or disclosure;
 - exact worker input and mount manifests;
-- every crash cut in job creation, registration, worker binding, result
+- every event transition, command idempotency rule, and valid durable prefix;
+- every crash cut in job creation, registration, Docker creation/binding, result
   publication, journal terminal append, sealing, reporting, and cleanup;
+- created-but-unbound container and credential-stage reconciliation by labels;
 - recovery from published-but-unjournaled results;
 - status over every valid durable prefix and malformed/tampered state;
-- manual cleanup allowlisting and archive round-trip verification.
+- physically allocated storage reserve and every storage-pause crash cut;
+- cleanup positive deletion classes, plan revalidation, and archive round-trip;
+- installed-controller compatibility against the frozen V2 replay corpus; and
+- restored-volume marker refusal.
 
 Tests validate behavior and structured records, not rendered scripts or broad
 string snapshots.
@@ -909,8 +1222,14 @@ locks, and campaign journal. It proves:
 - the subject cannot read grader, sibling, unused-bundle, host, or Docker
   credentials;
 - the grader cannot read the subject credential;
+- both roles run under distinct UIDs with no capabilities, setuid binaries,
+  cross-UID ptrace, or general privileged launcher;
+- workers cannot reach instance metadata, host control routes, or sibling
+  containers, while declared provider access remains usable;
 - Docker metadata, structured events, job records, provenance, and sanitized
   output contain no credential values;
+- provisioning never copies credentials into a retained home, and proposed
+  publications are secret-scanned;
 - parallel attempts receive only their selected snapshots and credentials;
 - real exit, signal, timeout, OOM, missing-container, Docker-daemon restart, and
   controller-SIGKILL cases retain the promised logs and state;
@@ -921,8 +1240,10 @@ locks, and campaign journal. It proves:
   neither overlap nor deadlock;
 - marker-first cancellation reaches real child processes and refuses completion
   while anything survives;
-- cleanup removes generated work while preserving status, show, costs, and
-  report verification.
+- an irrecoverable campaign can be abandoned only after execution safety is
+  proved and remains permanently incomplete; and
+- cleanup removes only planned artifact classes while preserving list, status,
+  costs, and report verification.
 
 ### Terminus deployment verification
 
@@ -937,34 +1258,41 @@ Before provider spend:
 5. Run `doctor --json` and verify durable roots, mounts, source repositories,
    lock authority, image digest, credential generation, and checkout cleanliness.
 6. Register the planned release-effect suite in dry-run and real no-spend modes.
-7. Verify the returned full campaign ID, frozen refs, credential authority, and
-   cost forecast.
+7. Verify campaign discovery, the unique campaign ID and input digest, frozen
+   refs/policies, credential authority, and optional forecast when supplied.
 
 ### Live qualification through the adapter
 
 Live acceptance is split so one happy-path receipt cannot hide a missing crash
 boundary:
 
-1. **Parallel completion:** multiple API-key/Bedrock arms plus the grader run
-   concurrently, seal, publish, and remain inspectable after SSH disconnect.
+1. **Parallel completion and contention:** multiple
+   `api-key`/`bedrock-bearer` arms plus the grader run concurrently within all
+   caps and remain inspectable after SSH disconnect. A bounded controlled
+   contention window is detected; the contaminated pair is excluded and
+   replaced before the campaign seals and publishes.
 2. **Worker crash:** kill a worker mid-attempt; preserve logs and partial
    evidence, classify it, replace it, and reconcile all measured cost.
 3. **Controller crash/reboot:** kill the controller and reboot the host with a
    nonterminal campaign; prove no worker auto-restarts, status reconciles, and
-   explicit resume completes without duplicate attempt/run identity.
+   explicit `run` completes without duplicate attempt/run identity.
 4. **Cancellation:** request cancellation with live workers, prove marker-first
-   verified death and terminal cancellation, then prove resume refusal.
+   verified death and terminal cancellation, then prove `run` refusal.
 5. **Cost reconciliation:** independently sum every subject and grader attempt
    source, including the failed/replaced attempt, and match `campaign costs`
    while preserving any unknowns.
+6. **Cleanup and incomplete evidence:** publish a partial cancelled report,
+   exercise an abandonment after an injected irrecoverable evidence fault, then
+   apply a digest-bound cleanup plan while preserving measurement closure.
 
-The release-effect campaign starts only after all five qualifications pass.
+The release-effect campaign starts only after all six qualifications pass.
 
 ## Rollout and rollback
 
 V2 is a one-way compatibility floor. Rollout must drain V1-era live activity,
-preserve existing files without migrating them, deploy the V2-aware helper and
-worker together, and record the deployed minimum version.
+preserve existing V1 files without translating their schema, relocate them
+byte-for-byte only through the recorded namespace migration, deploy the
+V2-aware helper and worker together, and record the deployed minimum version.
 
 Rollback begins by stopping admission. If any campaign may still be active,
 the V2 helper performs marker-first cancellation or safe reconciliation before
@@ -973,7 +1301,8 @@ generations are snapshotted and preserved.
 
 An older campaign-unaware helper must not be installed while V2 job records
 exist. Rollback of implementation defects therefore rolls forward to a fixed
-V2 helper or reverts within the V2 schema floor; it does not re-enable V1.
+V2-compatible helper or reverts to another helper that passes the complete V2
+replay corpus; it does not re-enable V1.
 
 ## Implementation boundaries
 
@@ -981,18 +1310,20 @@ This parent architecture is too large for one implementation plan. It must be
 decomposed into five ordered child specifications, each with its own approval,
 implementation plan, test-first delivery, and review gate:
 
-1. **V2 contracts and measurement:** campaign, journal, status, and cost
-   contracts; clean V1 rejection; removal of budget behavior.
+1. **V2 contracts and measurement:** campaign, closed journal transition table,
+   durable-prefix corpus, status, and cost contracts; clean V1 rejection;
+   removal of budget behavior.
 2. **Durable evidence:** namespace separation, self-contained snapshots,
    artifact commit protocol, crash logs, retained evidence, and cleanup.
 3. **Isolated attempt executor:** immutable credential generations, exact
    per-role projection, role separation, and one-container-per-attempt
    execution.
-4. **Appliance control surface:** campaign-aware jobs, commands, locks, status,
-   cancellation, recovery, reporting, costs, and Linux integration coverage.
-5. **Terminus delivery and qualification:** paths, mounts, refresh, bundle
-   materialization, deployment, rollback, no-spend proof, and the five live
-   qualification campaigns.
+4. **Appliance control surface:** campaign-aware jobs, discovery/selectors,
+   installed controller, commands, locks, status, cancellation, abandonment,
+   recovery, reporting, costs, and Linux integration coverage.
+5. **Terminus delivery and qualification:** namespace migration, paths, mounts,
+   restored-volume marker, refresh, bundle materialization, image retention,
+   deployment, rollback, no-spend proof, and the six live qualification cases.
 
 The child specifications and plans must name exact files, tests, ownership, and
 commit boundaries. No child implementation begins until Drew reviews and
