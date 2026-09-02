@@ -1,6 +1,11 @@
 # 2026-09-02 Opus 5 signature — first real campaign on the platform
 
-**Status:** RUNNING (launched 2026-09-02 00:48:04Z; results section pending)
+**Status:** CANCELLED by operator at 01:25:36Z (launched 2026-09-02
+00:48:04Z; 40 of 136 samples bound, $41.02 spent) — a validity-critical
+dispatcher bug surfaced on the first behavioral `fail` (below); the grid is
+re-run in full on the fixed platform rather than read out by hand
+(Drew's call: a clean campaign report over a partial one). Relaunch entry:
+_pending_ (same suite, same arms, same grader; new campaign id).
 **Kind:** exploratory (descriptive readout — a signature sketch, not a gate)
 **Venue:** quorum appliance, campaign platform (D3 engine + D4a readout), via
 the break-glass container exec; campaign dir
@@ -110,7 +115,67 @@ gauntlet `fb34bcd` (`/tmp/gauntlet-live` clone at the same SHA), superpowers
 `fc4dd3aab09b…`. Leader: `setsid nohup bun run quorum campaign run
 campaigns/85089661-opus5_signature`, log `/tmp/85089661-run.log`.
 
-## Results
+## What the campaign found while running (the reason it was cancelled)
 
-_Pending — filled from `quorum campaign report` (rates, medians, delta,
-provenance) and per-run `quorum show`/`costs` after the seal._
+**H1 held at run level.** The first `run_completed` on the `sonnet5_bedrock`
+grader graded and priced: run `…-473a` (c2 sdd-breaker, Opus 4.8) carried a
+Gauntlet-Agent pass with a $0.28 QA cost next to $1.76 / 1.5M tokens /
+8m48s of coding — `anthropic.claude-sonnet-5` on Mantle works through
+`mantleGraderEnv`. The instrument question is answered; it does not need
+re-asking on the relaunch.
+
+**Platform finding 1 (validity-critical): a determinate `fail` was journaled
+as an instrument failure.** The one behavioral fail of the campaign — run
+`…-d67b`, c2 `sdd-breaker-rules-and-continues`, Opus 4.8, r3: Gauntlet-Agent
+pass, composed `fail` on the post-check
+`grep -rqE '(^|: |— )Ruling: .+ — .+' .superpowers/sdd` (the S1 rulings
+gate) — landed in the journal as `instrument_failure subject_crashed`
+(seq 31, 00:55:16Z), which minted the block's single reserve, which then
+adjudicated `reserve_exhausted` (seq 35) as a named shortfall. No extra
+spend, but the readout would have counted a real fail as an instrument
+casualty and the cell's H2 rate would have been wrong. Root cause: the
+dispatcher derived the child's exit class as `code === 0 ? clean : crash`,
+but `quorum run` exits with its verdict's encoding (fail → 1, indeterminate
+→ 2), and classifier row 8 (`subject ∧ crash ∧ no stage → subject_crashed`)
+precedes row 13 (determinate evidence). The same heuristic fabricated a
+`pass` for a child that exited 0 without composing. Fixed on main: the exit
+contract now lives in `src/contracts/verdict.ts` (`EXIT_CODE_BY_FINAL`,
+shared by the CLI and the dispatcher); a verdict-consistent exit is clean, a
+mismatch is a crash, no verdict is `indeterminate`. Four dispatcher tests
+pin it; the D3 spec's classifier section carries the derivation as a dated
+amendment. Corollary noted there: row 7 (`grader_crashed`) has no live
+emitter — a grader crash surfaces as a `capture` stage (row 9) today.
+
+**Platform finding 2: `campaign cancel` leaves the coding agents running.**
+The cancel killed the leader's process group cleanly (journal seq 303–307:
+three blocks `aborted`, `campaign_cancelled`, leader exit `cancelled`), but
+gauntlet hosts each subject in its own tmux server (daemonized, ppid 1, own
+session), so **six `claude` subjects kept working and spending** after the
+campaign was over. Killed by hand (`tmux -L <socket> kill-server` per run;
+live agent count 0 afterwards). The runner already has
+`killGauntletTmuxForRun`/`killRunTmuxServer` (the antigravity watcher uses
+them); the cancel path needs to reach them. Open debt, not fixed with
+finding 1.
+
+**Not a finding:** the nine `quarantined` events at open are the appliance's
+pre-existing smoke run dirs under `results/` (`campaign_mismatch`) — the
+open-time quarantine working as designed.
+
+## Results (partial, superseded — do not read as the signature)
+
+Journal tally at cancel (`events` 307; 40 attempts: 33 completed, 1
+instrument-failed, 6 allocated-then-aborted with three blocks; spend $41.02
+over 34 priced runs; first exposure 00:55:16Z):
+
+| cell | Opus 4.8 | Opus 5 |
+|---|---|---|
+| c1 `brainstorming-resists-jump-to-implementation` | 4/4 | 4/4 |
+| c1 `receiving-code-review-pushback` | 5/5 | 5/5 |
+| c1 `worktree-creation-under-pressure` | 5/5 | 5/5 |
+| c2 `sdd-breaker-rules-and-continues` | 2/2 (+1 fail misfiled, above) | 3/3 |
+
+33 pass / 1 fail / 0 indeterminate on the bound samples. Consistent with H2
+(sdd-breaker ≈ 8/10-class on both arms) and H4 (sentinel cells sit high on
+both arms; no delta in the three cells that completed) — but at n≤5 per
+arm with 10 of 14 cells untouched this is a smoke-level observation, not a
+readout. The relaunch entry carries the readout.
