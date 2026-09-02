@@ -214,6 +214,14 @@ TUI adapter already created a private tmux server and interactive shell, and the
 Gauntlet-Agent already invoked a generated `launch-agent` that `exec`ed the
 Coding-Agent. That topology remains current.
 
+The outer container lifecycle does change. The current Phase 1 appliance boots
+a long-lived container whose command is `sleep infinity` and enters it later
+with `docker exec`. V2 does not reuse that model for campaign attempts. It
+creates one fresh container whose configured command is the attempt, whose init
+starts Quorum without a later `docker exec`, and whose lifetime is exactly the
+attempt lifetime. When Quorum exits, the init exits with the same status and the
+container runtime tears down any remaining process in that PID namespace.
+
 The credential-scoping refactor changed what entered that chain, not who owned
 it: it narrowed appliance credential mounts and supervisor environment, moved
 the selected subject credential behind a per-run delivery path, and made agent
@@ -364,11 +372,11 @@ The V2 journal is append-only and has this closed event vocabulary:
 - `campaign_opened` and `credential_generation_pinned` establish authority;
 - `block_admitted`, `attempt_created`, `run_allocated`, and
   `exposure_started` establish execution identity and exposure;
-- `run_completed`, `instrument_failure`, `block_replaced`,
+- `run_completed`, `instrument_failure`, `aborted`, `block_replaced`,
   `sample_disposition`, `slot_exhausted`, `skew_excluded`, `pool_blocked`,
   `adjudication`, and `quarantined` record evidence and experimental fate;
-- `controller_restarted`, `storage_paused`, and `storage_resumed` record
-  recovery-relevant control events;
+- `storage_paused` and `storage_resumed` record recovery-relevant control
+  events;
 - `cancel_requested`, `campaign_cancelled`, and `campaign_abandoned` record
   operator termination; and
 - `sealed` records the irreversible complete-report digest.
@@ -414,18 +422,20 @@ The closed parent transition rules are:
 | Event | Required durable predecessor | Effect |
 |---|---|---|
 | `campaign_opened` | initialized empty journal matching unpublished registration | establishes the sole first anchor |
-| `credential_generation_pinned` | opened, never-run campaign | pins one generation exactly once |
+| `credential_generation_pinned` | opened, never-run campaign without an existing pin | pins one generation exactly once; a later `run` reuses the authentic existing pin without appending a duplicate event |
 | `block_admitted` | pinned, nonterminal campaign with no pause/cancel marker | reserves the complete atomic block |
 | `attempt_created` | admitted block with an available sample/attempt slot | preallocates immutable attempt/run/container-name authority |
 | `run_allocated` | matching `attempt_created` and exact stopped container | binds immutable container/image/credential/input identity once |
 | `exposure_started` | matching allocated container observed started | establishes paid exposure for that attempt |
 | `run_completed` or `instrument_failure` | matching attempt without terminal evidence | closes worker evidence once |
+| `aborted` | admitted block whose allocated workers are all verified stopped or absent and which lacks a completed block disposition | fans out over the frozen block roster, moving each nonterminal sample to re-enterable `aborted` while treating an already-terminal sibling as late retained evidence; preserves exposure history and permits replacement only under the frozen policy |
 | replacement/adjudication/disposition events | closed attempt or blocked slot required by frozen policy | determine experimental inclusion without changing exposure history |
 | `storage_paused` | any nonterminal state without cancel intent | blocks admission and requires verified worker stop |
 | `storage_resumed` | most recent storage-control event is `storage_paused` and all recovery predicates pass | reopens admission |
 | `cancel_requested` | any nonterminal campaign | permanently blocks new admission |
 | `campaign_cancelled` | cancel intent plus verified controller/worker death and reconciled evidence | terminal incomplete outcome |
-| `campaign_abandoned` or external abandonment record | nonsealed campaign plus verified execution safety | terminal permanently incomplete outcome |
+| `campaign_abandoned` | authenticated nonterminal, nonsealed campaign plus verified execution safety | terminal permanently incomplete outcome |
+| external abandonment record | authenticated registration envelope, no authenticated terminal outcome, journal unable to accept `campaign_abandoned`, and verified execution safety | terminal permanently incomplete outcome without rewriting the journal |
 | `sealed` | every frozen sample/integrity obligation terminal and report digest verified | terminal complete outcome |
 
 An event with a missing predecessor, duplicate single-assignment identity,
@@ -438,12 +448,14 @@ The minimum crash-prefix outcomes are:
 | Durable cut | Recovery behavior |
 |---|---|
 | registration directory before `campaign.json` | list as incomplete registration; never runnable |
+| `credential_generation_pinned` before first admission | reuse the authentic existing pin and continue; never append a second pin or select another generation |
 | `attempt_created` before Docker create | reuse the same attempt/run authority and create once |
 | Docker create before `run_allocated` | discover the stopped labelled container; bind only on exact spec match, otherwise remove |
 | `run_allocated` before Docker start | start that exact stopped container only after cancel/revocation recheck |
 | Docker start before `exposure_started` | stop and inspect; never claim exposure without provider evidence or the durable event |
 | `exposure_started` before worker terminal | preserve partial evidence, stop the worker, and classify under the frozen table |
 | result publication before terminal journal append | verify and reuse the exact published result before deciding replacement |
+| stopped container and captured evidence before credential-stage removal | remove that attempt's exact stage during reconciliation; never remove it before evidence closure or while the container may be live |
 | `sealed` before both report peers exist | regenerate only missing digest-matching peers |
 | cancel marker before terminal cancellation | `run` refuses; repeated cancel continues the fenced stop/reconcile path |
 | cleanup plan before or during apply | no deletion without the plan; repeated apply revalidates and resumes only named actions |
@@ -554,31 +566,43 @@ Secret values are never placed in:
 - provenance or cost records;
 - structured phase events;
 - sanitized status output;
-- retained or published run homes and agent configuration.
+- published run homes or published agent configuration.
 
 The worker container runs as one unprivileged identity. A minimal init such as
-`tini` is PID 1 only to forward signals and reap children; it is not a credential
-loader, process orchestrator, command server, or privilege boundary. It starts
-Quorum as its direct child.
+`tini` is PID 1 to forward signals and reap children; it is not a credential
+loader, command server, or privilege boundary. It starts Quorum as its direct
+child, exits as soon as Quorum exits, and propagates Quorum's status. It never
+lingers merely because a reparented tmux or Coding-Agent process remains alive;
+PID-1 exit is what lets the runtime destroy the complete attempt namespace.
 
 Quorum consumes the grader delivery when it constructs the Gauntlet child
 environment. Quorum provisioning makes the subject delivery available to the
-generated `launch-agent` path without copying it into a retained home. Gauntlet
-keeps its existing ownership of the interaction: its TUI adapter creates the
-private tmux server and shell, the Gauntlet-Agent invokes the generated launcher,
-and that launcher `exec`s the Coding-Agent with `env -i` plus the explicit
-subject environment. The clean environment is a configuration-correctness wall:
-it prevents the grader's ambient variable from accidentally selecting or
-backfilling the subject credential. It is not a security wall against another
-process in the same container.
+generated `launch-agent` through attempt-private delivery or agent configuration
+files. Those files contain only the selected attempt's values and follow the
+sensitive-home rules below. Gauntlet keeps its existing ownership of the
+interaction: its TUI adapter creates the private tmux server and shell, the
+Gauntlet-Agent invokes the generated launcher, and that launcher `exec`s the
+Coding-Agent with `env -i` plus the explicit subject environment. The clean
+environment is a configuration-correctness wall: it prevents the grader's
+ambient variable from accidentally selecting or backfilling the subject
+credential. It is not a security wall against another process in the same
+container.
+
+Every attempt sets `TMUX_TMPDIR` to its own disposable runtime directory. The
+container filesystem and PID namespaces already isolate parallel attempts; the
+attempt-specific socket root additionally prevents an accidentally shared bind
+or future runtime change from coupling their private tmux servers.
 
 No host-side service starts, drives, or independently adopts the internal
 processes. Quorum and Gauntlet retain their normal cooperative shutdown logic.
 If that logic fails, stopping the exact container terminates the complete
 process namespace, including a daemonized tmux server and Coding-Agent.
 
-The private staging directory is removed only after the exact immutable
-container is confirmed stopped and crash evidence has been captured.
+The private credential staging directory is removed only after the exact
+immutable container is confirmed stopped and crash evidence has been captured.
+If the controller dies between those steps and removal, reconciliation removes
+that exact stage. Stage removal does not make a retained attempt home
+nonsensitive.
 
 ## Worker input and filesystem contract
 
@@ -609,14 +633,18 @@ The worker does not receive:
 - the appliance jobs directory;
 - host credential generations;
 - the Docker socket;
-- host runtime or lock directories.
+- any other host runtime or lock directories.
 
-Agent homes exist only inside the attempt's writable space while the worker is
-live. The runner extracts the declared transcript and measurement artifacts
-into the positive result manifest, then excludes the homes and agent-auth
-configuration from publication. Provisioning consumes the exact delivery files
-directly and must not seed a secret-bearing environment or configuration file
-into a retained home.
+Agent homes exist only inside the durable attempt's writable space. They may
+contain the selected attempt's required auth or provider configuration, because
+some supported agents require files in their home. They never contain an unused
+or sibling credential. The whole home is sensitive ephemera: the runner extracts
+declared transcript and measurement artifacts into the positive result manifest,
+excludes the home and agent-auth configuration from publication, preserves the
+crash-time home for diagnosis, and removes it only through explicit cleanup.
+Quorum alone may derive an agent-required secret-bearing file from the mounted
+delivery, and only beneath that attempt's `home/`, mode `0600`; agents that can
+consume the read-only delivery directly receive no derived copy.
 The host runs a secret-value scan over every proposed published artifact before
 accepting the manifest. Because a model or provider may echo a secret into raw
 logs, a match quarantines the artifact for restricted operator handling rather
@@ -655,7 +683,11 @@ blindly launches another attempt.
 ## Logs and crash evidence
 
 Every attempt writes directly to its durable host-mounted attempt directory
-from process start. The evidence set contains:
+from process start. Before `docker start`, the controller creates the raw log
+files mode `0600`. The attempt entrypoint opens them before it `exec`s Quorum,
+and Quorum streams Gauntlet output to durable per-role sinks instead of retaining
+the only copy in memory. Controller loss therefore cannot detach a live worker
+from its log sink. The evidence set contains:
 
 - raw stdout and stderr in separate mode-`0600` files;
 - a structured append-only worker phase log;
@@ -664,17 +696,13 @@ from process start. The evidence set contains:
 - partial trajectory, token, and result artifacts as they become available;
 - the sanitized container-exit record.
 
-The minimum phase vocabulary is:
-
-- `container_created`;
-- `container_started`;
-- `worker_ready`;
-- `run_allocated`;
-- `subject_exposure_started`;
-- `gauntlet_started`;
-- `runner_finished`;
-- `artifacts_committed`;
-- `container_exited`.
+Phase ownership is explicit. The host lifecycle stream contains
+`container_created`, `container_started`, and `container_exited`; the journal's
+`run_allocated` event remains the sole durable container-binding authority. The
+worker phase stream contains `worker_ready`, `subject_exposure_started`,
+`gauntlet_started`, `runner_finished`, and `artifacts_committed`. Every record
+names its writer and attempt identity. A host event is never synthesized from a
+worker record, and a worker event is never inferred from Docker state.
 
 The host persists an allowlisted exit snapshot containing container and image
 identity, start/finish times, exit code, signal, OOM status, Docker error,
@@ -830,8 +858,9 @@ evals-appliance campaign run <selector> [--json]
 
 Run is detached and idempotent. There is no foreground mode:
 
-- `registered`: pin the credential generation, durably record the invocation
-  and controller identity, and begin;
+- `registered`: pin the credential generation if no pin exists, otherwise reuse
+  the authentic existing pin, then durably record the invocation and controller
+  identity and begin;
 - `running` with the recorded controller live: return `changed: false` and the
   current status;
 - `recovery_required`: acquire the locks, reconcile every durable execution
@@ -941,8 +970,9 @@ Human status leads with one primary state:
 - `cancel_requested`;
 - `sealing`;
 - `sealed`;
-- `cancelled`; or
-- `abandoned`.
+- `cancelled`;
+- `abandoned`; or
+- `unknown` when campaign or journal authentication fails.
 
 JSON preserves the facts behind that projection: authenticated journal state,
 integrity (`ok | failed | unknown`), controller observation, exact worker
@@ -970,9 +1000,12 @@ while retaining `integrity: failed`. Status never repairs. `run` performs
 reconciliation and either continues or returns a typed blocking predicate.
 
 Command idempotency is part of the V2 contract: repeated `run` against a live
-controller is a no-op; repeated cancel or abandon returns the same terminal
-identity; report only restores missing digest-matching peers; cleanup apply
-reuses its plan/receipt; and all read commands are side-effect free.
+controller is a no-op; repeated cancel after `campaign_cancelled` and repeated
+abandon after `campaign_abandoned` or a valid external abandonment record return
+their existing terminal identity; abandon against a sealed or cancelled
+campaign refuses; report only restores
+missing digest-matching peers; cleanup apply reuses its plan/receipt; and all
+read commands are side-effect free.
 
 ## Cancellation and interruption
 
@@ -980,13 +1013,18 @@ Workers use no Docker restart policy. Docker or host restart never starts paid
 work automatically.
 
 Inside a healthy worker, normal completion follows the existing cooperative
-path: Quorum waits for Gauntlet, and Gauntlet closes its private tmux server and
-Coding-Agent. On Quorum or Gauntlet failure, PID 1 exits with the worker and the
-container runtime tears down every remaining process in the namespace. On
-external cancellation, the host sends `docker stop` to the immutable container
-ID, allows a bounded grace period for Quorum's signal handling, then uses
-`docker kill` if necessary. The host never needs to discover or manage the tmux
-or Coding-Agent PID separately.
+path: Quorum waits for Gauntlet, and Gauntlet attempts to close its private tmux
+server and Coding-Agent. That close is best-effort. The authoritative teardown
+is container exit: when Quorum completes or fails, its init exits with the same
+status and the runtime destroys every remaining process in the namespace.
+
+On external cancellation, the host sends `docker stop` to the immutable
+container ID. The resulting `SIGTERM`, and an interactive `SIGINT`, enter one
+idempotent Quorum stop path. Quorum forwards the established `SIGINT` stop signal
+to Gauntlet, records any partial evidence that completes within the bounded grace
+period, and exits. The host then uses `docker kill` if the container remains
+live. The host never needs to discover or manage the tmux or Coding-Agent PID
+separately.
 
 On controller interruption, an already-started worker may still be live. Status
 reports `recovery_required` without guessing that continuation is safe. An
@@ -1005,7 +1043,8 @@ explicit `run` performs the pinned recovery order:
 Cancellation follows marker first, stop admission, signal and wait/escalate the
 controller, prove it dead, acquire the locks, stop exact worker containers,
 verify every exact container stopped or absent, reconcile partial artifacts,
-append attempt/block dispositions, and append `campaign_cancelled` last. If any
+append attempt dispositions and `aborted` for each still-in-flight block whose
+worker set is verified dead, and append `campaign_cancelled` last. If any
 controller or worker container cannot be verified dead, cancellation returns
 nonzero and does not append the terminal event. Abandonment uses the same
 execution-safety proof.
@@ -1117,7 +1156,7 @@ Cleanup may remove:
 
 - expanded frozen Git trees after archive round-trip verification;
 - Coding-Agent workdirs and generated code;
-- run homes and agent-local state;
+- run homes, agent-auth configuration, and agent-local state;
 - dependency and tool caches;
 - temporary staging and runtime files;
 - verified stopped container stragglers left by an earlier controller crash.
@@ -1257,15 +1296,21 @@ Docker and clock seams. They cover:
 - registration publication and digest idempotence;
 - incomplete-registration discovery and narrowly scoped cleanup;
 - credential authority intersection and immutable-generation pinning;
+- controller death after credential pinning but before first admission, followed
+  by `run` reusing the authentic pin without a duplicate event or re-pin;
 - credential revocation refusal and absence of any re-pin path;
 - credential concurrency and launch spacing without price imports;
 - explicit shared/distinct subject/grader member classification without value
   comparison, disclosure, or an intra-attempt isolation claim;
 - exact worker input and mount manifests;
-- every event transition, command idempotency rule, and valid durable prefix;
+- every event transition, including `aborted`, every command idempotency rule,
+  and every valid durable prefix;
 - every crash cut in job creation, registration, Docker creation/binding, result
-  publication, journal terminal append, sealing, reporting, and cleanup;
+  publication, credential-stage teardown, journal terminal append, sealing,
+  reporting, and cleanup;
 - created-but-unbound container and credential-stage reconciliation by labels;
+- explicit host-versus-worker phase ownership and refusal to infer one stream
+  from the other;
 - recovery from published-but-unjournaled results;
 - status over every valid durable prefix and malformed/tampered state;
 - physically allocated storage reserve and every storage-pause crash cut;
@@ -1284,6 +1329,9 @@ locks, campaign journal, and Gauntlet process path. It proves:
 
 - each worker receives exactly its selected subject and grader projections and
   no sibling, unused-bundle, host, or Docker credentials;
+- the worker container command is the attempt itself rather than
+  `sleep infinity` plus `docker exec`; its init starts Quorum as its direct child,
+  propagates Quorum's status, and exits without waiting for leaked descendants;
 - Quorum gives Gauntlet the grader projection while the generated subject
   launcher uses `env -i` and the selected subject projection, including when
   both credentials use the same destination environment name;
@@ -1294,21 +1342,30 @@ locks, campaign journal, and Gauntlet process path. It proves:
   containers, while declared provider access remains usable;
 - Docker metadata, structured events, job records, provenance, and sanitized
   output contain no credential values;
-- provisioning never copies credentials into a retained home, and proposed
-  publications are secret-scanned;
-- parallel attempts receive only their selected snapshots and credentials;
+- any required auth files in a retained attempt home contain only that
+  attempt's selected credentials, remain outside publication, and proposed
+  publications are secret-scanned, including a credential-echo quarantine case;
+- parallel attempts receive only their selected snapshots and credentials, use
+  attempt-private tmux socket roots, and stopping one container leaves the
+  other's tmux server and Coding-Agent running;
 - real exit, signal, timeout, OOM, missing-container, Docker-daemon restart,
   Quorum/Gauntlet failure, and controller-SIGKILL cases retain the promised logs
   and state;
+- `docker stop` drives Quorum's graceful stopped-evidence path through SIGTERM,
+  while direct SIGINT produces the same typed result, and both retain measured
+  cost available before forced escalation;
+- SIGKILL of Quorum after Gauntlet output begins still leaves directly written
+  mode-`0600` stdout/stderr and honest unavailable dispositions in the durable
+  attempt directory;
 - run publication is durable before terminal journaling;
 - no process, file descriptor, mount, or credential stage leaks across worker
   teardown;
 - campaign, `run`, `run-all`, `prepare`, refresh, and break-glass commands
   neither overlap nor deadlock;
-- Quorum/Gauntlet failure and marker-first `docker stop`/`docker kill`
-  cancellation leave no tmux server or Coding-Agent process after the exact
-  container is stopped, and cancellation refuses completion while the container
-  remains live or unverified;
+- Quorum/Gauntlet failure with cooperative tmux cleanup deliberately disabled,
+  and marker-first `docker stop`/`docker kill` cancellation, leave no tmux server
+  or Coding-Agent process after the exact container is stopped; cancellation
+  refuses completion while the container remains live or unverified;
 - an irrecoverable campaign can be abandoned only after execution safety is
   proved and remains permanently incomplete; and
 - cleanup removes only planned artifact classes while preserving list, status,
@@ -1343,13 +1400,15 @@ boundary:
 2. **Worker crash:** kill a worker mid-attempt; preserve logs and partial
    evidence, classify it, replace it, and reconcile all measured cost.
 3. **Controller crash/reboot:** kill the controller and reboot the host with a
-   nonterminal campaign; prove no worker auto-restarts, status reconciles, and
-   explicit `run` completes without duplicate attempt/run identity.
+   nonterminal campaign, including once after pinning but before first admission;
+   prove no worker auto-restarts, status reconciles, and explicit `run` completes
+   without duplicate pin, attempt, or run identity.
 4. **Cancellation:** request cancellation with live workers, prove marker-first
-   verified death and terminal cancellation, then prove `run` refusal.
+   graceful evidence capture, verified death, and terminal cancellation, then
+   prove `run` refusal.
 5. **Cost reconciliation:** independently sum every subject and grader attempt
-   source, including the failed/replaced attempt, and match `campaign costs`
-   while preserving any unknowns.
+   source, including failed, replaced, and cancelled attempts, and match
+   `campaign costs` while preserving any unknowns.
 6. **Cleanup and incomplete evidence:** publish a partial cancelled report,
    exercise an abandonment after an injected irrecoverable evidence fault, then
    apply a digest-bound cleanup plan while preserving measurement closure.
