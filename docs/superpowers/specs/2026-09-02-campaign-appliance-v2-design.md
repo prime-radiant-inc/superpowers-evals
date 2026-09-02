@@ -1,7 +1,8 @@
 # Campaign Appliance V2 Design
 
-**Status:** Amended after staff design review on 2026-09-02; final written-spec
-review pending before child implementation.
+**Status:** Amended after staff design review and operator process-topology
+clarification on 2026-09-02; final written-spec review pending before child
+implementation.
 
 **Supersedes for new campaigns:** the V1 campaign execution and budget-bearing
 contracts in the 2026-08-17 campaign-platform design and its D1-D4a child
@@ -21,7 +22,7 @@ root. They are not readable, resumable, or otherwise supported by V2.
 ## Decision
 
 Quorum will gain a first-class appliance campaign path with a host-side durable
-controller and one fresh, scope-isolated worker container per execution
+controller and one fresh, attempt-isolated worker container per execution
 attempt.
 
 The host owns campaign identity, journal state, authoritative telemetry,
@@ -29,9 +30,15 @@ credential projection, worker lifecycle, recovery, report publication, and
 cost aggregation. The installed host controller may roll forward within the
 fixed V2 durable contract; the experimental payload and every policy that can
 affect sample composition or readout remain frozen. A worker receives only the
-frozen inputs and the two role credentials required for its one attempt. It
-cannot read the credential bundle, campaign journal, sibling inputs, sibling
-results, or mutable source checkouts.
+frozen inputs and the subject and grader credentials required for its one
+attempt. It cannot read the credential bundle, campaign journal, sibling
+inputs, sibling results, or mutable source checkouts.
+
+Inside an attempt, V2 deliberately creates no security boundary between
+Gauntlet and the Coding-Agent and does not split them across containers. It
+preserves the existing Gauntlet-managed process chain inside the worker. The
+host manages the container as a whole, never the two logical roles as
+independent workers.
 
 One campaign may own live execution on an appliance at a time. That campaign
 may run multiple attempts in parallel subject to the frozen campaign cap,
@@ -63,11 +70,12 @@ campaign design deliberately kept the appliance unchanged and made V1
 campaign children host-direct.
 
 That replacement design also named the reason to return to the earlier W2
-boundary: per-attempt credential isolation becoming a real requirement. The
-campaign kernel now exists, but routine appliance execution requires multiple
-subject credentials plus a grader credential. The existing appliance can
-safely project only one `(agent, credential)` cell, while the break-glass
-campaign path puts the dispatcher and concurrent children in one container.
+boundary: per-attempt worker isolation and exact credential projection becoming
+a real requirement. The campaign kernel now exists, but routine appliance
+execution requires multiple subject credentials plus a grader credential. The
+existing appliance can safely project only one `(agent, credential)` cell,
+while the break-glass campaign path puts the dispatcher and concurrent children
+in one container.
 
 This design restores only the control and isolation slice that current use
 requires. It does not revive the original supervisor program.
@@ -79,8 +87,8 @@ requires. It does not revive the original supervisor program.
    costing, abandoning, and cleaning up campaigns.
 2. Preserve one durable campaign identity across multiple appliance command
    invocations and controller processes.
-3. Give every attempt exactly its subject credential, its distinct grader
-   credential, and its frozen input trees.
+3. Give every attempt exactly its subject credential, its grader credential,
+   and its frozen input trees, without projecting unused or sibling credentials.
 4. Bind campaign, sample, attempt, run, and immutable worker-container identity
    before the worker can make a provider request.
 5. Preserve useful structured evidence and raw logs when workers or controllers
@@ -126,14 +134,20 @@ The boundaries are:
 2. **Host campaign controller:** is the sole journal writer during execution,
    owns admission and recovery, executes only frozen measurement-policy
    versions, and has no Coding-Agent toolchain requirement.
-3. **Host credential broker:** reads one pinned bundle generation and stages
-   only the two role scopes for one attempt.
-4. **Attempt worker container:** executes one Quorum run using frozen inputs and
-   one isolated output directory.
-5. **Coding-Agent subject:** receives no grader role slot or configuration and
-   has no privilege to inspect the grader process or files.
-6. **Gauntlet/grader:** receives no subject role slot or configuration and has
-   no access to the host bundle or campaign journal.
+3. **Host credential projector:** controller-owned code reads one pinned bundle
+   generation and stages only the subject and grader projections for one
+   attempt. It is not a separate service or daemon.
+4. **Attempt worker container:** executes one Quorum run using frozen inputs,
+   one isolated output directory, and the existing Quorum -> Gauntlet -> private
+   tmux -> Coding-Agent process topology.
+5. **Quorum:** provisions the run, starts Gauntlet, records measurement evidence,
+   and attempts normal in-container cleanup.
+6. **Gauntlet/grader:** starts and drives the Coding-Agent through the generated
+   launcher in its private tmux server, then performs the normal cooperative
+   stop path.
+7. **Coding-Agent subject:** runs inside that same attempt container, receives
+   no host-mounted data beyond its attempt inputs, and has only the attempt's
+   declared host-backed writable space.
 
 The Docker socket is host-only. Workers receive no Docker socket, host PID
 namespace, ambient provider environment, full credential bundle, instance
@@ -141,12 +155,19 @@ metadata route, host-control route, or sibling-container network. Public
 Internet access remains available because Coding-Agents and providers require
 it. V2 does not claim provider-only egress confinement.
 
-The role boundary protects against a permissive or hostile Coding-Agent
-directly reading the grader's files, environment, home, or process state. It
-also protects attempts from one another and from host credentials. It does not
-protect against a kernel or container-runtime escape, side channels, denial of
-service, a hostile public scenario, or exfiltration of the subject's own
-credential.
+The attempt container is the isolation and lifecycle boundary. Quorum,
+Gauntlet, tmux, and the Coding-Agent are cooperating components inside it, not
+separate security principals. V2 does not claim that the subject cannot inspect
+grader process state or credential material already delivered to the same
+container. Separate subject and grader projections exist to prevent accidental
+credential selection and environment collision, not to provide an intra-attempt
+security boundary.
+
+The boundary protects attempts from one another and protects the host bundle
+and host control plane from every worker. It does not protect against a kernel
+or container-runtime escape, side channels, denial of service, a hostile public
+scenario, or exfiltration of either credential intentionally delivered to the
+attempt.
 
 ## Architecture
 
@@ -162,20 +183,49 @@ evals-appliance campaign ...
 host campaign controller                                  |
    |  campaign journal, locks, status, telemetry, costs   |
    |                                                      |
-   +--> credential broker --> attempt role files          |
+   +--> credential projector -> exact attempt projections |
    |                                                      |
    +--> docker create --> persist container identity      |
    |                         |                            |
    |                         v                            |
    |                  one attempt worker                  |
-   |                  /                 \                 |
-   |             Gauntlet              Coding-Agent      |
-   |            grader scope           subject scope      |
+   |                    tini / init                       |
+   |                         |                            |
+   |                       Quorum                         |
+   |                         |                            |
+   |                      Gauntlet                        |
+   |                         |                            |
+   |               private tmux + shell                   |
+   |                         |                            |
+   |              generated launch-agent                  |
+   |                         |                            |
+   |                   Coding-Agent                       |
    |                         |                            |
    +<-- structured events, logs, result staging ---------+
    |
    +--> durable result publication --> journal terminal
 ```
+
+### Continuity with the existing runner
+
+V2 does not redesign the interaction protocol inside an attempt. Before the
+recent credential-scoping refactor, Quorum already spawned Gauntlet, Gauntlet's
+TUI adapter already created a private tmux server and interactive shell, and the
+Gauntlet-Agent already invoked a generated `launch-agent` that `exec`ed the
+Coding-Agent. That topology remains current.
+
+The credential-scoping refactor changed what entered that chain, not who owned
+it: it narrowed appliance credential mounts and supervisor environment, moved
+the selected subject credential behind a per-run delivery path, and made agent
+launchers construct an explicit `env -i` environment. Before that change, the
+worker relied on broader credential-bundle mounts and ambient environment
+inheritance. Neither version attempted to make Gauntlet and the Coding-Agent
+separate security principals.
+
+V2 retains the narrowed delivery model and places one complete existing chain
+inside each fresh worker container. The new host-side responsibility is to own
+the exact container identity and its durable evidence—not to replace Gauntlet's
+internal process management.
 
 The appliance adapter and campaign controller are separate responsibilities.
 The adapter uses the current installed helper to authenticate the appliance
@@ -462,18 +512,18 @@ V2 accepts exactly the `api-key` and `bedrock-bearer` auth kinds, each delivered
 from an environment-named value in the immutable generation. It rejects OAuth,
 subscription, ambient-home, and unrecognized auth kinds during registration.
 The grader credential must also have an API/auth shape supported by the frozen
-Gauntlet adapter. Subject and grader credential names and role-slot IDs must be
-distinct, and every delivery descriptor is role-scoped. Destination
-environment names may be the same because they exist in separate role
-processes. The generation manifest explicitly binds each role credential to a
-secret-member ID.
+Gauntlet adapter. Subject and grader delivery IDs are distinct, and every
+delivery descriptor names its intended consumer. Destination environment names
+may be the same because the subject launcher's clean environment replaces the
+ambient grader value rather than inheriting it. The generation manifest
+explicitly binds each delivered credential to a secret-member ID.
 
-The two role credentials may intentionally reference the same secret member,
-as the current Bedrock bearer route does. Registration freezes and provenance
-reports `secret_member_isolation: distinct | shared`; it does not compare,
-hash, or persist secret values. A shared member still receives filesystem,
-environment, home, and process isolation, but it is not provider-credential
-separation: either role already holds equivalent provider authority. Distinct
+The subject and grader credentials may intentionally reference the same secret
+member, as the current Bedrock bearer route does. Registration freezes and
+provenance reports `secret_member_relation: distinct | shared`; it does not
+compare, hash, or persist secret values. This is a provenance classification,
+not an isolation claim. Both components share one attempt container, and a
+shared member means they also hold equivalent provider authority. Distinct
 provider authority requires distinct generation members and out-of-band key
 provisioning; V2 does not infer it from byte inequality.
 
@@ -485,12 +535,14 @@ or observed-cost field participates in that decision.
 
 ## Per-attempt credential projection
 
-For each admitted attempt, the broker creates a private staging directory with
-fixed subject and grader subdirectories and slots. The slots contain only the
-values and public configuration needed for that attempt. Slot files are mode
-`0400`; role directories are mode `0700`; each is owned by its consuming role
-identity inside the container. The container never receives the parent staging
-directory as one shared readable mount.
+For each admitted attempt, controller-owned projection code creates a private
+staging directory with fixed subject and grader delivery files. They contain
+only the values and public configuration needed for that attempt. Files are
+mode `0400`, their directory is mode `0700`, and all are owned by the single
+unprivileged worker identity used inside the container. The container receives
+these exact files as read-only mounts; it never receives the
+credential-generation parent, the full bundle, or any sibling attempt's
+staging directory.
 
 Secret values are never placed in:
 
@@ -504,29 +556,26 @@ Secret values are never placed in:
 - sanitized status output;
 - retained or published run homes and agent configuration.
 
-The worker receives the two role slots as separate read-only file mounts at
-fixed paths. A minimal root-owned PID 1 validates the immutable attempt
-manifest, opens a fixed one-shot control channel, and pre-forks the subject and
-grader entrypoints. It begins with only the identity-switching and signal
-authority required for that closed startup/reaping job. Before either role
-entrypoint executes, it sets the declared UID/GID, clears supplementary groups
-and all role capabilities, sets `no_new_privs`, and installs separate homes and
-runtime/tmux directories. PID 1 closes credential descriptors after handoff and
-exposes no command channel beyond the one-shot start proxy. No setuid or
-file-capability binary exists in the image.
+The worker container runs as one unprivileged identity. A minimal init such as
+`tini` is PID 1 only to forward signals and reap children; it is not a credential
+loader, process orchestrator, command server, or privilege boundary. It starts
+Quorum as its direct child.
 
-Gauntlet invokes a fixed unprivileged proxy rather than a privileged command
-server. That proxy can send one `start` message to the already-bound subject
-runner; it cannot supply argv, environment, paths, credentials, or an identity.
-Those values come only from the frozen attempt manifest. After startup, PID 1
-only relays termination and reaps children. The hardened image and `doctor`
-verify that cross-UID ptrace and `/proc` environment reads are unavailable.
+Quorum consumes the grader delivery when it constructs the Gauntlet child
+environment. Quorum provisioning makes the subject delivery available to the
+generated `launch-agent` path without copying it into a retained home. Gauntlet
+keeps its existing ownership of the interaction: its TUI adapter creates the
+private tmux server and shell, the Gauntlet-Agent invokes the generated launcher,
+and that launcher `exec`s the Coding-Agent with `env -i` plus the explicit
+subject environment. The clean environment is a configuration-correctness wall:
+it prevents the grader's ambient variable from accidentally selecting or
+backfilling the subject credential. It is not a security wall against another
+process in the same container.
 
-The subject and grader therefore execute under distinct unprivileged
-identities. Neither can read the other's credential slot, environment, home,
-or process state. The closed launcher performs only manifest-pinned privilege
-drops; neither role has an escalation path through it. This is the concrete
-mechanism behind the narrower threat-model claim above.
+No host-side service starts, drives, or independently adopts the internal
+processes. Quorum and Gauntlet retain their normal cooperative shutdown logic.
+If that logic fails, stopping the exact container terminates the complete
+process namespace, including a daemonized tmux server and Coding-Agent.
 
 The private staging directory is removed only after the exact immutable
 container is confirmed stopped and crash evidence has been captured.
@@ -543,7 +592,7 @@ One fresh worker container executes one attempt. It receives:
 - one isolated writable durable attempt directory at
   `/srv/quorum/data/attempts/<campaign-id>/<attempt-id>`;
 - one disposable attempt runtime directory beneath `/srv/quorum/runtime`;
-- the subject and grader credential slots;
+- the subject and grader credential delivery files;
 - declared attempt time and count limits.
 
 All frozen inputs are read-only. The durable attempt directory is the only
@@ -565,8 +614,9 @@ The worker does not receive:
 Agent homes exist only inside the attempt's writable space while the worker is
 live. The runner extracts the declared transcript and measurement artifacts
 into the positive result manifest, then excludes the homes and agent-auth
-configuration from publication. Provisioning consumes role slots directly and
-must not seed a secret-bearing environment or configuration file into a home.
+configuration from publication. Provisioning consumes the exact delivery files
+directly and must not seed a secret-bearing environment or configuration file
+into a retained home.
 The host runs a secret-value scan over every proposed published artifact before
 accepting the manifest. Because a model or provider may echo a secret into raw
 logs, a match quarantines the artifact for restricted operator handling rather
@@ -806,8 +856,10 @@ evals-appliance campaign cancel <selector> \
 
 Cancel is campaign-aware and remains available after controller loss. It writes
 intent before signaling anything. Success means every exact worker container
-and both role processes are verified stopped and `campaign_cancelled` is the
-terminal journal event. Wrapper exit alone is not cancellation.
+is verified stopped or absent and `campaign_cancelled` is the terminal journal
+event. A stopped container is proof that its complete process namespace,
+including tmux and the Coding-Agent, is dead. Wrapper exit alone is not
+cancellation.
 
 ### `abandon`
 
@@ -820,8 +872,9 @@ Abandon is the terminal escape for a campaign whose journal, document,
 evidence, or report cannot be completed. Identity must be established either
 by the authenticated campaign document or by its immutable registration job
 and published campaign-ID/input-digest envelope. It first uses the cancellation
-fencing path and requires proof that no related controller, container, or role
-process can still spend. When the journal is writable it appends
+fencing path and requires proof that no related controller or worker container
+can still spend. That proof is exact-container state rather than inspection of
+individual in-container PIDs. When the journal is writable it appends
 `campaign_abandoned`; otherwise it writes one external append-only record under
 `/srv/quorum/state/abandonments`, preserving the last authenticated journal
 anchor, operator/job identity, reason, execution-safety proof, and evidence
@@ -926,6 +979,15 @@ reuses its plan/receipt; and all read commands are side-effect free.
 Workers use no Docker restart policy. Docker or host restart never starts paid
 work automatically.
 
+Inside a healthy worker, normal completion follows the existing cooperative
+path: Quorum waits for Gauntlet, and Gauntlet closes its private tmux server and
+Coding-Agent. On Quorum or Gauntlet failure, PID 1 exits with the worker and the
+container runtime tears down every remaining process in the namespace. On
+external cancellation, the host sends `docker stop` to the immutable container
+ID, allows a bounded grace period for Quorum's signal handling, then uses
+`docker kill` if necessary. The host never needs to discover or manage the tmux
+or Coding-Agent PID separately.
+
 On controller interruption, an already-started worker may still be live. Status
 reports `recovery_required` without guessing that continuation is safe. An
 explicit `run` performs the pinned recovery order:
@@ -942,10 +1004,11 @@ explicit `run` performs the pinned recovery order:
 
 Cancellation follows marker first, stop admission, signal and wait/escalate the
 controller, prove it dead, acquire the locks, stop exact worker containers,
-verify role processes dead, reconcile partial artifacts, append attempt/block
-dispositions, and append `campaign_cancelled` last. If any controller or worker
-cannot be verified dead, cancellation returns nonzero and does not append the
-terminal event. Abandonment uses the same execution-safety proof.
+verify every exact container stopped or absent, reconcile partial artifacts,
+append attempt/block dispositions, and append `campaign_cancelled` last. If any
+controller or worker container cannot be verified dead, cancellation returns
+nonzero and does not append the terminal event. Abandonment uses the same
+execution-safety proof.
 
 ## Cost measurement
 
@@ -1196,8 +1259,8 @@ Docker and clock seams. They cover:
 - credential authority intersection and immutable-generation pinning;
 - credential revocation refusal and absence of any re-pin path;
 - credential concurrency and launch spacing without price imports;
-- explicit shared/distinct role-member classification without value comparison
-  or disclosure;
+- explicit shared/distinct subject/grader member classification without value
+  comparison, disclosure, or an intra-attempt isolation claim;
 - exact worker input and mount manifests;
 - every event transition, command idempotency rule, and valid durable prefix;
 - every crash cut in job creation, registration, Docker creation/binding, result
@@ -1217,13 +1280,16 @@ string snapshots.
 
 A Linux-only suite uses fake subject, grader, and provider executables but the
 real appliance parser, job writer, worker image, Docker runtime, filesystem,
-locks, and campaign journal. It proves:
+locks, campaign journal, and Gauntlet process path. It proves:
 
-- the subject cannot read grader, sibling, unused-bundle, host, or Docker
-  credentials;
-- the grader cannot read the subject credential;
-- both roles run under distinct UIDs with no capabilities, setuid binaries,
-  cross-UID ptrace, or general privileged launcher;
+- each worker receives exactly its selected subject and grader projections and
+  no sibling, unused-bundle, host, or Docker credentials;
+- Quorum gives Gauntlet the grader projection while the generated subject
+  launcher uses `env -i` and the selected subject projection, including when
+  both credentials use the same destination environment name;
+- the real Quorum -> Gauntlet -> private tmux -> generated launcher process path
+  starts and completes a fake Coding-Agent without a new process supervisor or
+  control proxy;
 - workers cannot reach instance metadata, host control routes, or sibling
   containers, while declared provider access remains usable;
 - Docker metadata, structured events, job records, provenance, and sanitized
@@ -1231,15 +1297,18 @@ locks, and campaign journal. It proves:
 - provisioning never copies credentials into a retained home, and proposed
   publications are secret-scanned;
 - parallel attempts receive only their selected snapshots and credentials;
-- real exit, signal, timeout, OOM, missing-container, Docker-daemon restart, and
-  controller-SIGKILL cases retain the promised logs and state;
+- real exit, signal, timeout, OOM, missing-container, Docker-daemon restart,
+  Quorum/Gauntlet failure, and controller-SIGKILL cases retain the promised logs
+  and state;
 - run publication is durable before terminal journaling;
 - no process, file descriptor, mount, or credential stage leaks across worker
   teardown;
 - campaign, `run`, `run-all`, `prepare`, refresh, and break-glass commands
   neither overlap nor deadlock;
-- marker-first cancellation reaches real child processes and refuses completion
-  while anything survives;
+- Quorum/Gauntlet failure and marker-first `docker stop`/`docker kill`
+  cancellation leave no tmux server or Coding-Agent process after the exact
+  container is stopped, and cancellation refuses completion while the container
+  remains live or unverified;
 - an irrecoverable campaign can be abandoned only after execution safety is
   proved and remains permanently incomplete; and
 - cleanup removes only planned artifact classes while preserving list, status,
@@ -1316,8 +1385,8 @@ implementation plan, test-first delivery, and review gate:
 2. **Durable evidence:** namespace separation, self-contained snapshots,
    artifact commit protocol, crash logs, retained evidence, and cleanup.
 3. **Isolated attempt executor:** immutable credential generations, exact
-   per-role projection, role separation, and one-container-per-attempt
-   execution.
+   subject/grader projection, the existing Gauntlet-managed process topology,
+   and one-container-per-attempt execution and teardown.
 4. **Appliance control surface:** campaign-aware jobs, discovery/selectors,
    installed controller, commands, locks, status, cancellation, abandonment,
    recovery, reporting, costs, and Linux integration coverage.
