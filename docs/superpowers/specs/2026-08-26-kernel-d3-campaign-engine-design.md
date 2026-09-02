@@ -1081,6 +1081,35 @@ is relied upon. Fail-closed throughout: cancel never mutates state outside
 the journal and process kills; a cancel request against a sealed campaign is
 refused loudly.
 
+**"Verify dead" reaches the tmux subject host (amendment 2026-09-02,
+live-campaign finding):** the first live gating campaign's cancel
+(`85089661-opus5_signature`) verified every campaign process group dead and
+journaled `campaign_cancelled` while the subjects kept spending. The
+campaign child is a `quorum run` process whose gauntlet drives the subject
+inside a private tmux server (`-L gauntlet-<epoch>-<rand>`); tmux
+`setsid()`s out of the child's process group, so group ESRCH proves nothing
+about the subject. SIGTERM — the signal every kill path sends first — is
+handled by neither `quorum run` (SIGINT only) nor gauntlet's CLI, so the
+child dies without running gauntlet's adapter `close()` (its only `tmux
+kill-server`), and the escalation to SIGKILL never reaches the server
+either. **Verified death is therefore two-part, on every path**: the process
+group verified dead (R-RCV-1's identity-guarded TERM→wait→KILL→verify) AND
+the run's tmux subject host verified gone — located by run dir
+(`<runDir>/gauntlet-agent/results/<runId>/scratch` matched against the
+panes of every gauntlet socket under the shared `TMUX_TMPDIR`, which rides
+the child env allowlist so dispatcher and gauntlet agree on the socket
+directory), killed with `tmux -L <server> kill-server`, and re-probed until
+absent within the same grace the group kill uses. The host kill is
+independent of the group kill so it also covers a group that was already
+dead (an ESRCH leader on the crash path). A host that outlives kill-server
+is the **same loud failure** as a surviving group: the dispatcher releases
+nothing for the sample and journals no `aborted` for its block and no
+`campaign_cancelled`; the post-crash cancel stays incomplete with the marker
+in place; resume refuses (nothing journaled, nothing admitted); every path
+names the server to kill by hand. Unallocated children (killed before their
+`run_allocated` landed) get only the group step: gauntlet cannot start after
+SIGTERM is delivered to a runner that never installed a handler.
+
 ### Decision D-13: storage pause (ENOSPC) is fail-stop (OQ-10; REV Blocker E; REV-2 P-5)
 
 Revision 1's children-keep-running pause cannot preserve durable truth (REV
@@ -2058,7 +2087,12 @@ spending and races its replacement (the no-double-spend invariant).
 pass (the group exists and its leader matches the campaign-child shape where
 inspectable); a group that fails sanity is **recorded
 reclaimed-without-kill** (loud), never signaled blind — the same pid-reuse
-caution that governs lock reclamation and cancel signaling.
+caution that governs lock reclamation and cancel signaling. **Amendment
+2026-09-02:** after the group disposition — whatever it was, an ESRCH leader
+included — recovery kills and verifies gone the tmux subject host of every
+such attempt's journaled run dir (Decision D-12's two-part verified death);
+a host that survives is reported alongside surviving groups and refuses
+resume and post-crash cancel alike, naming the server to kill by hand.
 
 **R-RCV-2 — Reconcile and rerun whole** (D1 seam map; PAR §"Journal and
 recovery"; PAR §"Execution"): reconcile the journal against run dirs; keep
