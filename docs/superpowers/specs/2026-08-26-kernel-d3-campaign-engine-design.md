@@ -1096,8 +1096,10 @@ either. **Verified death is therefore two-part, on every path**: the process
 group verified dead (R-RCV-1's identity-guarded TERM→wait→KILL→verify) AND
 the run's tmux subject host verified gone — located by run dir
 (`<runDir>/gauntlet-agent/results/<runId>/scratch` matched against the
-panes of every gauntlet socket under the shared `TMUX_TMPDIR`, which rides
-the child env allowlist so dispatcher and gauntlet agree on the socket
+panes of every gauntlet socket under the shared `TMUX_TMPDIR` — the
+dispatcher projects its own `TMUX_TMPDIR` into every child's narrow env
+base next to `PATH`/`HOME`/`TMPDIR`, and the runner forwards it on the
+gauntlet allowlist, so the probe and gauntlet's tmux agree on the socket
 directory), killed with `tmux -L <server> kill-server`, and re-probed until
 absent within the same grace the group kill uses. The host kill is
 independent of the group kill so it also covers a group that was already

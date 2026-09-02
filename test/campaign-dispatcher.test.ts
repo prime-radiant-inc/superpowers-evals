@@ -851,6 +851,53 @@ test('a mantle grader credential projects the grader-only alias env into every c
   }
 });
 
+test('every campaign child inherits the dispatcher TMUX_TMPDIR so the subject-host probe and gauntlet share one socket directory', async () => {
+  const prior = getEnv('TMUX_TMPDIR');
+  setProcessEnv('TMUX_TMPDIR', '/fixture/tmux-sockets');
+  try {
+    const h = harness();
+    const run = runCampaignDispatch(h.args);
+    await tick(h.clock, 1);
+    expect(h.spawner.spawned.length).toBe(2);
+    for (const { spec } of h.spawner.spawned) {
+      expect(spec.env['TMUX_TMPDIR']).toBe('/fixture/tmux-sockets');
+    }
+    for (const { child } of h.spawner.spawned) {
+      child.emitLine(`run_allocated: run-${child.pid}`);
+    }
+    await tick(h.clock, 1);
+    for (const { child } of h.spawner.spawned)
+      child.exit({ code: 0, signal: null });
+    await run;
+  } finally {
+    if (prior === undefined) deleteProcessEnv('TMUX_TMPDIR');
+    else setProcessEnv('TMUX_TMPDIR', prior);
+  }
+});
+
+test('a dispatcher without TMUX_TMPDIR spawns children without one (both fall back to /tmp)', async () => {
+  const prior = getEnv('TMUX_TMPDIR');
+  deleteProcessEnv('TMUX_TMPDIR');
+  try {
+    const h = harness();
+    const run = runCampaignDispatch(h.args);
+    await tick(h.clock, 1);
+    expect(h.spawner.spawned.length).toBe(2);
+    for (const { spec } of h.spawner.spawned) {
+      expect('TMUX_TMPDIR' in spec.env).toBe(false);
+    }
+    for (const { child } of h.spawner.spawned) {
+      child.emitLine(`run_allocated: run-${child.pid}`);
+    }
+    await tick(h.clock, 1);
+    for (const { child } of h.spawner.spawned)
+      child.exit({ code: 0, signal: null });
+    await run;
+  } finally {
+    if (prior !== undefined) setProcessEnv('TMUX_TMPDIR', prior);
+  }
+});
+
 test('longest-expected-first ordering admits the longer block first when the cap forces a choice', async () => {
   // Two primary blocks; global cap 2 admits exactly one two-sample block.
   const h = harness({

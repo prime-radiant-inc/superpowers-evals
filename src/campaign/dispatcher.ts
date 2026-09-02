@@ -3073,13 +3073,16 @@ export async function runCampaignDispatch(
           // additionally projects its bearer as the grader API key plus the
           // regional base URL over the grader-only QUORUM_GRADER_* aliases;
           // the child's runner maps those onto the names gauntlet reads,
-          // never the bearer's registry name.
+          // never the bearer's registry name. TMUX_TMPDIR rides along so the
+          // subject-host kill (C10) probes the socket directory gauntlet's
+          // tmux server actually lives in.
           env: {
             ...composeCampaignChildEnv({
               base: {
                 PATH: getEnv('PATH'),
                 HOME: getEnv('HOME'),
                 TMPDIR: getEnv('TMPDIR'),
+                TMUX_TMPDIR: getEnv('TMUX_TMPDIR'),
               },
               grants,
             }),
