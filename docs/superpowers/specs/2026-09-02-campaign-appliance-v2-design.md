@@ -1434,24 +1434,52 @@ replay corpus; it does not re-enable V1.
 
 ## Implementation boundaries
 
-This parent architecture is too large for one implementation plan. It must be
-decomposed into five ordered child specifications, each with its own approval,
-implementation plan, test-first delivery, and review gate:
+This parent architecture is too large for one implementation plan. It is
+decomposed into four ordered child specifications, each with its own approval,
+implementation plan, test-first delivery, review gate, and live proof.
 
-1. **V2 contracts and measurement:** campaign, closed journal transition table,
-   durable-prefix corpus, status, and cost contracts; clean V1 rejection;
-   removal of budget behavior.
-2. **Durable evidence:** namespace separation, self-contained snapshots,
-   artifact commit protocol, crash logs, retained evidence, and cleanup.
-3. **Isolated attempt executor:** immutable credential generations, exact
-   subject/grader projection, the existing Gauntlet-managed process topology,
-   and one-container-per-attempt execution and teardown.
-4. **Appliance control surface:** campaign-aware jobs, discovery/selectors,
-   installed controller, commands, locks, status, cancellation, abandonment,
-   recovery, reporting, costs, and Linux integration coverage.
-5. **Terminus delivery and qualification:** namespace migration, paths, mounts,
-   restored-volume marker, refresh, bundle materialization, image retention,
-   deployment, rollback, no-spend proof, and the six live qualification cases.
+The children are vertical, not layered. Each one ends with a real attempt on
+the appliance through the adapter, and no child may merge leaving the campaign
+path unrunnable. The executor comes first because it is where this design makes
+the most claims it has not yet observed: PID-1 exit with a daemonized tmux,
+crash evidence under SIGKILL and OOM, Docker daemon restart, and container
+reconciliation by label. The durable contracts are written after those
+behaviors are observed facts, so the journal vocabulary and status observation
+types describe what the executor produces rather than predict it.
+
+1. **Attempt worker skeleton:** a thin `evals-appliance campaign run` job on
+   the host, the current campaign engine as controller, one fresh container per
+   attempt with a minimal init as PID 1 and Quorum as its direct child, the
+   existing Gauntlet-managed process chain inside, the durable attempt directory,
+   the attempt-private tmux socket root, and the worker-side staging and
+   manifest commit. Subject and grader credentials are projected as two exact
+   read-only files from the existing appliance bundle. V1 contracts are
+   untouched. Live proof: one real attempt and one real verdict published from
+   its manifest.
+2. **Crash evidence and cancellation:** host-side manifest verification and
+   atomic publication, created-but-unbound container and credential-stage
+   reconciliation by label, recovery from published-but-unjournaled results,
+   marker-first cancellation with verified container death, and crash-time home
+   retention. Live proof: qualification cases 2, 3, and 4.
+3. **Contracts, measurement, and durable namespaces:** the V2 suite, campaign,
+   closed journal transition table, durable-prefix corpus, status, and cost
+   contracts; clean V1 rejection; removal of budget behavior; namespace
+   separation, self-contained snapshots, retained evidence, and cleanup. This is
+   the one flag day in the sequence. It is written against the events children 1
+   and 2 observed, and it lands in the same child that proves it live. Live
+   proof: qualification case 5 plus a parallel two-arm completion.
+4. **Credential generations and Terminus delivery:** immutable generations,
+   pinning, revocation, authority intersection, paths, mounts, restored-volume
+   marker, refresh, bundle materialization, image retention, deployment,
+   rollback, no-spend proof, and the remaining controller surface (discovery,
+   selectors, abandonment, reporting, costs, Linux integration coverage). Live
+   proof: qualification cases 1 and 6, then all six together, then the
+   release-effect campaign.
+
+Child 1 adds container-identity events to the V1 journal so the skeleton can
+run; child 3 deletes them with the rest of V1. That throwaway is deliberate and
+small. The in-place V1 to V2 cutover cannot be made incremental, so child 3
+remains a flag day, but it is a flag day with a proven executor underneath it.
 
 The child specifications and plans must name exact files, tests, ownership, and
 commit boundaries. No child implementation begins until Drew reviews and

@@ -1,13 +1,20 @@
-# Campaign Appliance V2 Child 1 — Contracts and Measurement Design
+# Campaign Appliance V2 Child 3 — Contracts, Measurement, and Durable Namespaces Design
 
 **Date:** 2026-09-02
 
-**Status:** draft for Drew's review
+**Status:** parked draft. This document was first written as child 1 of a
+five-child layered sequence. The parent was re-cut on 2026-09-02 into four
+vertical children, each ending with a live proof, and this document became
+child 3. Its contract content stands, but before Drew's final review it must be
+revised against the executor events children 1 and 2 actually observe, and
+extended with the durable namespace separation, self-contained snapshots,
+retained evidence, and cleanup material the parent now assigns to this child.
+Those sections are not written yet.
 
 **Parent:** `docs/superpowers/specs/2026-09-02-campaign-appliance-v2-design.md`
-at `c91c0a6`
+(re-cut revision)
 
-**Delivery order:** child 1 of 5
+**Delivery order:** child 3 of 4
 
 ## Decision
 
@@ -30,18 +37,23 @@ It also removes dollar-budget authority from the current campaign engine. Cost
 remains observable, attributable, and reportable, but no cost or price value may
 affect admission, replacement, continuation, cancellation, or sealing.
 
-No live campaign is run or deployed from this intermediate child. The current
-host-direct executor remains an implementation seam until child 3 replaces it
-with one fresh container per attempt. Child 5 is the first production delivery.
+This child lands on a proven executor. Children 1 and 2 already run one fresh
+container per attempt through the appliance adapter, with crash evidence and
+cancellation verified live. This child is the one flag day in the sequence: the
+V1 contracts, including the container-identity events child 1 added to the V1
+journal, are replaced in place, and the replacement is proved live before it
+merges. The campaign path is never left unrunnable.
 
 ## Why an in-place cutover
 
-No V1 campaign has been run, so there is no durable V1 authority to preserve.
-The only V1 material is source code, tests, suite definitions, and historical
-design and experiment documentation.
+One V1 campaign has been run and sealed (the 2026-09-02 Opus 5 signature
+campaign). Its artifacts stay byte-for-byte preserved and read-only, and its
+readout lives in the experiment log, but they are not V2 authority and no V2
+code reads them. The remaining V1 material is source code, tests, suite
+definitions, and historical design and experiment documentation.
 
 A parallel `campaign-v2` tree would preserve two schemas, two folds, and two
-sets of invariants through four more children. It would require a later
+sets of invariants through the remaining child. It would require a later
 conversion or deletion pass and make it easy for new code to import the wrong
 generation. A separate contracts package would add another module boundary
 without another consumer.
@@ -76,14 +88,13 @@ they are not runtime inputs.
 
 ### Non-goals
 
-- Durable namespace and artifact publication changes; child 2 owns them.
-- Docker worker creation, container identity, credential generations,
-  credential staging, process teardown, or real Gauntlet topology; child 3 owns
-  them.
-- `evals-appliance campaign` jobs, selectors, controller lifecycle, locks,
-  cancellation implementation, or Linux integration; child 4 owns them.
-- Terminus paths, mounts, refresh, backups, deployment, rollback, or live
-  qualification; child 5 owns them.
+- Docker worker creation, container identity, credential staging, process
+  teardown, the real Gauntlet topology, artifact publication, reconciliation,
+  and cancellation; children 1 and 2 own them and they already exist when this
+  child begins.
+- Credential generations, campaign selectors, abandonment, Terminus paths,
+  mounts, refresh, backups, deployment, rollback, or the full six-case live
+  qualification; child 4 owns them.
 - A release decision, gating profile, `SHIP`, or `NO_SHIP` result.
 - V1 parsing, conversion, migration, restamping, or compatibility aliases.
 - New provider-specific price collection. This child normalizes the evidence
@@ -117,8 +128,9 @@ durable identities with immutable run evidence, without feeding any value back
 into execution.
 
 Storage, Docker, credential material, and CLI rendering remain outside these
-pure modules. Later children adapt their real observations to the contracts
-defined here.
+pure modules. The contracts here are written from the real observations
+children 1 and 2 produced; child 4 adapts the remaining controller surface to
+them.
 
 ## Version intake and V1 refusal
 
@@ -231,8 +243,8 @@ interface CampaignV2 {
 }
 ```
 
-The referenced shapes are fixed in child 1 even though children 2 and 3 produce
-their real values:
+The referenced shapes are fixed here; children 1 and 2 already produce their
+real values:
 
 ```ts
 interface FrozenTreeRef {
@@ -280,8 +292,8 @@ Registration timestamps and pricing dates are strict UTC RFC 3339 strings.
 Forecast subtotals are finite and non-negative; unknown-cell counts are
 non-negative integers.
 
-Later children materialize and verify these objects; they do not add contract
-keys. Any future durable field outside the additive evidence referenced by the
+Child 4 verifies these objects against Terminus-materialized inputs; it does
+not add contract keys. Any future durable field outside the additive evidence referenced by the
 existing digest-bearing slots requires V3.
 
 Each execution descriptor is secret-free and contains:
@@ -359,7 +371,7 @@ registration cost forecast is optional metadata under
 `registration.cost_forecast`; it is excluded from `input_digest`, never read by
 the dispatcher, and never compared with measured cost. Its shape is a source
 artifact digest, a known USD subtotal, an unknown-cell count, and the source's
-generation timestamp. Child 1 does not support manual price overrides.
+generation timestamp. This child does not support manual price overrides.
 Unpriced observations remain explicitly unknown.
 
 ## Input digest
@@ -474,7 +486,7 @@ interface AttemptCostClosure {
 }
 ```
 
-Child 2 defines how those paths are durably committed. Child 1 validates that
+Child 2 defined how those paths are durably committed. This child validates that
 they are relative, normalized, contain no `..`, and use lowercase SHA-256.
 `recorded` may reference a known or explicitly unknown canonical record.
 `not_incurred` requires evidence that the role could not have made a provider
@@ -673,9 +685,9 @@ at minimum, the parent crash cuts:
 - sealed event before one report peer; and
 - cleanup plan before and during apply.
 
-Child 1 supplies abstract observations for Docker, files, and processes. Later
-children add real integration fixtures without changing expected fold or status
-results. The installed controller must run this corpus as part of its test gate;
+This child supplies abstract observations for Docker, files, and processes,
+derived from the integration fixtures children 1 and 2 already run. Child 4
+adds further fixtures without changing expected fold or status results. The installed controller must run this corpus as part of its test gate;
 the corpus is the V2 compatibility contract, not a migration framework.
 
 ## Status contract
@@ -794,7 +806,7 @@ their required identity can be established. Mutating actions are derived from
 state and integrity; callers do not hand-roll eligibility.
 
 Exactly one `next_action` is present when operator work is required; otherwise
-it is `null`. Human rendering in child 4 consumes this object and cannot invent
+it is `null`. Human rendering consumes this object and cannot invent
 a different recommendation.
 
 The base action table is:
@@ -1025,25 +1037,19 @@ cost-record references, including an explicit unknown record when required,
 and continues according to experimental policy. Sealing verifies record
 identity and coverage accounting but does not require every amount to be known.
 
-## Safe intermediate state
+## Cutover
 
-Child 1 is developed and reviewed on the Campaign Appliance V2 feature branch.
-It is not installed on the appliance and runs no paid campaign. Repository
-checks and no-provider campaign tests remain operational.
+This child is developed and reviewed on the Campaign Appliance V2 feature
+branch and merges only with its live proof: qualification case 5 and a parallel
+two-arm completion run through the adapter on the replaced contracts.
 
 The internal registration function accepts already-resolved `FrozenRefs`,
 `FrozenRuntime`, and policy references so its behavior is fully testable.
-Children 2 and 3 become the only production producers of those values. Until
-they land, mutating raw commands `quorum campaign register|run|cancel|report`
-refuse with typed code `campaign_v2_appliance_not_ready`; they never substitute
-zeros, current-checkout paths, mutable tags, or fixture digests. The no-spend
-`acquire`, `estimates`, and `simulate` tools remain available after consuming
-the V2 schemas.
-
-The host-direct spawn seam may remain in source so the dispatcher can be
-unit-tested until child 3 replaces it, but no command reaches it. Documentation
-and operator output identify `evals-appliance campaign` as unavailable until
-child 4, and child 5 owns the only production cutover.
+Children 1 and 2 are the production producers of those values. No commit in
+this child may leave `evals-appliance campaign run` unable to execute an
+attempt; the V1 to V2 replacement and the executor's adaptation to it land
+together. The no-spend `acquire`, `estimates`, and `simulate` tools remain
+available after consuming the V2 schemas.
 
 ## Exact source layout
 
@@ -1081,8 +1087,7 @@ child 4, and child 5 owns the only production cutover.
   typed rejection.
 - Modify `src/campaign/arm-suite-check.ts`: strict V2 suite validation.
 - Modify `src/cli/campaign.ts`: remove pricing inputs and consume V2 readers;
-  fail closed for mutating campaign commands until their prerequisite children
-  land; do not add appliance commands.
+  do not add appliance commands beyond those children 1 and 2 introduced.
 
 ### Active suites and fixtures
 
@@ -1170,7 +1175,7 @@ reader, temporary compatibility export, or live-spend path.
 
 ## Acceptance criteria
 
-Child 1 is complete when:
+Child 3 is complete when:
 
 1. Every active campaign document schema is version 2 and strict.
 2. A V1 suite, campaign, journal, report, or cost document returns typed
@@ -1192,36 +1197,35 @@ Child 1 is complete when:
 11. `bun run check`, `bun run quorum check`, and `git diff --check` pass.
 12. No provider request, appliance mutation, credential rotation, remote
     deployment, or live campaign occurs.
-13. In the child-1 intermediate state, no public command can reach the retained
-    host-direct campaign spawn seam.
+13. Every commit in the child leaves `evals-appliance campaign run` able to
+    execute a real attempt on the replaced contracts.
 
-## Interfaces handed to later children
+## Interfaces observed and handed on
 
-Child 2 receives `ArtifactRef`, cost-record references, the journal fold, the
-durable-prefix corpus, and report completeness predicates. It must make the
-referenced evidence durable without changing their semantics.
+From children 1 and 2 this child consumes, as observed fact rather than
+prediction: the attempt lifecycle and preallocated identities, the container
+identity and label scheme, the worker staging and manifest commit, host-side
+publication and reconciliation outcomes, the crash cuts that actually occurred
+under kill, timeout, OOM, daemon restart, and controller SIGKILL, and the
+cancellation event order. The journal vocabulary, durable-prefix corpus, and
+status observation types in this document must be reconciled against those
+before final review.
 
-Child 3 receives the attempt lifecycle, preallocated identities, public
-execution descriptors, expected-cost facts, and allocation/exposure/terminal
-event contracts. It must project credentials and produce evidence matching
-those contracts.
-
-Child 4 receives the status observation types, action eligibility, journal
-authority, cost summary, and durable-prefix corpus. It must adapt real
-appliance jobs, locks, Docker observations, and commands to them rather than
-reimplementing state.
-
-Child 5 receives a V2-only on-disk grammar and compatibility corpus. It must
-prove the installed controller passes that corpus before deployment and refuse
-older-volume execution without adding a reader.
+Child 4 receives a V2-only on-disk grammar, the compatibility corpus, the
+status observation types, action eligibility, journal authority, and the cost
+summary. It must prove the installed controller passes that corpus before
+deployment, adapt credential generations and the remaining commands to it
+rather than reimplementing state, and refuse older-volume execution without
+adding a reader.
 
 ## Resolved questions
 
 - **Parallel V1/V2 contracts?** No. In-place clean break.
 - **V1 artifact reader?** No. Typed refusal only.
 - **Budget replacement?** None. Cost is read-only measurement.
-- **Manual price overrides?** Not in V2 child 1. Unknown is honest.
+- **Manual price overrides?** Not in this child. Unknown is honest.
 - **Gating profile?** Removed from the active V2 contract.
 - **Does unknown cost stop or invalidate execution?** No.
 - **Can cost affect dispatch priority?** No. Duration estimates are separate.
-- **Does child 1 deploy or spend?** No.
+- **Does this child spend?** Yes, for its live proof only; it does not deploy
+  Terminus changes.
