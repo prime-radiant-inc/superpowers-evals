@@ -60,6 +60,7 @@ import { AttemptPublishError, publishAttempt } from './attempt-publish.ts';
 import { loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
 import {
+  AttemptContainerSpawnError,
   buildAttemptMounts,
   type ContainerAttemptSpawner,
 } from './container-spawner.ts';
@@ -1035,6 +1036,9 @@ export interface DispatchRunArgs {
   readonly identity?: ProcessIdentityProbe;
   readonly credentials: Readonly<Record<string, Credential>>;
   readonly resultsRoot?: string;
+  /** Publication seam for focused durability tests; production uses the
+   *  verified publisher directly. */
+  readonly publishAttempt?: typeof publishAttempt;
   readonly snapshot?: SnapshotHandle;
   /** CommandRunner for verify/repair; defaults to defaultCommandRunner. */
   readonly runner?: CommandRunner;
@@ -1173,6 +1177,7 @@ export async function runCampaignDispatch(
   // reads and the child's --out-root must name the same directory, and they
   // do not share a working directory (the child's cwd is the evals worktree).
   const resultsRoot = resolveCampaignResultsRoot(args.resultsRoot);
+  const publish = args.publishAttempt ?? publishAttempt;
   /** Run-dir path for a protocol-line run id (the runner's allocation names
    *  the run dir after the run id under outRoot — Decision D-8 correlation;
    *  the identity file task 6c persists lives in the same dir). */
@@ -2860,7 +2865,7 @@ export async function runCampaignDispatch(
                   `journaled allocation for ${sample.runId} did not land durably`,
                 );
               }
-              const published = publishAttempt({
+              const published = publish({
                 attemptDir: sample.attemptDir,
                 resultsRoot,
                 expectedAttemptId: sample.attemptId,
@@ -3347,6 +3352,33 @@ export async function runCampaignDispatch(
         spawnFailuresByPool.set(sample.subjectPool, 0);
         return 'spawned';
       } catch (err) {
+        if (
+          err instanceof AttemptContainerSpawnError &&
+          err.cleanup === 'unverified'
+        ) {
+          if (containerSpawner === null) {
+            throw new DispatcherError(
+              `container spawn for ${sample.attemptId} left container ${err.containerId} with unknown cleanup certainty and no exact-ID stopper is available`,
+            );
+          }
+          let verifiedDead = false;
+          try {
+            verifiedDead =
+              (await containerSpawner.stopContainer(
+                err.containerId,
+                killGrace,
+              )) === 'dead';
+          } catch (verificationError) {
+            throw new DispatcherError(
+              `container spawn for ${sample.attemptId} left container ${err.containerId} with unknown cleanup certainty; exact-ID verification threw: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}`,
+            );
+          }
+          if (!verifiedDead) {
+            throw new DispatcherError(
+              `container spawn for ${sample.attemptId} left container ${err.containerId} alive or unverified after exact-ID cleanup; retaining stage and refusing release or replacement`,
+            );
+          }
+        }
         // Spawn-failure pool halt (REV fable I-14): N consecutive failures
         // attributed to one pool halt admission for that pool.
         const failures = (spawnFailuresByPool.get(sample.subjectPool) ?? 0) + 1;
@@ -3789,6 +3821,7 @@ export async function runCampaignDispatch(
         // and recovery re-derives the batch (Important 3).
         return;
       }
+      cleanupEligibleStages(invalid.flatMap((block) => block.samples));
       for (const { reserve, record } of result.activated) {
         const reserveBlock = reserveBlocks.find((b) => b.block_id === reserve);
         if (reserveBlock === undefined) continue;

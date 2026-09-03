@@ -42,6 +42,27 @@ export class AttemptContainerError extends Error {
   }
 }
 
+export type ContainerSpawnCleanup = 'verified-absent' | 'unverified';
+
+/** Post-create failures must retain the exact identity and cleanup certainty.
+ *  Without this contract a dispatcher cannot distinguish a failed create from
+ *  a container that may still be running after cleanup itself failed. */
+export class AttemptContainerSpawnError extends AttemptContainerError {
+  readonly containerId: string;
+  readonly cleanup: ContainerSpawnCleanup;
+
+  constructor(
+    message: string,
+    containerId: string,
+    cleanup: ContainerSpawnCleanup,
+  ) {
+    super(message);
+    this.name = 'AttemptContainerSpawnError';
+    this.containerId = containerId;
+    this.cleanup = cleanup;
+  }
+}
+
 /** The Docker command seam used by the attempt spawner. */
 export type AttemptDocker = CommandRunner;
 
@@ -226,18 +247,29 @@ export class ContainerAttemptSpawner implements ChildSpawner, ContainerStopper {
     } catch (error) {
       try {
         this.removeExactContainer(containerId);
+        const originalMessage =
+          error instanceof Error ? error.message : 'container operation failed';
+        throw new AttemptContainerSpawnError(
+          originalMessage,
+          containerId,
+          'verified-absent',
+        );
       } catch (cleanupError) {
+        if (cleanupError instanceof AttemptContainerSpawnError) {
+          throw cleanupError;
+        }
         const originalMessage =
           error instanceof Error ? error.message : 'container operation failed';
         const cleanupMessage =
           cleanupError instanceof Error
             ? cleanupError.message
             : 'exact container cleanup failed';
-        throw new AttemptContainerError(
+        throw new AttemptContainerSpawnError(
           `${originalMessage}; ${cleanupMessage}`,
+          containerId,
+          'unverified',
         );
       }
-      throw error;
     }
     return this.settleHandle(containerId, attempt, containerName);
   }
