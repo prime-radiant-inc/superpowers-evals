@@ -63,6 +63,7 @@ class RecordingContainerSpawner {
   readonly spawnedContainerIds: string[] = [];
   readonly spawnedContainerNames: string[] = [];
   failSpawns = false;
+  failSpawnOnce = false;
   spawnFailureCleanup: 'verified-absent' | 'unverified' | undefined;
   stopResult: 'dead' | 'alive' = 'dead';
   stopThrows = false;
@@ -133,6 +134,7 @@ class RecordingContainerSpawner {
     if (this.failSpawns) {
       const attemptId = spec.attempt?.attemptId ?? '<missing>';
       this.failedAttemptIds.push(attemptId);
+      if (this.failSpawnOnce) this.failSpawns = false;
       if (this.spawnFailureCleanup !== undefined) {
         throw new AttemptContainerSpawnError(
           'fixture post-create spawn failure',
@@ -347,6 +349,7 @@ function harness(
     traceJournal?: boolean;
     publishAttempt?: DispatchRunArgs['publishAttempt'];
     failContentionAppend?: boolean;
+    pauseOnBlockReplacement?: boolean;
   } = {},
 ): {
   args: DispatchRunArgs;
@@ -373,11 +376,16 @@ function harness(
     type: 'campaign_opened',
     payload: { campaign_id: doc.campaign_id, digest: doc.digest },
   });
-  if (opts.traceJournal !== true && opts.failContentionAppend !== true)
+  if (
+    opts.traceJournal !== true &&
+    opts.failContentionAppend !== true &&
+    opts.pauseOnBlockReplacement !== true
+  )
     writer.release();
   const spawner = new RecordingContainerSpawner();
   spawner.setRoot(join(campaignDir, 'attempts'));
   const terminalAppendStages: boolean[] = [];
+  let pausedBlockReplacement = false;
   const journal = {
     appendEvent: writer.appendEvent.bind(writer),
     appendEvents: (inputs: Parameters<typeof writer.appendEvents>[0]) => {
@@ -386,6 +394,14 @@ function harness(
         inputs.some((input) => input.type === 'block_replaced')
       ) {
         throw new Error('simulated contention terminal append failure');
+      }
+      if (
+        opts.pauseOnBlockReplacement === true &&
+        !pausedBlockReplacement &&
+        inputs.some((input) => input.type === 'block_replaced')
+      ) {
+        pausedBlockReplacement = true;
+        throw Object.assign(new Error('simulated ENOSPC'), { code: 'ENOSPC' });
       }
       if (opts.traceJournal === true) {
         for (const input of inputs) {
@@ -424,7 +440,9 @@ function harness(
     sampler: 'disabled',
     observeExposure: () => 1_000,
     stream: { write: () => {} },
-    ...(opts.traceJournal === true || opts.failContentionAppend === true
+    ...(opts.traceJournal === true ||
+    opts.failContentionAppend === true ||
+    opts.pauseOnBlockReplacement === true
       ? { journal }
       : {}),
     installSignals: () => () => {},
@@ -456,6 +474,9 @@ function stageManifest(
   h: ReturnType<typeof harness>,
   sampleSuffix: string,
   runId: string,
+  files: { path: string; body: string }[] = [
+    { path: 'verdict.json', body: '{}' },
+  ],
 ): { attemptDir: string; stagingDir: string; attemptId: string } {
   const entry = [...h.spawner.attempts.entries()].find(([, value]) =>
     value.attemptDir.includes(sampleSuffix),
@@ -465,7 +486,11 @@ function stageManifest(
   const [attemptId, attempt] = entry;
   const runDir = join(attempt.stagingDir, runId);
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, 'verdict.json'), '{}');
+  for (const file of files) {
+    const path = join(runDir, file.path);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, file.body);
+  }
   writeAttemptManifest(runDir, {
     campaign_id: campaignDocument().campaign_id,
     comparison_id: 'c1',
@@ -631,6 +656,9 @@ test('container exit without a manifest journals instrument_failure and retains 
   expect(journal.some((event) => event.type === 'instrument_failure')).toBe(
     true,
   );
+  expect(journal.some((event) => event.type === 'exposure_started')).toBe(
+    false,
+  );
   expect(journal.some((event) => event.type === 'run_completed')).toBe(false);
   expect(existsSync(attempt.attemptDir)).toBe(true);
   expect(existsSync(join(attempt.attemptDir, 'stdout.log'))).toBe(true);
@@ -678,6 +706,9 @@ test('container publication mismatch refuses stale run evidence and cost', async
   expect(journal.some((event) => event.type === 'run_completed')).toBe(false);
   expect(journal.some((event) => event.type === 'instrument_failure')).toBe(
     true,
+  );
+  expect(journal.some((event) => event.type === 'exposure_started')).toBe(
+    false,
   );
   expect(
     journal.some(
@@ -747,7 +778,23 @@ test('dispatcher refuses all evidence and spend after post-rename fsync ambiguit
   const run = runCampaignDispatch(h.args);
   (h.args.clock as FakeClock).advance(1);
   await settleMicrotasks();
-  stageManifest(h, 'arm_a:r1', 'run-container-fsync');
+  stageManifest(h, 'arm_a:r1', 'run-container-fsync', [
+    {
+      path: 'verdict.json',
+      body: JSON.stringify({
+        final: 'pass',
+        final_reason: 'stale verdict evidence',
+        economics: { total_est_cost_usd: 42 },
+      }),
+    },
+    {
+      path: 'gauntlet-agent/results/stale/result.json',
+      body: JSON.stringify({
+        summary: 'stale grader evidence',
+        reasoning: 'must not be consumed',
+      }),
+    },
+  ]);
   h.spawner.emitAllocated(0, 'run-container-fsync');
   h.spawner.emitAllocated(1, 'run-container-other');
   await settleMicrotasks();
@@ -793,6 +840,31 @@ test('container spawn failure cleans a prepared stage after its disposition land
       const attempt = h.spawner.attempts.get(attemptId);
       return (
         attempt !== undefined && !existsSync(join(attempt.attemptDir, '.stage'))
+      );
+    }),
+  ).toBe(true);
+});
+
+test('spawn replacement retains stage when ENOSPC pauses after a successful resolution retry', async () => {
+  const h = harness({ pauseOnBlockReplacement: true });
+  h.spawner.failSpawns = true;
+  h.spawner.spawnFailureCleanup = 'verified-absent';
+  const run = runCampaignDispatch(h.args);
+  (h.args.clock as FakeClock).advance(1);
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  expect(
+    events(h.campaignDir).some((event) => event.type === 'block_replaced'),
+  ).toBe(true);
+  expect(
+    events(h.campaignDir).some((event) => event.type === 'storage_paused'),
+  ).toBe(true);
+  expect(h.spawner.failedAttemptIds.length).toBeGreaterThan(0);
+  expect(
+    h.spawner.failedAttemptIds.every((attemptId) => {
+      const attempt = h.spawner.attempts.get(attemptId);
+      return (
+        attempt !== undefined && existsSync(join(attempt.attemptDir, '.stage'))
       );
     }),
   ).toBe(true);
@@ -847,6 +919,36 @@ test('ambiguous container spawn failure retains the stage when exact-ID verifica
   expect(
     events(h.campaignDir).some((event) => event.type === 'block_replaced'),
   ).toBe(false);
+});
+
+test('ambiguous spawn failure may disposition after exact-ID death is verified', async () => {
+  const h = harness();
+  h.spawner.failSpawns = true;
+  h.spawner.failSpawnOnce = true;
+  h.spawner.spawnFailureCleanup = 'unverified';
+  h.spawner.stopResult = 'dead';
+  let signal: ((signal?: NodeJS.Signals) => void) | undefined;
+  const run = runCampaignDispatch({
+    ...h.args,
+    installSignals: (handler) => {
+      signal = handler;
+      return () => {};
+    },
+  });
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  expect(h.spawner.stopped).toEqual([
+    { containerId: 'a'.repeat(64), graceSeconds: 5 },
+  ]);
+  expect(h.spawner.failedAttemptIds).toHaveLength(1);
+  expect(h.spawner.specs.length).toBeGreaterThan(0);
+  const failed = h.spawner.attempts.get(h.spawner.failedAttemptIds[0]!);
+  expect(failed).toBeDefined();
+  signal?.('SIGTERM');
+  await run;
+  expect(existsSync(join(failed!.attemptDir, '.stage'))).toBe(false);
 });
 
 test('contention verified container death cleans the stage after durable resolution', async () => {
@@ -942,6 +1044,53 @@ test('contention retains stages when the durable resolution append fails', async
   expect(
     events(h.campaignDir).some((event) => event.type === 'block_replaced'),
   ).toBe(false);
+});
+
+test('contention retains stages when container death is unverified', async () => {
+  const h = harness();
+  h.spawner.stopResult = 'alive';
+  writeContentionSidecar(h.campaignDir);
+  let hooks: DispatchSamplerHooks | null = null;
+  let signal: ((signal?: NodeJS.Signals) => void) | undefined;
+  const run = runCampaignDispatch({
+    ...h.args,
+    installSignals: (handler) => {
+      signal = handler;
+      return () => {};
+    },
+    sampler: {
+      start(captured: DispatchSamplerHooks): () => void {
+        hooks = captured;
+        return () => {};
+      },
+    } satisfies DispatchSamplerSeam,
+  });
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  hooks!.onBreachEntry(['load1_per_core']);
+  hooks!.onBreachExit({
+    startTsMs: 2020,
+    endTsMs: 2060,
+    metrics: ['load1_per_core'],
+  });
+  await settleMicrotasks();
+  (h.args.clock as FakeClock).advance(301);
+  await settleMicrotasks();
+  expect(h.spawner.stopped).toHaveLength(2);
+  const initialAttempts = [...h.spawner.attempts.values()].filter((attempt) =>
+    attempt.attemptDir.includes(':r1'),
+  );
+  expect(
+    initialAttempts.every((attempt) =>
+      existsSync(join(attempt.attemptDir, '.stage')),
+    ),
+  ).toBe(true);
+  expect(
+    events(h.campaignDir).some((event) => event.type === 'block_replaced'),
+  ).toBe(false);
+  h.spawner.stopResult = 'dead';
+  signal!('SIGTERM');
+  await run;
 });
 
 test('container cancellation stops exact container id without process-group or subject-host probes', async () => {
