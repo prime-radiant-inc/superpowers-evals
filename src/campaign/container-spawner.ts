@@ -13,6 +13,10 @@ import { join } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import type { Clock } from '../scheduler/clock.ts';
+import {
+  type PreparedAttemptStage,
+  prepareAttemptStage,
+} from './attempt-projection.ts';
 import { COVERED_BY_LOCK_ENV } from './locks.ts';
 import {
   type AttemptMount,
@@ -177,6 +181,25 @@ export class ContainerAttemptSpawner implements ChildSpawner, ContainerStopper {
       );
     }
     this.args = args;
+  }
+
+  prepareAttempt(args: {
+    readonly attemptId: string;
+    readonly agent: string;
+    readonly credentialName: string;
+    readonly evalsRoot: string;
+    readonly superpowersTree: string | null;
+  }): PreparedAttemptStage {
+    return prepareAttemptStage({
+      campaignDir: this.args.campaignDir,
+      attemptId: args.attemptId,
+      agent: args.agent,
+      credentialName: args.credentialName,
+      evalsRoot: args.evalsRoot,
+      bundleDir: this.args.bundleDir,
+      uid: this.args.uid,
+      gid: this.args.gid,
+    });
   }
 
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild {

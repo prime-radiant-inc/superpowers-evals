@@ -498,6 +498,10 @@ export interface RunScenarioArgs {
   // verdict. Undefined = no stop channel (library callers, tests).
   readonly shouldStop?: (() => boolean) | undefined;
   readonly campaign?: CampaignIdentity | undefined;
+  /** Internal campaign-container home root. When present, the attempt home
+   *  lives beside staging so publication can exclude it; ordinary runs keep
+   *  their legacy run-dir-relative home. */
+  readonly campaignAttemptDir?: string | undefined;
 }
 
 export interface RunScenarioResult {
@@ -1193,7 +1197,10 @@ export async function runScenario(
   // via runAgentCache); a null cache (config loading itself failed) skips
   // agent provenance entirely.
   const agentRunnable = verdict.error?.stage !== 'setup';
-  const provenanceRunHome = join(runDir, 'home');
+  const provenanceRunHome =
+    a.campaignAttemptDir === undefined
+      ? join(runDir, 'home')
+      : join(a.campaignAttemptDir, 'home');
   mkdirSync(provenanceRunHome, { recursive: true });
   const provenance = collectProvenance({
     repoRoot: repoRoot(),
@@ -1551,7 +1558,10 @@ async function runInnerBody(
   // runtimeCleanupDirs). The launchers pin HOME/XDG/TMPDIR to it via
   // $QUORUM_HOME_ENV; pre-create the XDG base dirs + TMPDIR so every agent (and
   // opencode's capture subprocess) finds them present.
-  const runHomeDir = join(runDir, 'home');
+  const runHomeDir =
+    a.campaignAttemptDir === undefined
+      ? join(runDir, 'home')
+      : join(a.campaignAttemptDir, 'home');
   for (const dir of [runHomeDir, ...xdgHomeSubdirs(runHomeDir)]) {
     mkdirSync(dir, { recursive: true });
   }

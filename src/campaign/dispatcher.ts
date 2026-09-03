@@ -55,8 +55,14 @@ import {
   type Clock,
   RealClock,
 } from '../scheduler/clock.ts';
+import { removeAttemptStage } from './attempt-projection.ts';
+import { AttemptPublishError, publishAttempt } from './attempt-publish.ts';
 import { loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
+import {
+  buildAttemptMounts,
+  type ContainerAttemptSpawner,
+} from './container-spawner.ts';
 import {
   type BlockInterval,
   type BreachWindow,
@@ -1107,6 +1113,7 @@ interface LiveSampleState {
   child?: SpawnedCampaignChild;
   childBirthTsMs: number | null;
   runId?: string;
+  attemptDir?: string;
   serviceEnded: boolean;
   /** Force-killed (drift/signal/storage): later child callbacks are stale
    *  and never journal against the superseded block (C10). */
@@ -1134,14 +1141,9 @@ export async function runCampaignDispatch(
     write: (s: string) => void process.stdout.write(s),
   };
   const spawner = args.spawner ?? new DetachedChildSpawner();
-  const pgidOf = (child: SpawnedCampaignChild): number => {
-    if (child.handle.kind !== 'process') {
-      throw new DispatcherError(
-        'process-group operation on a container child — the container path routes through docker stop (child 1 routing)',
-      );
-    }
-    return child.handle.pgid;
-  };
+  const isContainerSpawner = (s: ChildSpawner): s is ContainerAttemptSpawner =>
+    s.kind === 'container';
+  const containerSpawner = isContainerSpawner(spawner) ? spawner : null;
   // Production default is the REAL probe — a stub here would let a lease
   // reclamation misjudge a live holder (mandated behavior never rides a
   // fake default; tests inject their own probe).
@@ -1683,6 +1685,36 @@ export async function runCampaignDispatch(
       exposureSampleIds: [...exposureSet],
     });
 
+    const stopChildVerified = async (
+      child: SpawnedCampaignChild,
+      graceSeconds: number,
+      birthTsMs: number | null,
+    ): Promise<'dead' | 'alive' | 'unknown'> => {
+      if (child.handle.kind === 'container') {
+        if (containerSpawner === null) return 'unknown';
+        return (await containerSpawner.stopContainer(
+          child.handle.containerId,
+          graceSeconds,
+        )) === 'dead'
+          ? 'dead'
+          : 'alive';
+      }
+      const outcome = await killGroupVerified({
+        pgid: child.handle.pgid,
+        birthTsMs,
+        identity,
+        signal: signalGroup,
+        clock,
+        stream,
+        graceSeconds,
+      });
+      return outcome === 'dead' || outcome === 'stale'
+        ? 'dead'
+        : outcome === 'alive'
+          ? 'alive'
+          : 'unknown';
+    };
+
     // --- Verified kill over the live child handles (C10) --------------------
     /** C10 HARD precondition: journaling/release/mint happen ONLY after a
      *  group is verified dead through the one identity-guarded primitive
@@ -1710,18 +1742,17 @@ export async function runCampaignDispatch(
           released += 1;
           continue;
         }
-        const pgid = pgidOf(sample.child);
-        const result = await killGroupVerified({
-          pgid,
-          birthTsMs: sample.childBirthTsMs,
-          identity,
-          signal: signalGroup,
-          clock,
-          stream,
-          graceSeconds: killGrace,
-        });
+        const result = await stopChildVerified(
+          sample.child,
+          killGrace,
+          sample.childBirthTsMs,
+        );
         if (result === 'alive' || result === 'unknown') {
-          failures.push(`pgid ${pgid} (${sample.attemptId}: ${result})`);
+          const childLabel =
+            sample.child.handle.kind === 'container'
+              ? `container ${sample.child.handle.containerId}`
+              : `pgid ${sample.child.handle.pgid}`;
+          failures.push(`${childLabel} (${sample.attemptId}: ${result})`);
           continue;
         }
         // Verified dead ('dead', or 'stale' — the pid was reused, so the
@@ -1729,7 +1760,10 @@ export async function runCampaignDispatch(
         // callbacks, then reach the subject the group never held. Only an
         // allocated run can host one (gauntlet starts after allocation).
         sample.abandoned = true;
-        if (sample.runId !== undefined) {
+        if (
+          sample.runId !== undefined &&
+          sample.child.handle.kind === 'process'
+        ) {
           const host = await killSubjectHostVerified({
             runDir: runDirOf(sample.runId),
             host: subjectHost,
@@ -2229,18 +2263,17 @@ export async function runCampaignDispatch(
         stream.write(
           `allocation wait for ${sample.attemptId} expired (${ALLOCATION_WAIT_BUDGET_SECONDS}s budget, no run_allocated line) — killing the unallocated child before its disposition (R-JRN-8: no allocation can follow a terminal)\n`,
         );
-        const pgid = pgidOf(child);
-        const result = await killGroupVerified({
-          pgid,
-          birthTsMs: sample.childBirthTsMs,
-          identity,
-          signal: signalGroup,
-          clock,
-          stream,
-          graceSeconds: killGrace,
-        });
+        const result = await stopChildVerified(
+          child,
+          killGrace,
+          sample.childBirthTsMs,
+        );
         if (result === 'alive' || result === 'unknown') {
-          failures.push(`pgid ${pgid} (${sample.attemptId}: ${result})`);
+          const childLabel =
+            child.handle.kind === 'container'
+              ? `container ${child.handle.containerId}`
+              : `pgid ${child.handle.pgid}`;
+          failures.push(`${childLabel} (${sample.attemptId}: ${result})`);
           continue;
         }
         sample.abandoned = true;
@@ -2774,6 +2807,31 @@ export async function runCampaignDispatch(
       child.onExit((info) => {
         void runExclusive(async () => {
           if (sample.abandoned) return;
+          let publicationFailed = false;
+          if (
+            child.handle.kind === 'container' &&
+            sample.attemptDir !== undefined
+          ) {
+            try {
+              const published = publishAttempt({
+                attemptDir: sample.attemptDir,
+                resultsRoot,
+                expectedAttemptId: sample.attemptId,
+              });
+              if (sample.runId === undefined) {
+                await recordAllocation(sample, child, published.runId);
+              } else if (sample.runId !== published.runId) {
+                throw new AttemptPublishError(
+                  `published run ${published.runId} disagrees with the journaled allocation ${sample.runId}`,
+                );
+              }
+            } catch (error) {
+              publicationFailed = true;
+              stream.write(
+                `publication failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)} — classifying instrument_failure with logs retained\n`,
+              );
+            }
+          }
           releaseSample(sample);
           const runDir =
             sample.runId !== undefined ? runDirOf(sample.runId) : null;
@@ -2803,18 +2861,22 @@ export async function runCampaignDispatch(
           const outcome = verdict?.outcome ?? 'indeterminate';
           const cleanExitCode =
             verdict !== null ? EXIT_CODE_BY_FINAL[verdict.outcome] : 0;
-          const classification = classifyFailure({
-            outcome,
-            ...(verdict?.stage !== undefined ? { stage: verdict.stage } : {}),
-            exitClass:
-              info.signal !== null
-                ? 'signal'
-                : info.code === cleanExitCode
-                  ? 'clean'
-                  : 'crash',
-            role: sensed?.role ?? 'subject',
-            sensorEvidence: sensed?.evidence ?? 'none',
-          });
+          const classification = publicationFailed
+            ? { class: 'instrument' as const, cause: 'capture_failed' as const }
+            : classifyFailure({
+                outcome,
+                ...(verdict?.stage !== undefined
+                  ? { stage: verdict.stage }
+                  : {}),
+                exitClass:
+                  info.signal !== null
+                    ? 'signal'
+                    : info.code === cleanExitCode
+                      ? 'clean'
+                      : 'crash',
+                role: sensed?.role ?? 'subject',
+                sensorEvidence: sensed?.evidence ?? 'none',
+              });
           if (classification.class === 'instrument') {
             block.instrumentFailed = true;
           }
@@ -2980,6 +3042,22 @@ export async function runCampaignDispatch(
             );
             return;
           }
+          if (
+            sample.attemptDir !== undefined &&
+            terminalEvents.some(
+              (event) =>
+                event.type === 'run_completed' ||
+                event.type === 'instrument_failure',
+            )
+          ) {
+            try {
+              removeAttemptStage(sample.attemptDir);
+            } catch (error) {
+              stream.write(
+                `attempt stage removal failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)}\n`,
+              );
+            }
+          }
           if (spendAmount === null) {
             const runName = sample.runId ?? '<unallocated>';
             halt(
@@ -3052,6 +3130,86 @@ export async function runCampaignDispatch(
         const evalsRoot =
           currentSnapshot?.evalsRoot ?? join(args.campaignDir, 'evals');
         const superpowersSha = campaign.refs.superpowers_by_arm[sample.arm];
+        const superpowersTree =
+          superpowersSha !== null && superpowersSha !== undefined
+            ? join(args.campaignDir, `superpowers-${superpowersSha}`)
+            : null;
+        if (containerSpawner !== null) {
+          const prepared = containerSpawner.prepareAttempt({
+            attemptId: sample.attemptId,
+            agent: surfaceOfArm(sample.arm).agent,
+            credentialName: subjectName,
+            evalsRoot,
+            superpowersTree,
+          });
+          sample.attemptDir = prepared.attemptDir;
+          const argv = buildCampaignChildArgv({
+            evalsRoot,
+            scenarioDir: join(
+              evalsRoot,
+              'scenarios',
+              scenarioOfSample(sample.sampleId),
+            ),
+            codingAgent: surfaceOfArm(sample.arm).agent,
+            codingAgentsDir: join(evalsRoot, 'coding-agents'),
+            outRoot: prepared.stagingDir,
+            os: 'linux',
+            credentialName: subjectName,
+            credentialsFile: join(evalsRoot, 'credentials.yaml'),
+            gauntletBin:
+              currentSnapshot?.gauntletBin ??
+              join(args.campaignDir, 'bin', 'gauntlet'),
+            graderModel: campaign.grader.model,
+            superpowers:
+              superpowersTree !== null
+                ? { mode: 'root', root: superpowersTree }
+                : { mode: 'none' },
+            identity: {
+              campaign_id: campaign.campaign_id,
+              comparison_id: live.block.comparison_id,
+              block_id: live.block.block_id,
+              sample_id: sample.sampleId,
+              execution_attempt_id: sample.attemptId,
+            },
+          });
+          const child = spawner.spawn({
+            command: 'bun',
+            args: argv,
+            cwd: evalsRoot,
+            // Credentials are delivered through the private, mode-0400 stage
+            // files mounted by the container, never through its spec.
+            env: { PATH: getEnv('PATH') },
+            attempt: {
+              attemptId: sample.attemptId,
+              attemptDir: prepared.attemptDir,
+              stdoutLog: prepared.stdoutLog,
+              stderrLog: prepared.stderrLog,
+              homeDir: prepared.homeDir,
+              entrypoint: join(evalsRoot, 'container', 'attempt-entrypoint.sh'),
+              mounts: buildAttemptMounts({
+                evalsRoot,
+                gauntletRoot: join(args.campaignDir, 'gauntlet'),
+                binRoot: join(args.campaignDir, 'bin'),
+                superpowersTree,
+                attemptDir: prepared.attemptDir,
+                subjectEnvFile: prepared.subjectEnvFile,
+                graderEnvFile: prepared.graderEnvFile,
+                passwdFile: prepared.passwdFile,
+                groupFile: prepared.groupFile,
+              }),
+            },
+          });
+          sample.childBirthTsMs = null;
+          if (grants.subjectEnv !== undefined) {
+            incrementInFlight(subjectName, grants.subjectEnv);
+          }
+          if (grants.graderEnv !== undefined) {
+            incrementInFlight(campaign.grader.credential, grants.graderEnv);
+          }
+          superviseSample(sample, child, live);
+          spawnFailuresByPool.set(sample.subjectPool, 0);
+          return 'spawned';
+        }
         const argv = buildCampaignChildArgv({
           evalsRoot,
           scenarioDir: join(

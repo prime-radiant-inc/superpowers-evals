@@ -271,6 +271,10 @@ export async function executeRunCommand(
         ...(campaignIdentity !== undefined
           ? { campaign: campaignIdentity }
           : {}),
+        ...(campaignIdentity !== undefined &&
+        getEnv('QUORUM_ATTEMPT_DIR') !== undefined
+          ? { campaignAttemptDir: getEnv('QUORUM_ATTEMPT_DIR') }
+          : {}),
         ...(superpowers !== undefined ? { superpowers } : {}),
         onRunDir: (dir) => {
           runDirForStop = dir;

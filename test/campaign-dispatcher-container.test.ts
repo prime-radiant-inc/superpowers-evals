@@ -1,0 +1,516 @@
+import { afterAll, expect, test } from 'bun:test';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  type DispatchRunArgs,
+  runCampaignDispatch,
+} from '../src/campaign/dispatcher.ts';
+import {
+  electWriter,
+  initJournalDb,
+  openJournalRead,
+} from '../src/campaign/journal.ts';
+import type {
+  CampaignChildSpec,
+  ChildExitInfo,
+  SpawnedCampaignChild,
+} from '../src/campaign/spawn.ts';
+import type { Campaign } from '../src/contracts/campaign/campaign.ts';
+import { campaignDigest } from '../src/contracts/campaign/digest.ts';
+import type { Credential } from '../src/contracts/credential.ts';
+import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
+import { writeAttemptManifest } from '../src/runner/manifest.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
+
+const IDENTITY = {
+  exists: () => 'alive' as const,
+  startTimeMs: () => 1,
+};
+const FIXTURE_ENV_KEYS = ['KEY_A', 'KEY_B', 'KEY_G'] as const;
+const PRIOR_ENV = new Map<string, string | undefined>(
+  FIXTURE_ENV_KEYS.map((key) => [key, getEnv(key)]),
+);
+setProcessEnv('KEY_A', 'fixture-key-a');
+setProcessEnv('KEY_B', 'fixture-key-b');
+setProcessEnv('KEY_G', 'fixture-key-g');
+afterAll(() => {
+  for (const [key, prior] of PRIOR_ENV) {
+    if (prior === undefined) deleteProcessEnv(key);
+    else setProcessEnv(key, prior);
+  }
+});
+
+class RecordingContainerSpawner {
+  readonly kind = 'container' as const;
+  readonly specs: CampaignChildSpec[] = [];
+  readonly stopped: { containerId: string; graceSeconds: number }[] = [];
+  private readonly exitCallbacks: ((info: ChildExitInfo) => void)[][] = [];
+  private readonly stdoutCallbacks: ((line: string) => void)[][] = [];
+  readonly attempts = new Map<
+    string,
+    { attemptDir: string; homeDir: string; stagingDir: string }
+  >();
+
+  prepareAttempt(args: { attemptId: string }): {
+    attemptId: string;
+    attemptDir: string;
+    stageDir: string;
+    subjectEnvFile: string;
+    graderEnvFile: string;
+    homeDir: string;
+    stdoutLog: string;
+    stderrLog: string;
+    stagingDir: string;
+    passwdFile: string;
+    groupFile: string;
+  } {
+    const attemptDir = join(this.root, args.attemptId);
+    const homeDir = join(attemptDir, 'home');
+    const stagingDir = join(attemptDir, 'staging');
+    const stageDir = join(attemptDir, '.stage');
+    mkdirSync(homeDir, { recursive: true });
+    mkdirSync(stagingDir, { recursive: true });
+    mkdirSync(stageDir, { recursive: true });
+    chmodSync(attemptDir, 0o700);
+    chmodSync(homeDir, 0o700);
+    chmodSync(stagingDir, 0o700);
+    chmodSync(stageDir, 0o700);
+    for (const path of [
+      join(stageDir, 'subject.env'),
+      join(stageDir, 'grader.env'),
+      join(stageDir, 'passwd'),
+      join(stageDir, 'group'),
+      join(attemptDir, 'stdout.log'),
+      join(attemptDir, 'stderr.log'),
+    ])
+      writeFileSync(path, '', { mode: 0o400 });
+    const prepared = {
+      attemptId: args.attemptId,
+      attemptDir,
+      stageDir,
+      subjectEnvFile: join(stageDir, 'subject.env'),
+      graderEnvFile: join(stageDir, 'grader.env'),
+      homeDir,
+      stdoutLog: join(attemptDir, 'stdout.log'),
+      stderrLog: join(attemptDir, 'stderr.log'),
+      stagingDir,
+      passwdFile: join(stageDir, 'passwd'),
+      groupFile: join(stageDir, 'group'),
+    };
+    this.attempts.set(args.attemptId, { attemptDir, homeDir, stagingDir });
+    return prepared;
+  }
+
+  private root = '';
+  setRoot(root: string): void {
+    this.root = root;
+  }
+
+  spawn(spec: CampaignChildSpec): SpawnedCampaignChild {
+    this.specs.push(spec);
+    const exits: ((info: ChildExitInfo) => void)[] = [];
+    const stdout: ((line: string) => void)[] = [];
+    this.exitCallbacks.push(exits);
+    this.stdoutCallbacks.push(stdout);
+    return {
+      handle: {
+        kind: 'container',
+        containerName: 'quorum-attempt-test',
+        containerId: 'a'.repeat(64),
+        imageDigest: `sha256:${'b'.repeat(64)}`,
+      },
+      stdoutLines: [],
+      stderrLines: [],
+      onStdoutLine: (cb) => stdout.push(cb),
+      onStderrLine: () => {},
+      onExit: (cb) => exits.push(cb),
+    };
+  }
+
+  emitAllocated(index: number, runId: string): void {
+    for (const cb of this.stdoutCallbacks[index] ?? [])
+      cb(`run_allocated: ${runId}`);
+  }
+
+  settleExit(index: number, info: ChildExitInfo): void {
+    for (const cb of this.exitCallbacks[index] ?? []) cb(info);
+  }
+
+  async stopContainer(
+    containerId: string,
+    graceSeconds: number,
+  ): Promise<'dead' | 'alive'> {
+    this.stopped.push({ containerId, graceSeconds });
+    return 'dead';
+  }
+}
+
+function campaignDocument(): Campaign {
+  const doc = {
+    schema_version: 1,
+    campaign_id: '',
+    suite: {
+      schema_version: 1,
+      name: 'testsuite',
+      kind: 'gating',
+      budget_usd: 50,
+      profile: 'release_gate_v1',
+      reserve: 1,
+      max_exposure_skew: 60,
+      profile_params: {
+        alpha: 0.05,
+        determinate_n_floor: 1,
+        completion_divergence_max: 0.5,
+        mde_by_scenario: {},
+      },
+      comparisons: [
+        { baseline: 'arm_a', treatment: 'arm_b', scenarios: ['scn'], n: 1 },
+      ],
+    },
+    refs: {
+      superpowers_by_arm: { arm_a: null, arm_b: null },
+      evals: 'e'.repeat(40),
+      gauntlet: '9'.repeat(40),
+    },
+    grader: { credential: 'grader_cred', model: 'grader-model' },
+    cells: [
+      {
+        scenario: 'scn',
+        comparison_id: 'c1',
+        arms: ['arm_a', 'arm_b'],
+        n: 1,
+        class: 'confirmatory',
+        coupling: 'arm-independent',
+        estimates_by_arm: {
+          arm_a: { duration_s: 1, cost_usd: 1, confidence: 'high' },
+          arm_b: { duration_s: 1, cost_usd: 1, confidence: 'high' },
+        },
+      },
+    ],
+    excluded_cells: [],
+    samples: [
+      {
+        sample_id: 'c1:scn:arm_a:r1',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:r1',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_a:x1',
+        cell: 'c1:scn',
+        arm: 'arm_a',
+        replicate: 1,
+      },
+      {
+        sample_id: 'c1:scn:arm_b:x1',
+        cell: 'c1:scn',
+        arm: 'arm_b',
+        replicate: 1,
+      },
+    ],
+    comparisons: [
+      { comparison_id: 'c1', baseline: 'arm_a', treatment: 'arm_b' },
+    ],
+    blocks: [
+      {
+        block_id: 'c1:scn:b1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:r1', 'c1:scn:arm_b:r1'],
+      },
+      {
+        block_id: 'c1:scn:x1',
+        comparison_id: 'c1',
+        sample_ids: ['c1:scn:arm_a:x1', 'c1:scn:arm_b:x1'],
+        slot: 'reserve',
+      },
+    ],
+    budget: {
+      usd_all_in: 50,
+      surcharge_applied: 0,
+      priced_coverage: 1,
+      surcharge_formula_version: 1,
+    },
+    registered_at: '2026-08-26T00:00:00Z',
+    registered_by: 'test',
+    digest: '',
+    contention: {
+      host_fingerprint: {
+        cpu_model: 'test',
+        cpu_cores: 4,
+        mem_bytes: 16 * 2 ** 30,
+        disk_total_bytes: 100 * 2 ** 30,
+      },
+      global_run_cap: 2,
+      thresholds: [
+        { metric: 'load1_per_core', source: 'host', op: 'gt', value: 2 },
+      ],
+      cadence_ms: 10_000,
+      sustain_k: 3,
+      coverage_n: 4,
+      mem_tolerance_pct: 10,
+      disk_tolerance_pct: 10,
+    },
+    execution_surface: [
+      {
+        name: 'arm_a',
+        agent: 'claude',
+        credential: 'cred_a',
+        auth: 'api-key',
+        api: 'anthropic',
+        model: 'm',
+        key_env_names: ['KEY_A'],
+      },
+      {
+        name: 'arm_b',
+        agent: 'claude',
+        credential: 'cred_b',
+        auth: 'api-key',
+        api: 'anthropic',
+        model: 'm',
+        key_env_names: ['KEY_B'],
+      },
+    ],
+  } as unknown as Campaign;
+  const digest = campaignDigest(doc);
+  return { ...doc, campaign_id: digest, digest };
+}
+
+function credentials(): Record<string, Credential> {
+  const cred = (env: string): Credential => ({
+    model: 'm',
+    harnesses: ['claude'],
+    api: 'anthropic',
+    auth: 'api-key',
+    api_key_env: env,
+    compat: {},
+    max_concurrency: 2,
+  });
+  return {
+    cred_a: cred('KEY_A'),
+    cred_b: cred('KEY_B'),
+    grader_cred: cred('KEY_G'),
+  };
+}
+
+function harness(): {
+  args: DispatchRunArgs;
+  campaignDir: string;
+  spawner: RecordingContainerSpawner;
+} {
+  const campaignDir = realpathSync(
+    mkdtempSync(join(tmpdir(), 'container-disp-')),
+  );
+  initJournalDb(campaignDir);
+  writeFileSync(join(campaignDir, '.ballast'), 'x');
+  writeFileSync(join(campaignDir, 'contention-telemetry.jsonl'), '');
+  mkdirSync(join(campaignDir, 'results'));
+  const doc = campaignDocument();
+  writeFileSync(join(campaignDir, 'campaign.json'), JSON.stringify(doc));
+  const writer = electWriter({
+    campaignDir,
+    clock: new FakeClock(0),
+    identity: IDENTITY,
+    campaign: doc,
+  });
+  writer.appendEvent({
+    type: 'campaign_opened',
+    payload: { campaign_id: doc.campaign_id, digest: doc.digest },
+  });
+  writer.release();
+  const spawner = new RecordingContainerSpawner();
+  spawner.setRoot(join(campaignDir, 'attempts'));
+  const args: DispatchRunArgs = {
+    campaignDir,
+    spawner,
+    clock: new FakeClock(1),
+    identity: IDENTITY,
+    credentials: credentials(),
+    resultsRoot: join(campaignDir, 'results'),
+    snapshotVerify: () => {},
+    sampler: 'disabled',
+    observeExposure: () => 1_000,
+    stream: { write: () => {} },
+    installSignals: () => () => {},
+    signalGroup: () => 'ok',
+    subjectHost: { find: () => null, kill: () => {} },
+  };
+  return { args, campaignDir, spawner };
+}
+
+async function settleMicrotasks(): Promise<void> {
+  for (let i = 0; i < 128; i += 1) await Promise.resolve();
+}
+
+function events(
+  campaignDir: string,
+): { type: string; payload: Record<string, unknown> }[] {
+  const reader = openJournalRead(campaignDir);
+  try {
+    return reader.readEvents() as {
+      type: string;
+      payload: Record<string, unknown>;
+    }[];
+  } finally {
+    reader.close();
+  }
+}
+
+test('container dispatch routes staging out-root and journals container allocation without pgid', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  expect(h.spawner.specs).toHaveLength(2);
+  const spec = h.spawner.specs[0]!;
+  const attempt = [...h.spawner.attempts.values()].find((value) =>
+    value.attemptDir.includes('arm_a:r1'),
+  )!;
+  expect(spec.args[spec.args.indexOf('--out-root') + 1]).toBe(
+    attempt.stagingDir,
+  );
+  expect(spec.attempt?.homeDir).toBe(attempt.homeDir);
+  expect(spec.attempt?.homeDir.startsWith(attempt.stagingDir)).toBe(false);
+  h.spawner.emitAllocated(0, 'run-container-a');
+  h.spawner.emitAllocated(1, 'run-container-b');
+  await settleMicrotasks();
+  const allocated = events(h.campaignDir).find(
+    (e) => e.type === 'run_allocated',
+  );
+  expect(allocated?.payload).toMatchObject({
+    container_id: 'a'.repeat(64),
+    image_digest: `sha256:${'b'.repeat(64)}`,
+  });
+  expect('pgid' in (allocated?.payload ?? {})).toBe(false);
+  expect(Object.values(spec.env).join(' ')).not.toContain('fixture-key');
+  expect(spec.args.join(' ')).not.toContain('fixture-key');
+  h.spawner.settleExit(0, { code: 0, signal: null });
+  h.spawner.settleExit(1, { code: 0, signal: null });
+  await run;
+});
+
+test('container exit publishes the verified manifest before run_completed and excludes home', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  const attemptEntry = [...h.spawner.attempts.entries()].find(([, value]) =>
+    value.attemptDir.includes('arm_a:r1'),
+  )!;
+  const attemptId = attemptEntry[0];
+  const attempt = attemptEntry[1];
+  h.spawner.emitAllocated(0, 'run-container-a');
+  h.spawner.emitAllocated(1, 'run-container-b');
+  await settleMicrotasks();
+  const runDir = join(attempt.stagingDir, 'run-container-a');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'verdict.json'), '{}');
+  writeAttemptManifest(runDir, {
+    campaign_id: campaignDocument().campaign_id,
+    comparison_id: 'c1',
+    block_id: 'c1:scn:b1',
+    sample_id: 'c1:scn:arm_a:r1',
+    execution_attempt_id: attemptId,
+  });
+  expect(existsSync(join(attempt.attemptDir, '.stage'))).toBe(true);
+  h.spawner.settleExit(0, { code: 0, signal: null });
+  await settleMicrotasks();
+  expect(
+    existsSync(join(h.args.resultsRoot!, 'run-container-a', 'verdict.json')),
+  ).toBe(true);
+  expect(existsSync(join(attempt.stagingDir, 'run-container-a'))).toBe(false);
+  expect(existsSync(join(attempt.attemptDir, '.stage'))).toBe(false);
+  expect(events(h.campaignDir).some((e) => e.type === 'run_completed')).toBe(
+    true,
+  );
+  expect(existsSync(attempt.homeDir)).toBe(true);
+  expect(
+    readFileSync(
+      join(h.args.resultsRoot!, 'run-container-a', 'manifest.json'),
+      'utf8',
+    ),
+  ).not.toContain('home');
+  h.spawner.settleExit(1, { code: 0, signal: null });
+  await run;
+});
+
+test('container exit without a manifest journals instrument_failure and retains attempt logs', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  const attempt = [...h.spawner.attempts.values()].find((value) =>
+    value.attemptDir.includes('arm_a:r1'),
+  )!;
+  h.spawner.emitAllocated(0, 'run-container-a');
+  h.spawner.emitAllocated(1, 'run-container-b');
+  await settleMicrotasks();
+  h.spawner.settleExit(0, { code: 0, signal: null });
+  await settleMicrotasks();
+  const journal = events(h.campaignDir);
+  expect(journal.some((event) => event.type === 'instrument_failure')).toBe(
+    true,
+  );
+  expect(journal.some((event) => event.type === 'run_completed')).toBe(false);
+  expect(existsSync(attempt.attemptDir)).toBe(true);
+  expect(existsSync(join(attempt.attemptDir, 'stdout.log'))).toBe(true);
+  expect(existsSync(join(h.args.resultsRoot!, 'run-container-a'))).toBe(false);
+  h.spawner.settleExit(1, { code: 0, signal: null });
+  await run;
+});
+
+test('container cancellation stops exact container id without process-group or subject-host probes', async () => {
+  const h = harness();
+  const finds: string[] = [];
+  let signalCalls = 0;
+  let handler: ((signal?: NodeJS.Signals) => void) | undefined;
+  const run = runCampaignDispatch({
+    ...h.args,
+    subjectHost: {
+      find: (dir) => {
+        finds.push(dir);
+        return null;
+      },
+      kill: () => {},
+    },
+    signalGroup: () => {
+      signalCalls += 1;
+      return 'ok';
+    },
+    installSignals: (cb) => {
+      handler = cb;
+      return () => {};
+    },
+  });
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
+    flag: 'wx',
+  });
+  handler?.('SIGTERM');
+  await settleMicrotasks();
+  expect(h.spawner.stopped).toHaveLength(2);
+  expect(
+    h.spawner.stopped.every(
+      (entry) =>
+        entry.containerId === 'a'.repeat(64) && entry.graceSeconds === 5,
+    ),
+  ).toBe(true);
+  expect(signalCalls).toBe(0);
+  expect(finds).toHaveLength(0);
+  await run;
+});
