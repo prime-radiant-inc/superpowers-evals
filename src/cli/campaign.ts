@@ -783,6 +783,7 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import { loadFrozenCampaign } from '../campaign/campaign-document.ts';
+import type { ContainerStopper } from '../campaign/container-spawner.ts';
 import { clockNowMs, hostStatsProbeForCli } from '../campaign/host-stats.ts';
 import { openJournalRead } from '../campaign/journal.ts';
 import { realProcessIdentityProbe } from '../campaign/locks.ts';
@@ -803,6 +804,7 @@ import {
 } from '../campaign/report.ts';
 import { readSampleEvidence } from '../campaign/report-evidence.ts';
 import { resolveCampaignResultsRoot } from '../campaign/results-root.ts';
+import type { ChildSpawner } from '../campaign/spawn.ts';
 import {
   type PricingOverride,
   PricingOverrideSchema,
@@ -1020,8 +1022,22 @@ export function campaignRegister(
     return verbFailure(err);
   }
 }
+export interface CampaignRunOptions {
+  /** Attempt-spawner seam: the appliance worker injects the per-attempt
+   *  container spawner; the raw verb keeps the process-spawner default
+   *  (local development and tests). */
+  readonly spawner?: ChildSpawner;
+  /** Exact-ID container stop seam for journaled container allocations.
+   *  Deliberately SEPARATE from the spawner (never inferred from it): the
+   *  cancel-request precedence branch never spawns, and the worker passes
+   *  one ContainerAttemptSpawner explicitly as both. */
+  readonly containerStop?: ContainerStopper;
+}
 
-export async function campaignRun(rawCampaignDir: string): Promise<number> {
+export async function campaignRun(
+  rawCampaignDir: string,
+  opts: CampaignRunOptions = {},
+): Promise<number> {
   // Canonicalized at the boundary: the engine hands this path to detached
   // children that run with a different working directory, so a relative
   // argument would name a different directory there.
@@ -1046,6 +1062,9 @@ export async function campaignRun(rawCampaignDir: string): Promise<number> {
       campaignDir,
       clock: new RealClock(),
       identity: realProcessIdentityProbe,
+      ...(opts.containerStop !== undefined
+        ? { containerStop: opts.containerStop }
+        : {}),
     });
     if (!result.cancelled) {
       process.stderr.write(
@@ -1079,6 +1098,10 @@ export async function campaignRun(rawCampaignDir: string): Promise<number> {
       evalsCheckout: checkouts.evalsCheckout,
       gauntletCheckout: checkouts.gauntletCheckout,
       superpowersCheckout: checkouts.superpowersCheckout,
+      ...(opts.spawner !== undefined ? { spawner: opts.spawner } : {}),
+      ...(opts.containerStop !== undefined
+        ? { containerStop: opts.containerStop }
+        : {}),
     });
     process.stdout.write(
       `campaign run finished: ${outcome.status}${
