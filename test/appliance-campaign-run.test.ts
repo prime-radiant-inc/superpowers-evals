@@ -356,6 +356,39 @@ test('detached spawn records an asynchronous child error without an unhandled ev
   expect(() => writeSync(stderrFd, 'after-close')).toThrow();
 });
 
+test('detached spawn records a stable asynchronous failure for a nonterminal job', async () => {
+  const fx = fixture();
+  let stdoutFd = -1;
+  let stderrFd = -1;
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    unref(): void;
+  };
+  child.pid = 4242;
+  child.unref = () => {};
+  spawnDetachedWorker(fx.loaded, fx.jobId, (_command, _args, options) => {
+    const stdio = options?.stdio as [unknown, number, number];
+    stdoutFd = stdio[1];
+    stderrFd = stdio[2];
+    queueMicrotask(() =>
+      child.emit('error', new Error('hostile asynchronous secret')),
+    );
+    return child as never;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const job = readJob(fx.loaded, fx.jobId);
+  expect(job.status).toBe('failed');
+  expect(job.error).toEqual({
+    code: 'config_invalid',
+    step: 'spawn',
+    message: 'detached worker spawn failed',
+  });
+  expect(job.error?.message ?? '').not.toContain('hostile asynchronous secret');
+  expect(() => writeSync(stdoutFd, 'after-close')).toThrow();
+  expect(() => writeSync(stderrFd, 'after-close')).toThrow();
+});
+
 test('detached spawn sanitizes synchronous hostile errors and closes descriptors', () => {
   const fx = fixture();
   let stdoutFd = -1;
