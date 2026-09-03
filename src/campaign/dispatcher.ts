@@ -2075,6 +2075,7 @@ export async function runCampaignDispatch(
               ? {
                   attempt_id: sample.attemptId,
                   run_id: runId,
+                  container_name: child.handle.containerName,
                   container_id: child.handle.containerId,
                   image_digest: child.handle.imageDigest,
                   ...keyGrantsPayload(sample.grants),

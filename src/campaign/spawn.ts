@@ -16,6 +16,7 @@ export type CampaignChildHandle =
   | { readonly kind: 'process'; readonly pgid: number }
   | {
       readonly kind: 'container';
+      readonly containerName: string;
       readonly containerId: string;
       readonly imageDigest: string;
     };

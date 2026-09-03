@@ -146,6 +146,37 @@ test('killJournaledPgids: every journaled pgid without a terminal is TERMed and 
   ]);
 });
 
+test('killJournaledPgids: an unresolved container is reported as unverified', async () => {
+  const loud: string[] = [];
+  const report = await killJournaledPgids({
+    events: [
+      ev('attempt_created', { sample_id: 's1', attempt_id: 'container-a1' }),
+      ev('run_allocated', {
+        attempt_id: 'container-a1',
+        run_id: 'container-run-1',
+        container_name: 'quorum-campaign-c1-attempt-a1',
+        container_id: 'a'.repeat(64),
+        image_digest: `sha256:${'b'.repeat(64)}`,
+        key_grants: [],
+      }),
+    ],
+    campaignId: CAMPAIGN_ID,
+    resultsRoot: RESULTS_ROOT,
+    subjectHost: NO_SUBJECT_HOST,
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(report.unverifiedContainers).toEqual([
+    {
+      attempt_id: 'container-a1',
+      run_id: 'container-run-1',
+      container_name: 'quorum-campaign-c1-attempt-a1',
+      container_id: 'a'.repeat(64),
+      image_digest: `sha256:${'b'.repeat(64)}`,
+    },
+  ]);
+  expect(loud.join('')).toMatch(/recorded, not verified/);
+});
+
 test('killJournaledPgids: a recycled pgid and an uninspectable group are reclaimed-without-kill — never signaled blind (R-RCV-1)', async () => {
   const run = async (
     commandLine: (pgid: number) => string | null,

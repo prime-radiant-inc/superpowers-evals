@@ -97,6 +97,7 @@ export const RunAllocatedContainerPayload = z
   .object({
     attempt_id: z.string().min(1),
     run_id: z.string().min(1),
+    container_name: z.string().min(1),
     container_id: ContainerIdSchema,
     image_digest: ImageDigestSchema,
     key_grants: z.array(KeyGrantEntrySchema).max(2),
@@ -109,6 +110,14 @@ export const RunAllocatedContainerPayload = z
         code: z.ZodIssueCode.custom,
         path: ['key_grants'],
         message: 'at most one grant entry per role',
+      });
+    }
+    const envs = payload.key_grants.map((g) => g.env);
+    if (new Set(envs).size !== envs.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['key_grants'],
+        message: 'grant env names must be unique',
       });
     }
   });
