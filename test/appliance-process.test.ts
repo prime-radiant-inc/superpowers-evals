@@ -731,6 +731,8 @@ test('detachedWorkerEnv only carries the minimal appliance worker contract', () 
     HOME: cfg.config.root,
     EVALS_APPLIANCE_CONFIG: cfg.configPath,
     EVALS_APPLIANCE_JOB_ID: 'job-7',
+    GAUNTLET_ROOT: cfg.config.gauntlet.path,
+    SUPERPOWERS_ROOT: cfg.config.superpowers.path,
   });
 });
 
@@ -746,6 +748,8 @@ test('detachedWorkerEnv falls back to a stable PATH when the caller did not prov
     HOME: cfg.config.root,
     EVALS_APPLIANCE_CONFIG: cfg.configPath,
     EVALS_APPLIANCE_JOB_ID: 'job-8',
+    GAUNTLET_ROOT: cfg.config.gauntlet.path,
+    SUPERPOWERS_ROOT: cfg.config.superpowers.path,
   });
 });
 
