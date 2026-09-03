@@ -9,8 +9,8 @@ const nodeRequire = createRequire(import.meta.url);
 const ANTHROPIC_VERSION = '2023-06-01';
 const GRADER_API_KEY = 'fake-grader-api-key';
 const MODEL = 'claude-fake-grader-0';
-const PROVIDER_CONNECT_ATTEMPTS = 8;
-const PROVIDER_CONNECT_RETRY_DELAY_MS = 25;
+const PROVIDER_CONNECT_ATTEMPTS = 20;
+const PROVIDER_CONNECT_RETRY_DELAY_MS = 50;
 
 // The full repository suite can leave a freshly-created Bun server waiting
 // for its first accept window. Keep the retry bounded and give it room to
@@ -226,6 +226,14 @@ async function withProviderConnectionRetry<T>(
   throw new Error('provider connection retry loop did not return');
 }
 
+async function fetchProvider(
+  input: URL,
+  init?: RequestInit,
+  fetchImpl: FetchImplementation = fetch,
+): Promise<Response> {
+  return withProviderConnectionRetry(() => fetchImpl(input, init));
+}
+
 const defaultSdkRuntime: SdkRuntime = {
   resolve: () => nodeRequire.resolve('@anthropic-ai/sdk'),
   load: (resolvedPath) => nodeRequire(resolvedPath),
@@ -274,8 +282,9 @@ function makeTransport(
   return {
     usesSdk: false,
     send: async (body) => {
-      const response = await withProviderConnectionRetry(() =>
-        fetchImpl(new URL('/v1/messages', baseUrl), {
+      const response = await fetchProvider(
+        new URL('/v1/messages', baseUrl),
+        {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -283,7 +292,8 @@ function makeTransport(
             'anthropic-version': ANTHROPIC_VERSION,
           },
           body: JSON.stringify(body),
-        }),
+        },
+        fetchImpl,
       );
       expect(response.status).toBe(200);
       return parseToolResponse(await response.json());
@@ -684,19 +694,21 @@ test('treats malformed messages and tool entries as unrecognized shapes', async 
 
 test('returns 404 for every route except POST /v1/messages', async () => {
   await withProvider(async (provider) => {
-    const getMessages = await fetch(new URL('/v1/messages', provider.url), {
-      method: 'GET',
-    });
+    const getMessages = await fetchProvider(
+      new URL('/v1/messages', provider.url),
+      { method: 'GET' },
+    );
     expect(getMessages.status).toBe(404);
 
-    const otherPath = await fetch(new URL('/v1/other', provider.url), {
+    const otherPath = await fetchProvider(new URL('/v1/other', provider.url), {
       method: 'POST',
     });
     expect(otherPath.status).toBe(404);
 
-    const trailingSlash = await fetch(new URL('/v1/messages/', provider.url), {
-      method: 'POST',
-    });
+    const trailingSlash = await fetchProvider(
+      new URL('/v1/messages/', provider.url),
+      { method: 'POST' },
+    );
     expect(trailingSlash.status).toBe(404);
   });
 });
