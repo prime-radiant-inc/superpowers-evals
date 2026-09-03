@@ -8,6 +8,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -17,6 +19,8 @@ import { basename, join, resolve } from 'node:path';
 import { RunnerError } from '../src/runner/errors.ts';
 import { runScenario } from '../src/runner/index.ts';
 import {
+  ATTEMPT_MANIFEST_FS,
+  type AttemptManifestFsOps,
   parseAttemptManifest,
   writeAttemptManifest,
 } from '../src/runner/manifest.ts';
@@ -31,6 +35,12 @@ const identity = {
 
 function tempRunDir(): string {
   return mkdtempSync(join(tmpdir(), 'manifest-'));
+}
+
+function manifestFs(
+  overrides: Partial<AttemptManifestFsOps>,
+): AttemptManifestFsOps {
+  return { ...ATTEMPT_MANIFEST_FS, ...overrides };
 }
 
 test('manifest lists sorted artifacts with exact digests and derived run id', () => {
@@ -104,6 +114,173 @@ test('manifest publication replaces stale output privately and removes its stage
     expect(JSON.parse(readFileSync(manifestPath, 'utf8')).run_id).toBe(
       basename(runDir),
     );
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('pre-publication validation removes a stale final manifest before refusing', () => {
+  const runDir = tempRunDir();
+  const outside = join(tmpdir(), `manifest-secret-${process.pid}`);
+  writeFileSync(join(runDir, 'manifest.json'), 'old blessed output\n');
+  writeFileSync(outside, 'secret\n');
+  symlinkSync(outside, join(runDir, 'verdict.json'));
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
+      'symlinked artifact refused: verdict.json',
+    );
+    expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(outside, { force: true });
+  }
+});
+
+test('a failure after rename removes the installed final and preserves the original error', () => {
+  const runDir = tempRunDir();
+  writeFileSync(join(runDir, 'verdict.json'), 'bytes\n');
+  const events: string[] = [];
+  const ops = manifestFs({
+    renameSync(oldPath, newPath) {
+      renameSync(oldPath, newPath);
+      throw new Error('rename reported failure after committing');
+    },
+    unlinkSync(path) {
+      events.push(`unlink:${basename(path)}`);
+      ATTEMPT_MANIFEST_FS.unlinkSync(path);
+    },
+    fsyncSync(fd) {
+      if (ATTEMPT_MANIFEST_FS.fstatSync(fd).isDirectory()) {
+        events.push('fsync-dir');
+      }
+      ATTEMPT_MANIFEST_FS.fsyncSync(fd);
+    },
+  });
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow(
+      'rename reported failure after committing',
+    );
+    expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
+    const finalCleanupIndex = events.indexOf('unlink:manifest.json');
+    expect(finalCleanupIndex).toBeGreaterThanOrEqual(0);
+    expect(events.slice(finalCleanupIndex + 1)).toContain('fsync-dir');
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('artifact replacement after discovery cannot redirect the pinned digest', () => {
+  const runDir = tempRunDir();
+  const verdict = join(realpathSync(runDir), 'verdict.json');
+  const outside = join(tmpdir(), `manifest-secret-${process.pid}`);
+  writeFileSync(verdict, 'original bytes\n');
+  writeFileSync(outside, 'outside secret\n');
+  const ops = manifestFs({
+    openSync(path, flags, mode) {
+      const fd = ATTEMPT_MANIFEST_FS.openSync(path, flags, mode);
+      if (path.endsWith('/verdict.json')) {
+        rmSync(path);
+        symlinkSync(outside, path);
+      }
+      return fd;
+    },
+  });
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow(
+      'artifact changed while it was being read',
+    );
+    expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
+    expect(readFileSync(outside, 'utf8')).toBe('outside secret\n');
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(outside, { force: true });
+  }
+});
+
+test('intermediate directory replacement cannot redirect artifact traversal', () => {
+  const runDir = tempRunDir();
+  const nested = join(realpathSync(runDir), 'nested');
+  const outside = join(tmpdir(), `manifest-outside-${process.pid}`);
+  mkdirSync(nested);
+  mkdirSync(outside);
+  writeFileSync(join(nested, 'verdict.json'), 'original\n');
+  writeFileSync(join(outside, 'verdict.json'), 'outside\n');
+  const ops = manifestFs({
+    openSync(path, flags, mode) {
+      if (path.endsWith('/nested')) {
+        renameSync(nested, `${nested}.real`);
+        symlinkSync(outside, nested);
+      }
+      return ATTEMPT_MANIFEST_FS.openSync(path, flags, mode);
+    },
+  });
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow();
+    expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('nested directory entries are fsynced before manifest publication', () => {
+  const runDir = tempRunDir();
+  const nested = join(runDir, 'nested');
+  mkdirSync(nested);
+  writeFileSync(join(nested, 'verdict.json'), 'bytes\n');
+  const directoryInodes = new Set([
+    Number(lstatSync(runDir).ino),
+    Number(lstatSync(nested).ino),
+  ]);
+  const syncedDirectories: number[] = [];
+  const ops = manifestFs({
+    fsyncSync(fd) {
+      const stat = ATTEMPT_MANIFEST_FS.fstatSync(fd);
+      if (stat.isDirectory()) syncedDirectories.push(Number(stat.ino));
+      ATTEMPT_MANIFEST_FS.fsyncSync(fd);
+    },
+  });
+
+  try {
+    writeAttemptManifest(runDir, identity, ops);
+    expect(new Set(syncedDirectories)).toEqual(directoryInodes);
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('failed stage cleanup is followed by run-directory fsync', () => {
+  const runDir = tempRunDir();
+  writeFileSync(join(runDir, 'verdict.json'), 'bytes\n');
+  const events: string[] = [];
+  const ops = manifestFs({
+    writeSync() {
+      throw new Error('stage write failed');
+    },
+    unlinkSync(path) {
+      events.push(`unlink:${path}`);
+      ATTEMPT_MANIFEST_FS.unlinkSync(path);
+    },
+    fsyncSync(fd) {
+      if (ATTEMPT_MANIFEST_FS.fstatSync(fd).isDirectory())
+        events.push('fsync-dir');
+      ATTEMPT_MANIFEST_FS.fsyncSync(fd);
+    },
+  });
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow(
+      'stage write failed',
+    );
+    const cleanupIndex = events.findIndex((event) =>
+      event.endsWith('.manifest.json.tmp'),
+    );
+    expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+    expect(events.slice(cleanupIndex + 1)).toContain('fsync-dir');
   } finally {
     rmSync(runDir, { recursive: true, force: true });
   }
