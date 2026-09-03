@@ -392,6 +392,7 @@ test('createJob persists the live credential triple for run and run-all', () => 
       credential_selection: FIXTURE_LIVE_SELECTION,
       credential_scope: FIXTURE_LIVE_SCOPE,
       credential_scope_source_evals_sha: FIXTURE_SOURCE_EVALS_SHA,
+      campaign: null,
     });
   }
 });
@@ -407,6 +408,7 @@ test('createJob persists the asserted empty scope for prepare', () => {
     credential_selection: null,
     credential_scope: EMPTY_CREDENTIAL_SCOPE,
     credential_scope_source_evals_sha: null,
+    campaign: null,
   });
 });
 
@@ -425,6 +427,45 @@ test('createJob persists all-null credential fields for import', () => {
   expect(record['credential_selection']).toBe(null);
   expect(record['credential_scope']).toBe(null);
   expect(record['credential_scope_source_evals_sha']).toBe(null);
+  expect(Object.hasOwn(record, 'campaign')).toBe(true);
+  expect(record['campaign']).toBe(null);
+});
+
+test('campaign-run job record persists the campaign block and empty credential authority', () => {
+  const cfg = loaded();
+  const campaign = {
+    campaign_id: 'campaign-20260903',
+    campaign_dir: '/var/lib/quorum/campaigns/campaign-20260903',
+    evals_sha: 'a'.repeat(40),
+    helper_sha: 'b'.repeat(40),
+    image_ref: 'quorum:campaign',
+    image_digest: `sha256:${'c'.repeat(64)}`,
+  };
+  const job = createJob(cfg, {
+    kind: 'campaign-run',
+    superpowersRef: campaign.evals_sha,
+    argv: ['evals-appliance', 'campaign', 'run', campaign.campaign_id],
+    requester: { agent: 'codex', thread: null, task: null },
+    credentialSelection: null,
+    credentialScope: EMPTY_CREDENTIAL_SCOPE,
+    credentialScopeSourceEvalsSha: null,
+    campaign,
+  });
+
+  expect(job.status).toBe('preflighting');
+  expect(job.credential_selection).toBe(null);
+  expect(job.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+  expect(job.credential_scope_source_evals_sha).toBe(null);
+  expect(job.campaign).toEqual(campaign);
+  expect(job.request.superpowers_ref).toBe(campaign.evals_sha);
+  expect(persistedRecord(cfg, job.job_id)).toMatchObject({
+    kind: 'campaign-run',
+    campaign,
+    credential_selection: null,
+    credential_scope: EMPTY_CREDENTIAL_SCOPE,
+    credential_scope_source_evals_sha: null,
+  });
+  expect(readJob(cfg, job.job_id).campaign).toEqual(campaign);
 });
 
 test('the persisted credential fields carry no filesystem paths', () => {

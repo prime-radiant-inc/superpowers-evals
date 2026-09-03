@@ -100,6 +100,7 @@ export const ApplianceConfigSchema = z.object({
     name: z.string(),
     results_root: z.string(),
   }),
+  live_spend_lock: z.string().optional(),
 });
 export type ApplianceConfig = z.infer<typeof ApplianceConfigSchema>;
 
@@ -132,8 +133,19 @@ export const ApplianceCommandKindSchema = z.enum([
   'run-all',
   'import',
   'prune',
+  'campaign-run',
 ]);
 export type ApplianceCommandKind = z.infer<typeof ApplianceCommandKindSchema>;
+
+export const JobCampaignSchema = z.object({
+  campaign_id: z.string().min(1),
+  campaign_dir: z.string().min(1),
+  evals_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  helper_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  image_ref: z.string().min(1),
+  image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+});
+export type JobCampaign = z.infer<typeof JobCampaignSchema>;
 
 export const REV_RECOVERY_STATUSES = [
   'recorded',
@@ -254,6 +266,7 @@ export const JobRecordSchema = z.object({
   credential_selection: CredentialSelectionSchema.nullable().default(null),
   credential_scope: CredentialScopeSchema.nullable().default(null),
   credential_scope_source_evals_sha: z.string().nullable().default(null),
+  campaign: JobCampaignSchema.nullable().default(null),
   refs: RefSnapshotSchema.nullable(),
   credential_bundle: JobCredentialBundleSchema.nullable(),
   container: JobContainerSchema.nullable(),
