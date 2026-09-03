@@ -36,6 +36,8 @@ import {
 } from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { ATIF_SCHEMA_VERSION, type AtifTrajectory } from '../src/atif/types.ts';
+import { validateTrajectory } from '../src/atif/validate.ts';
 import {
   type ContainerStopper,
   containerNameForAttempt,
@@ -50,9 +52,13 @@ import type {
   SpawnedCampaignChild,
 } from '../src/campaign/spawn.ts';
 import { campaignRun } from '../src/cli/campaign.ts';
-import type { Campaign } from '../src/contracts/campaign/campaign.ts';
-import { CampaignSchema } from '../src/contracts/campaign/campaign.ts';
+import {
+  type Campaign,
+  CampaignIdentitySchema,
+  CampaignSchema,
+} from '../src/contracts/campaign/campaign.ts';
 import { campaignDigest } from '../src/contracts/campaign/digest.ts';
+import { FinalVerdictSchema } from '../src/contracts/verdict.ts';
 import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
 import {
   parseAttemptManifest,
@@ -560,25 +566,42 @@ class FakeSpawner implements ChildSpawner {
     const runId = `run-inject-spawn-${randomUUID()}`;
     const runDir = join(attempt.attemptDir, 'staging', runId);
     mkdirSync(runDir, { recursive: true });
-    writeFileSync(
-      join(runDir, 'verdict.json'),
-      JSON.stringify({
-        final: 'fail',
-        final_reason: 'fixture',
-        economics: { total_est_cost_usd: 0.25 },
-      }),
-    );
-    writeFileSync(
-      join(runDir, 'trajectory.json'),
-      JSON.stringify({ steps: [{ timestamp: '2026-08-29T00:00:00.000Z' }] }),
-    );
-    writeAttemptManifest(runDir, {
-      campaign_id: this.campaign.campaign_id,
-      comparison_id: 'c1',
-      block_id: 'c1:scn:x1',
-      sample_id: 'c1:scn:arm_a:x1',
-      execution_attempt_id: attempt.attemptId,
+    const verdict = FinalVerdictSchema.parse({
+      schema: 1,
+      final: 'fail',
+      final_reason: 'fixture',
+      gauntlet: null,
+      checks: [],
+      error: null,
+      economics: { total_est_cost_usd: 0.25 },
     });
+    const trajectory: AtifTrajectory = {
+      schema_version: ATIF_SCHEMA_VERSION,
+      agent: { name: 'fixture-agent', version: '1' },
+      steps: [
+        {
+          step_id: 1,
+          source: 'agent',
+          timestamp: '2026-08-29T00:00:00.000Z',
+          message: 'fixture',
+        },
+      ],
+    };
+    const trajectoryValidation = validateTrajectory(trajectory);
+    if (!trajectoryValidation.ok) {
+      throw new Error(trajectoryValidation.errors.join('; '));
+    }
+    writeFileSync(join(runDir, 'verdict.json'), JSON.stringify(verdict));
+    writeFileSync(join(runDir, 'trajectory.json'), JSON.stringify(trajectory));
+    const identityFlag = spec.args.indexOf('--campaign-identity');
+    const identityJson = spec.args[identityFlag + 1];
+    if (identityFlag < 0 || identityJson === undefined) {
+      throw new Error('missing campaign identity argument');
+    }
+    const campaignIdentity = CampaignIdentitySchema.parse(
+      JSON.parse(identityJson),
+    );
+    writeAttemptManifest(runDir, campaignIdentity);
     this.manifests.push(
       parseAttemptManifest(readFileSync(join(runDir, 'manifest.json'), 'utf8')),
     );
@@ -761,8 +784,19 @@ test('campaignRun forwards an injected spawner to the dispatcher — the remaini
     expect(spawned.child.handle.imageDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     const manifest = fakeSpawner.manifests[0];
     if (manifest === undefined) throw new Error('missing attempt manifest');
-    expect(manifest.campaign.campaign_id).toBe(fixture.campaign.campaign_id);
-    expect(manifest.campaign.execution_attempt_id).toBe(attempt.attemptId);
+    const identityFlag = spawned.spec.args.indexOf('--campaign-identity');
+    const identityJson = spawned.spec.args[identityFlag + 1];
+    if (identityFlag < 0 || identityJson === undefined) {
+      throw new Error('missing campaign identity argument');
+    }
+    const deliveredIdentity = CampaignIdentitySchema.parse(
+      JSON.parse(identityJson),
+    );
+    expect(manifest.campaign).toEqual(deliveredIdentity);
+    expect(deliveredIdentity.campaign_id).toBe(fixture.campaign.campaign_id);
+    expect(deliveredIdentity.block_id).toBe('c1:scn:b2');
+    expect(deliveredIdentity.sample_id).toBe('c1:scn:arm_a:r2');
+    expect(deliveredIdentity.execution_attempt_id).toBe(attempt.attemptId);
     expect(manifest.run_id).toBe(spawned.runId);
     expect(
       journaledTypes(fixture.dir, 2).filter((t) => t === 'run_completed'),
