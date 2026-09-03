@@ -171,9 +171,11 @@ function campaignActionFixture(): {
     loadStateConfig: () => fx.loaded,
     loadCredentialConfig: () => fx.loaded,
     commandRunner: runner,
-    spawnDetachedWorker: (_loaded, jobId) => {
+    spawnDetachedWorker: (_loaded, jobId, onSpawn) => {
       spawned.push(jobId);
-      return { host_pid: 4242, host_pgid: 4242 };
+      const identity = { host_pid: 4242, host_pgid: 4242 };
+      onSpawn?.(identity);
+      return identity;
     },
     runWorker: async () => undefined,
   });
@@ -458,6 +460,31 @@ test('campaign action refuses a credential bundle fault before creating a job', 
   expect(fx.spawned).toEqual([]);
 });
 
+for (const [label, output] of [
+  ['a failing git HEAD probe', { status: 1, stdout: '', stderr: 'git failed' }],
+  [
+    'a malformed git HEAD probe',
+    { status: 0, stdout: 'not-a-sha\n', stderr: '' },
+  ],
+] as const) {
+  test(`campaign action refuses ${label} before creating a job`, async () => {
+    const fx = campaignActionFixture();
+    fx.runner.run = (command, args) => {
+      if (command === 'docker') {
+        return { status: 0, stdout: `${DIGEST}\n`, stderr: '' };
+      }
+      if (command === 'git' && args.includes('rev-parse')) return output;
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    expect(fx.jobIds()).toEqual([]);
+    await expect(
+      fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+    ).rejects.toThrow();
+    expect(fx.jobIds()).toEqual([]);
+    expect(fx.spawned).toEqual([]);
+  });
+}
+
 test('campaign action marks its single job failed when detached identity persistence fails', async () => {
   const fx = campaignActionFixture();
   fx.actions = createApplianceActions({
@@ -713,6 +740,61 @@ test('detached spawn returns pid identity and appends child output to private lo
   );
   expect(() => writeSync(stdoutFd, 'after-close')).toThrow();
   expect(() => writeSync(stderrFd, 'after-close')).toThrow();
+});
+
+test('detached spawn invokes identity persistence before unref', () => {
+  const fx = fixture();
+  const order: string[] = [];
+  const identity = spawnDetachedWorker(
+    fx.loaded,
+    fx.jobId,
+    () =>
+      ({
+        pid: 4242,
+        once: () => undefined,
+        unref: () => order.push('unref'),
+      }) as never,
+    (processInfo) => {
+      order.push('callback');
+      expect(processInfo).toEqual({ host_pid: 4242, host_pgid: 4242 });
+    },
+  );
+  expect(identity).toEqual({ host_pid: 4242, host_pgid: 4242 });
+  expect(order).toEqual(['callback', 'unref']);
+});
+
+test('detached spawn terminates and keeps a referenced child when identity persistence throws', () => {
+  const fx = fixture();
+  let unrefCount = 0;
+  let terminationCount = 0;
+  let thrown: unknown;
+  try {
+    spawnDetachedWorker(
+      fx.loaded,
+      fx.jobId,
+      () =>
+        ({
+          pid: 4242,
+          once: () => undefined,
+          unref: () => {
+            unrefCount += 1;
+          },
+        }) as never,
+      () => {
+        throw new Error('persistence secret');
+      },
+      () => {
+        terminationCount += 1;
+      },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ApplianceError);
+  expect((thrown as Error).message).toBe('detached worker spawn failed');
+  expect((thrown as Error).message).not.toContain('persistence secret');
+  expect(unrefCount).toBe(0);
+  expect(terminationCount).toBe(1);
 });
 
 test('detached spawn records an asynchronous child error without an unhandled event', async () => {

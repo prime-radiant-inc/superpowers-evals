@@ -47,6 +47,7 @@ import { inspectLock } from './locks.ts';
 import { prepare } from './preflight.ts';
 import {
   cancelJob,
+  type DetachedSpawnIdentityCallback,
   type LiveProcessInfo,
   runWorker,
   spawnDetachedWorker,
@@ -554,7 +555,9 @@ function resolveCampaignDirectory(
       `campaign not found under the evals checkout: ${selector}`,
     );
   }
+  const canonicalRoot = realpathSync(campaignsRoot);
   const canonical = realpathSync(campaignDir);
+  assertInsideRoot(canonicalRoot, canonical);
   const documentStats = lstatSync(join(canonical, 'campaign.json'), {
     throwIfNoEntry: false,
   });
@@ -616,6 +619,7 @@ export interface ApplianceActionDeps {
   readonly spawnDetachedWorker: (
     loaded: LoadedApplianceStateConfig,
     jobId: string,
+    onSpawn?: DetachedSpawnIdentityCallback,
   ) => LiveProcessInfo;
   readonly runWorker: (
     loaded: LoadedApplianceConfig,
@@ -805,18 +809,43 @@ export function createApplianceActions(
       });
 
       try {
-        const identity = requireDetachedIdentity(
-          deps.spawnDetachedWorker(loaded, job.job_id),
-        );
-        updateJob(loaded, job.job_id, (current) => ({
-          ...current,
-          process: {
-            host_pid: identity.host_pid,
-            host_pgid: identity.host_pgid,
-            container_pid: null,
-            container_pgid: null,
+        let persistedIdentity: SafeDetachedIdentity | null = null;
+        const returnedIdentity = deps.spawnDetachedWorker(
+          loaded,
+          job.job_id,
+          (processInfo) => {
+            const identity = requireDetachedIdentity(processInfo);
+            updateJob(loaded, job.job_id, (current) => ({
+              ...current,
+              process: {
+                host_pid: identity.host_pid,
+                host_pgid: identity.host_pgid,
+                container_pid: null,
+                container_pgid: null,
+              },
+            }));
+            persistedIdentity = identity;
           },
-        }));
+        );
+        const returned = requireDetachedIdentity(returnedIdentity);
+        const persisted = persistedIdentity as SafeDetachedIdentity | null;
+        if (persisted === null) {
+          throw new ApplianceError(
+            'config_invalid',
+            'spawn',
+            'detached worker did not persist its host pid and pgid before return',
+          );
+        }
+        if (
+          persisted.host_pid !== returned.host_pid ||
+          persisted.host_pgid !== returned.host_pgid
+        ) {
+          throw new ApplianceError(
+            'config_invalid',
+            'spawn',
+            'detached worker returned a different host pid and pgid',
+          );
+        }
       } catch (error) {
         try {
           updateJob(loaded, job.job_id, (current) => {
@@ -866,7 +895,8 @@ function productionActionDeps(): ApplianceActionDeps {
     loadStateConfig: (options) => loadStateConfig(undefined, options),
     loadCredentialConfig: (options) => loadCredentialConfig(undefined, options),
     commandRunner: defaultCommandRunner,
-    spawnDetachedWorker,
+    spawnDetachedWorker: (loaded, jobId, onSpawn) =>
+      spawnDetachedWorker(loaded, jobId, undefined, onSpawn),
     runWorker,
   };
 }
