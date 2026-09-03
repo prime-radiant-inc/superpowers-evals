@@ -22,6 +22,17 @@ export interface PublishAttemptArgs {
   readonly attemptDir: string;
   readonly resultsRoot: string;
   readonly expectedAttemptId: string;
+  /** Journaled allocation, when observed; checked before the rename. */
+  readonly expectedRunId?: string | undefined;
+  /** Test seam for the post-rename durability cut; production uses fs. */
+  readonly fsOps?: AttemptPublishFsOps | undefined;
+}
+
+export interface AttemptPublishFsOps {
+  readonly renameSync: (oldPath: string, newPath: string) => void;
+  readonly openSync: (path: string, flags: string) => number;
+  readonly fsyncSync: (fd: number) => void;
+  readonly closeSync: (fd: number) => void;
 }
 
 function refusal(message: string): AttemptPublishError {
@@ -108,6 +119,12 @@ function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
  * The worker has already exited before this host-side operation starts; the
  * manifest is therefore the publication boundary for the verified artifacts. */
 export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
+  const fsOps: AttemptPublishFsOps = args.fsOps ?? {
+    renameSync,
+    openSync,
+    fsyncSync,
+    closeSync,
+  };
   if (args.expectedAttemptId.length === 0) {
     throw refusal('expected attempt id is required');
   }
@@ -138,6 +155,11 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   const runId = entries[0];
   if (runId === undefined) {
     throw refusal('attempt staging has no run directory');
+  }
+  if (args.expectedRunId !== undefined && runId !== args.expectedRunId) {
+    throw refusal(
+      `staging run-id ${runId} disagrees with the journaled allocation ${args.expectedRunId}`,
+    );
   }
   const runDir = join(staging, runId);
   let runStats: ReturnType<typeof lstatSync>;
@@ -257,7 +279,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   }
 
   try {
-    renameSync(runDir, destination);
+    fsOps.renameSync(runDir, destination);
   } catch (error: unknown) {
     throw refusal(
       `publication rename failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -266,11 +288,11 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
 
   let resultsFd: number;
   try {
-    resultsFd = openSync(args.resultsRoot, 'r');
+    resultsFd = fsOps.openSync(args.resultsRoot, 'r');
     try {
-      fsyncSync(resultsFd);
+      fsOps.fsyncSync(resultsFd);
     } finally {
-      closeSync(resultsFd);
+      fsOps.closeSync(resultsFd);
     }
   } catch (error: unknown) {
     throw refusal(

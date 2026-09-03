@@ -97,8 +97,19 @@ function hangRunDir(outRoot: string): string | undefined {
   return undefined;
 }
 
-async function runStopped(campaign: boolean): Promise<string> {
-  const outRoot = mkdtempSync(join(tmpdir(), 'out-sigterm-'));
+interface StoppedRun {
+  readonly runDir: string;
+  readonly attemptDir?: string;
+}
+
+async function runStopped(campaign: boolean): Promise<StoppedRun> {
+  const attemptDir = campaign
+    ? mkdtempSync(join(tmpdir(), 'attempt-sigterm-'))
+    : undefined;
+  const outRoot =
+    attemptDir === undefined
+      ? mkdtempSync(join(tmpdir(), 'out-sigterm-'))
+      : join(attemptDir, 'staging');
   const child = spawn(
     'bun',
     [
@@ -123,6 +134,7 @@ async function runStopped(campaign: boolean): Promise<string> {
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
+        ...(attemptDir === undefined ? {} : { QUORUM_ATTEMPT_DIR: attemptDir }),
       },
       stdio: ['ignore', 'ignore', 'ignore'],
     },
@@ -136,7 +148,7 @@ async function runStopped(campaign: boolean): Promise<string> {
     if (runDir === undefined) throw new Error('mock gauntlet never hung');
     child.kill('SIGTERM');
     expect(await exited).toBe(2);
-    return runDir;
+    return { runDir, ...(attemptDir === undefined ? {} : { attemptDir }) };
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGKILL');
@@ -198,7 +210,7 @@ test('run stop listeners are removed when setup validation throws', async () => 
 });
 
 test('campaign SIGTERM stop rewrites the manifest after overwriting the verdict', async () => {
-  const runDir = await runStopped(true);
+  const { runDir, attemptDir } = await runStopped(true);
   const verdictBytes = readFileSync(join(runDir, 'verdict.json'));
   const manifest = AttemptManifestSchema.parse(
     JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8')),
@@ -209,9 +221,17 @@ test('campaign SIGTERM stop rewrites the manifest after overwriting the verdict'
   expect(verdictEntry).toBeDefined();
   expect(verdictEntry?.size).toBe(verdictBytes.length);
   expect(verdictEntry?.sha256).toBe(Bun.SHA256.hash(verdictBytes, 'hex'));
+  expect(attemptDir).toBeDefined();
+  expect(existsSync(join(attemptDir as string, 'home'))).toBe(true);
+  expect(
+    existsSync(
+      join(runDir, '.claude', 'projects', 'mock', 'mock_pass_0000.jsonl'),
+    ),
+  ).toBe(false);
 }, 60_000);
 
-test('ordinary SIGTERM stop does not create a campaign manifest', async () => {
-  const runDir = await runStopped(false);
+test('ordinary SIGTERM keeps its run-dir-relative home and no campaign manifest', async () => {
+  const { runDir } = await runStopped(false);
   expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
+  expect(existsSync(join(runDir, 'home'))).toBe(true);
 }, 60_000);

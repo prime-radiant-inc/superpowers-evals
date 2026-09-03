@@ -276,6 +276,85 @@ exec bun '${join(MOCK_GAUNTLET_DIR, 'input-guard.ts')}' "$@"
   );
 }, 30_000);
 
+test('campaign attempt execution routes agent and provenance home outside staging', async () => {
+  const fx = makeFakeBinFixture();
+  const scenarioDir = mkdtempSync(join(tmpdir(), 'scn-attempt-home-'));
+  writeFileSync(
+    join(scenarioDir, 'story.md'),
+    '---\nquorum_max_time: 1m\n---\nDo the thing.\n',
+  );
+  writeFileSync(join(scenarioDir, 'setup.sh'), '#!/usr/bin/env bash\n:\n');
+  chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
+  writeFileSync(
+    join(scenarioDir, 'checks.sh'),
+    'pre() { :; }\npost() { :; }\n',
+  );
+  const attemptDir = mkdtempSync(join(tmpdir(), 'attempt-home-'));
+  const outRoot = join(attemptDir, 'staging');
+  const shimDir = mockGauntletDir('pass');
+  const saved = ['PATH', 'SUPERPOWERS_ROOT', 'AWS_BEARER_TOKEN_BEDROCK'].map(
+    (k) => [k, process.env[k]] as const,
+  );
+  process.env['PATH'] =
+    `${shimDir}:${MOCK_GAUNTLET_DIR}:${process.env['PATH'] ?? ''}`;
+  process.env['SUPERPOWERS_ROOT'] = mkdtempSync(join(tmpdir(), 'sproot-'));
+  process.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
+  try {
+    const { runDir, verdict } = await runScenario({
+      scenarioDir,
+      codingAgent: 'claude',
+      codingAgentsDir: fx.agentsDir,
+      outRoot,
+      campaign: {
+        campaign_id: 'c'.repeat(64),
+        comparison_id: 'c1',
+        block_id: 'c1:scn-a:b1',
+        sample_id: 'c1:scn-a:arm_a:r1',
+        execution_attempt_id: 'c1:scn-a:arm_a:r1:a1',
+      },
+      campaignAttemptDir: attemptDir,
+    });
+    expect(verdict.final).toBe('pass');
+    const calls = parseInvocationLog(fx.logPath).filter((call) =>
+      call.header.startsWith('FAKECLAUDE'),
+    );
+    expect(calls).toHaveLength(2);
+    const provenanceCall = calls.at(-1);
+    if (provenanceCall === undefined) {
+      throw new Error('provenance probe invocation missing from log');
+    }
+    expect(provenanceCall.env['HOME']).toBe(join(attemptDir, 'home'));
+    expect(provenanceCall.env['XDG_CONFIG_HOME']).toBe(
+      join(attemptDir, 'home', '.config'),
+    );
+    // The gauntlet session output proves the launch path used the attempt
+    // home; checks may create a staging-local HOME, but never this log.
+    expect(
+      existsSync(
+        join(
+          attemptDir,
+          'home',
+          '.claude',
+          'projects',
+          'mock',
+          'mock_pass_0000.jsonl',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(runDir, '.claude', 'projects', 'mock', 'mock_pass_0000.jsonl'),
+      ),
+    ).toBe(false);
+  } finally {
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fx.cleanup();
+  }
+}, 60_000);
+
 test('runner loads the scenario manifest and passes it to compose', async () => {
   const { verdict } = await runWithMockGauntlet(makeManifestScenario(), 'pass');
   // A vanished post-check record must not let a gauntlet pass compose pass.

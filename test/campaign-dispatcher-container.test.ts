@@ -53,6 +53,8 @@ class RecordingContainerSpawner {
   readonly kind = 'container' as const;
   readonly specs: CampaignChildSpec[] = [];
   readonly stopped: { containerId: string; graceSeconds: number }[] = [];
+  failSpawns = false;
+  readonly failedAttemptIds: string[] = [];
   private readonly exitCallbacks: ((info: ChildExitInfo) => void)[][] = [];
   private readonly stdoutCallbacks: ((line: string) => void)[][] = [];
   readonly attempts = new Map<
@@ -116,6 +118,10 @@ class RecordingContainerSpawner {
   }
 
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild {
+    if (this.failSpawns) {
+      this.failedAttemptIds.push(spec.attempt?.attemptId ?? '<missing>');
+      throw new Error('fixture spawn failure');
+    }
     this.specs.push(spec);
     const exits: ((info: ChildExitInfo) => void)[] = [];
     const stdout: ((line: string) => void)[] = [];
@@ -307,10 +313,11 @@ function credentials(): Record<string, Credential> {
   };
 }
 
-function harness(): {
+function harness(opts: { traceJournal?: boolean } = {}): {
   args: DispatchRunArgs;
   campaignDir: string;
   spawner: RecordingContainerSpawner;
+  terminalAppendStages: boolean[];
 } {
   const campaignDir = realpathSync(
     mkdtempSync(join(tmpdir(), 'container-disp-')),
@@ -331,9 +338,36 @@ function harness(): {
     type: 'campaign_opened',
     payload: { campaign_id: doc.campaign_id, digest: doc.digest },
   });
-  writer.release();
+  if (opts.traceJournal !== true) writer.release();
   const spawner = new RecordingContainerSpawner();
   spawner.setRoot(join(campaignDir, 'attempts'));
+  const terminalAppendStages: boolean[] = [];
+  const journal = {
+    appendEvent: writer.appendEvent.bind(writer),
+    appendEvents: (inputs: Parameters<typeof writer.appendEvents>[0]) => {
+      if (opts.traceJournal === true) {
+        for (const input of inputs) {
+          if (input.type !== 'run_completed') continue;
+          const attemptId = (input.payload as { attempt_id?: string })[
+            'attempt_id'
+          ];
+          const attempt =
+            attemptId === undefined
+              ? undefined
+              : spawner.attempts.get(attemptId);
+          terminalAppendStages.push(
+            attempt === undefined
+              ? false
+              : existsSync(join(attempt.attemptDir, '.stage')),
+          );
+        }
+      }
+      return writer.appendEvents(inputs);
+    },
+    readEvents: writer.readEvents.bind(writer),
+    readBudgetPosition: writer.readBudgetPosition.bind(writer),
+    release: writer.release.bind(writer),
+  };
   const args: DispatchRunArgs = {
     campaignDir,
     spawner,
@@ -345,11 +379,12 @@ function harness(): {
     sampler: 'disabled',
     observeExposure: () => 1_000,
     stream: { write: () => {} },
+    ...(opts.traceJournal === true ? { journal } : {}),
     installSignals: () => () => {},
     signalGroup: () => 'ok',
     subjectHost: { find: () => null, kill: () => {} },
   };
-  return { args, campaignDir, spawner };
+  return { args, campaignDir, spawner, terminalAppendStages };
 }
 
 async function settleMicrotasks(): Promise<void> {
@@ -404,7 +439,7 @@ test('container dispatch routes staging out-root and journals container allocati
 });
 
 test('container exit publishes the verified manifest before run_completed and excludes home', async () => {
-  const h = harness();
+  const h = harness({ traceJournal: true });
   const run = runCampaignDispatch(h.args);
   (h.args.clock as FakeClock).advance(1);
   await settleMicrotasks();
@@ -434,6 +469,7 @@ test('container exit publishes the verified manifest before run_completed and ex
   ).toBe(true);
   expect(existsSync(join(attempt.stagingDir, 'run-container-a'))).toBe(false);
   expect(existsSync(join(attempt.attemptDir, '.stage'))).toBe(false);
+  expect(h.terminalAppendStages).toEqual([true]);
   expect(events(h.campaignDir).some((e) => e.type === 'run_completed')).toBe(
     true,
   );
@@ -471,6 +507,77 @@ test('container exit without a manifest journals instrument_failure and retains 
   expect(existsSync(join(h.args.resultsRoot!, 'run-container-a'))).toBe(false);
   h.spawner.settleExit(1, { code: 0, signal: null });
   await run;
+});
+
+test('container publication mismatch refuses stale run evidence and cost', async () => {
+  const h = harness();
+  const run = runCampaignDispatch(h.args);
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  const attemptEntry = [...h.spawner.attempts.entries()].find(([, value]) =>
+    value.attemptDir.includes('arm_a:r1'),
+  )!;
+  const attemptId = attemptEntry[0];
+  const attempt = attemptEntry[1];
+  const staleRunDir = join(h.args.resultsRoot!, 'run-container-a');
+  mkdirSync(staleRunDir, { recursive: true });
+  writeFileSync(
+    join(staleRunDir, 'verdict.json'),
+    JSON.stringify({
+      final: 'pass',
+      economics: { total_est_cost_usd: 99 },
+    }),
+  );
+  h.spawner.emitAllocated(0, 'run-container-a');
+  h.spawner.emitAllocated(1, 'run-container-b');
+  await settleMicrotasks();
+  const runDir = join(attempt.stagingDir, 'run-container-b');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'verdict.json'), '{}');
+  writeAttemptManifest(runDir, {
+    campaign_id: campaignDocument().campaign_id,
+    comparison_id: 'c1',
+    block_id: 'c1:scn:b1',
+    sample_id: 'c1:scn:arm_a:r1',
+    execution_attempt_id: attemptId,
+  });
+  h.spawner.settleExit(0, { code: 0, signal: null });
+  await settleMicrotasks();
+  const journal = events(h.campaignDir);
+  expect(existsSync(join(attempt.stagingDir, 'run-container-b'))).toBe(true);
+  expect(journal.some((event) => event.type === 'run_completed')).toBe(false);
+  expect(journal.some((event) => event.type === 'instrument_failure')).toBe(
+    true,
+  );
+  expect(
+    journal.some(
+      (event) =>
+        event.type === 'budget_event' && event.payload['kind'] === 'spend',
+    ),
+  ).toBe(false);
+  h.spawner.settleExit(1, { code: 0, signal: null });
+  await run;
+});
+
+test('container spawn failure cleans a prepared stage after its disposition lands', async () => {
+  const h = harness();
+  h.spawner.failSpawns = true;
+  const run = runCampaignDispatch(h.args);
+  (h.args.clock as FakeClock).advance(1);
+  for (let i = 0; i < 32; i += 1) {
+    (h.args.clock as FakeClock).advance(1_000);
+    await settleMicrotasks();
+  }
+  await run;
+  expect(h.spawner.attempts.size).toBeGreaterThan(0);
+  expect(
+    h.spawner.failedAttemptIds.every((attemptId) => {
+      const attempt = h.spawner.attempts.get(attemptId);
+      return (
+        attempt !== undefined && !existsSync(join(attempt.attemptDir, '.stage'))
+      );
+    }),
+  ).toBe(true);
 });
 
 test('container cancellation stops exact container id without process-group or subject-host probes', async () => {
@@ -512,5 +619,10 @@ test('container cancellation stops exact container id without process-group or s
   ).toBe(true);
   expect(signalCalls).toBe(0);
   expect(finds).toHaveLength(0);
+  expect(
+    [...h.spawner.attempts.values()].every(
+      (attempt) => !existsSync(join(attempt.attemptDir, '.stage')),
+    ),
+  ).toBe(true);
   await run;
 });

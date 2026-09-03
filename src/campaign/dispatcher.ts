@@ -1114,6 +1114,9 @@ interface LiveSampleState {
   childBirthTsMs: number | null;
   runId?: string;
   attemptDir?: string;
+  stageCleanupEligible: boolean;
+  /** True only after the run_allocated binding landed in the journal. */
+  allocationJournaled: boolean;
   serviceEnded: boolean;
   /** Force-killed (drift/signal/storage): later child callbacks are stale
    *  and never journal against the superseded block (C10). */
@@ -1714,6 +1717,28 @@ export async function runCampaignDispatch(
           ? 'alive'
           : 'unknown';
     };
+    const markStageCleanupEligible = (sample: LiveSampleState): void => {
+      if (sample.attemptDir !== undefined) {
+        sample.stageCleanupEligible = true;
+      }
+    };
+    const cleanupEligibleStages = (
+      samples: readonly LiveSampleState[],
+    ): void => {
+      for (const sample of samples) {
+        if (!sample.stageCleanupEligible || sample.attemptDir === undefined) {
+          continue;
+        }
+        try {
+          removeAttemptStage(sample.attemptDir);
+          sample.stageCleanupEligible = false;
+        } catch (error) {
+          stream.write(
+            `attempt stage removal failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
+      }
+    };
 
     // --- Verified kill over the live child handles (C10) --------------------
     /** C10 HARD precondition: journaling/release/mint happen ONLY after a
@@ -1760,6 +1785,7 @@ export async function runCampaignDispatch(
         // callbacks, then reach the subject the group never held. Only an
         // allocated run can host one (gauntlet starts after allocation).
         sample.abandoned = true;
+        markStageCleanupEligible(sample);
         if (
           sample.runId !== undefined &&
           sample.child.handle.kind === 'process'
@@ -2076,8 +2102,8 @@ export async function runCampaignDispatch(
       sample: LiveSampleState,
       child: SpawnedCampaignChild,
       runId: string,
-    ): Promise<void> => {
-      if (sample.runId !== undefined) return;
+    ): Promise<boolean> => {
+      if (sample.runId !== undefined) return sample.allocationJournaled;
       sample.runId = runId;
       const state = mirrorStateOf(sample.sampleId);
       if (state !== 'admitted') {
@@ -2099,9 +2125,9 @@ export async function runCampaignDispatch(
         stream.write(
           `run_allocated for ${sample.attemptId} but process group ${child.handle.pgid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
         );
-        return;
+        return false;
       }
-      await appendCritical([
+      const appended = await appendCritical([
         {
           type: 'run_allocated',
           payload:
@@ -2122,6 +2148,9 @@ export async function runCampaignDispatch(
                 },
         },
       ]);
+      if (appended === null || storagePaused) return false;
+      sample.allocationJournaled = true;
+      return true;
     };
     /** Out-of-section allocation waits: the control section is never held
      *  while a child is slow to allocate (ENOSPC and signals must not queue
@@ -2277,6 +2306,7 @@ export async function runCampaignDispatch(
           continue;
         }
         sample.abandoned = true;
+        markStageCleanupEligible(sample);
         releaseSample(sample);
         released += 1;
         if (child.stdoutLines.some((l) => parseRunAllocatedLine(l) !== null)) {
@@ -2362,6 +2392,7 @@ export async function runCampaignDispatch(
       }
       const appended = await appendCritical(res.events);
       if (appended === null) return;
+      cleanupEligibleStages(failedBlock.samples);
       resolvedObligations.add(blockId);
       const cellKey = cellKeyOfBlockId(blockId);
       if (res.outcome === 'suppressed') {
@@ -2434,6 +2465,7 @@ export async function runCampaignDispatch(
       // possibly-live child. The membership change appends the superseding
       // snapshot in the same critical section (E7.7).
       const aborts: EventInput[] = [];
+      const abortedBlocks: LiveBlockState[] = [];
       const killFailures: string[] = [];
       let released = 0;
       for (const blockId of affected) {
@@ -2449,6 +2481,7 @@ export async function runCampaignDispatch(
         }
         if (hadLive) {
           aborts.push({ type: 'aborted', payload: { block_id: blockId } });
+          abortedBlocks.push(lb);
         }
       }
       // E7.7: every verified death changed the exposure membership — the
@@ -2468,6 +2501,7 @@ export async function runCampaignDispatch(
           wakeLoop();
           return;
         }
+        cleanupEligibleStages(abortedBlocks.flatMap((block) => block.samples));
         estimateUsd = currentEstimateTotal();
       }
       if (killFailures.length > 0) {
@@ -2807,26 +2841,57 @@ export async function runCampaignDispatch(
       child.onExit((info) => {
         void runExclusive(async () => {
           if (sample.abandoned) return;
+          // A container's stdout allocation is only a candidate run identity
+          // until the private attempt manifest is validated and atomically
+          // published. Process children retain their existing allocation
+          // identity path; container evidence/cost reads use this separately
+          // authorized identity so a failed publication cannot expose stale
+          // results under a previously observed run id.
+          let authorizedRunId: string | undefined =
+            child.handle.kind === 'process' ? sample.runId : undefined;
           let publicationFailed = false;
           if (
             child.handle.kind === 'container' &&
             sample.attemptDir !== undefined
           ) {
             try {
+              if (sample.runId !== undefined && !sample.allocationJournaled) {
+                throw new AttemptPublishError(
+                  `journaled allocation for ${sample.runId} did not land durably`,
+                );
+              }
               const published = publishAttempt({
                 attemptDir: sample.attemptDir,
                 resultsRoot,
                 expectedAttemptId: sample.attemptId,
+                ...(sample.runId !== undefined
+                  ? { expectedRunId: sample.runId }
+                  : {}),
               });
               if (sample.runId === undefined) {
-                await recordAllocation(sample, child, published.runId);
+                const allocationJournaled = await recordAllocation(
+                  sample,
+                  child,
+                  published.runId,
+                );
+                if (!allocationJournaled) {
+                  throw new AttemptPublishError(
+                    `published run ${published.runId} has no durable allocation binding`,
+                  );
+                }
               } else if (sample.runId !== published.runId) {
                 throw new AttemptPublishError(
                   `published run ${published.runId} disagrees with the journaled allocation ${sample.runId}`,
                 );
+              } else if (!sample.allocationJournaled) {
+                throw new AttemptPublishError(
+                  `journaled allocation for ${sample.runId} did not land durably`,
+                );
               }
+              authorizedRunId = published.runId;
             } catch (error) {
               publicationFailed = true;
+              authorizedRunId = undefined;
               stream.write(
                 `publication failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)} — classifying instrument_failure with logs retained\n`,
               );
@@ -2834,7 +2899,7 @@ export async function runCampaignDispatch(
           }
           releaseSample(sample);
           const runDir =
-            sample.runId !== undefined ? runDirOf(sample.runId) : null;
+            authorizedRunId !== undefined ? runDirOf(authorizedRunId) : null;
           // Terminal evidence sweep (R-SNS-1: verdict reason, gauntlet
           // result, event stream — ALWAYS read at terminal): every source is
           // evaluated and the classifier-rank arbitration lets the
@@ -3002,7 +3067,7 @@ export async function runCampaignDispatch(
                   disposition: SPEND_RECOVERED,
                   rationale: attemptScopedRationale(
                     sample.attemptId,
-                    `actual cost of run ${sample.runId ?? '<unallocated>'} at terminal`,
+                    `actual cost of run ${authorizedRunId ?? '<unallocated>'} at terminal`,
                   ),
                 },
               },
@@ -3025,7 +3090,7 @@ export async function runCampaignDispatch(
                 disposition: UNPRICED_TERMINAL,
                 rationale: attemptScopedRationale(
                   sample.attemptId,
-                  `run ${sample.runId ?? '<unallocated>'} terminaled with no readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
+                  `run ${authorizedRunId ?? '<unallocated>'} terminaled with no authorized run directory or readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
                 ),
               },
             });
@@ -3050,21 +3115,20 @@ export async function runCampaignDispatch(
                 event.type === 'instrument_failure',
             )
           ) {
-            try {
-              removeAttemptStage(sample.attemptDir);
-            } catch (error) {
-              stream.write(
-                `attempt stage removal failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)}\n`,
-              );
-            }
+            markStageCleanupEligible(sample);
+            cleanupEligibleStages([sample]);
           }
           if (spendAmount === null) {
-            const runName = sample.runId ?? '<unallocated>';
+            const runName = authorizedRunId ?? '<unallocated>';
             halt(
               `accounting gap: attempt ${sample.attemptId} terminaled with no readable actual cost (run ${runName})`,
             );
+            const runLocation =
+              authorizedRunId === undefined
+                ? '<no-authorized-run-dir>'
+                : runDirOf(authorizedRunId);
             stream.write(
-              `operator action: the budget position cannot account for run ${runName}. Restore its verdict economics at ${runDirOf(runName)}, then re-run \`quorum campaign run\` — the resume re-reads that run dir, journals the restored actual spend, and continues. While it stays unpriced every resume refuses; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
+              `operator action: the budget position cannot account for run ${runName}. Restore its verdict economics at ${runLocation}, then re-run \`quorum campaign run\` — the resume re-reads that run dir, journals the restored actual spend, and continues. While it stays unpriced every resume refuses; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
             );
             return;
           }
@@ -3302,6 +3366,7 @@ export async function runCampaignDispatch(
         // has NO instrument_failure edge from 'admitted' (never allocated),
         // so the typed record is classifier row 6 as the MINT reason and the
         // sample resolves via the E7.1 roster disposition from 'admitted'.
+        markStageCleanupEligible(sample);
         releaseSample(sample);
         const snapshot = await appendCritical([snapshotEstimateInput()]);
         if (snapshot === null || storagePaused) {
@@ -3313,6 +3378,15 @@ export async function runCampaignDispatch(
           return 'fail-stop';
         }
         estimateUsd = currentEstimateTotal();
+        // A sibling may already have superseded this block before this
+        // prepare-then-spawn failure. The durable snapshot above confirms
+        // the failed sample's release; no worker can consume its stage now.
+        if (
+          supersededBlockIds.has(live.block.block_id) ||
+          resolvedObligations.has(live.block.block_id)
+        ) {
+          cleanupEligibleStages([sample]);
+        }
         const spawnClass = classifyFailure({
           outcome: 'indeterminate',
           exitClass: 'spawn-failed',
@@ -3444,6 +3518,8 @@ export async function runCampaignDispatch(
           subjectPool: poolOfArm(armOf(a.sampleId)),
           grants: {},
           childBirthTsMs: null,
+          stageCleanupEligible: false,
+          allocationJournaled: false,
           serviceEnded: false,
           abandoned: false,
         })),
@@ -3755,6 +3831,7 @@ export async function runCampaignDispatch(
           // block, no campaign_cancelled, a named operator action, and a
           // resumable exit.
           const aborts: EventInput[] = [];
+          const abortedBlocks: LiveBlockState[] = [];
           const killFailures: string[] = [];
           let released = 0;
           for (const lb of liveBlocks.values()) {
@@ -3771,6 +3848,7 @@ export async function runCampaignDispatch(
                 type: 'aborted',
                 payload: { block_id: lb.block.block_id },
               });
+              abortedBlocks.push(lb);
             }
           }
           // 3. Journal aborted per VERIFIED in-flight block; every verified
@@ -3788,7 +3866,14 @@ export async function runCampaignDispatch(
             stream.write(
               `signal kill FAILED for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually${cancelPending ? ', then re-run `quorum campaign cancel` (cancel incomplete: campaign_cancelled NOT journaled)' : ''}; exit stays resumable\n`,
             );
-            if (bundle.length > 0) await appendCritical(bundle);
+            if (bundle.length > 0) {
+              const appended = await appendCritical(bundle);
+              if (appended !== null && !storagePaused) {
+                cleanupEligibleStages(
+                  abortedBlocks.flatMap((block) => block.samples),
+                );
+              }
+            }
             wakeLoop();
             return;
           }
@@ -3812,7 +3897,14 @@ export async function runCampaignDispatch(
               payload: reason !== '' ? { reason } : {},
             });
           }
-          if (bundle.length > 0) await appendCritical(bundle);
+          if (bundle.length > 0) {
+            const appended = await appendCritical(bundle);
+            if (appended !== null && !storagePaused) {
+              cleanupEligibleStages(
+                abortedBlocks.flatMap((block) => block.samples),
+              );
+            }
+          }
           // 5. Exit — resumable on a plain signal, terminal on cancel.
           wakeLoop();
         });
