@@ -3821,6 +3821,7 @@ export async function runCampaignDispatch(
         // and recovery re-derives the batch (Important 3).
         return;
       }
+      if (storagePaused) return;
       cleanupEligibleStages(invalid.flatMap((block) => block.samples));
       for (const { reserve, record } of result.activated) {
         const reserveBlock = reserveBlocks.find((b) => b.block_id === reserve);
