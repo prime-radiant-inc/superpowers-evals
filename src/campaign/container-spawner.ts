@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
-import { closeSync, openSync } from 'node:fs';
+import {
+  closeSync,
+  readSync as fsReadSync,
+  openSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import type { Clock } from '../scheduler/clock.ts';
@@ -8,6 +14,7 @@ import {
   type AttemptMount,
   type AttemptSpawnContext,
   type CampaignChildSpec,
+  type ChildExitInfo,
   type ChildSpawner,
   SpawnError,
   type SpawnedCampaignChild,
@@ -18,6 +25,7 @@ export const ATTEMPT_RUNTIME_DIR = '/run/quorum/attempt';
 
 const CONTAINER_ID_RE = /^[0-9a-f]{64}$/;
 const IMAGE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const FOLLOW_POLL_SECONDS = 0.05;
 
 export class AttemptContainerError extends Error {
   constructor(message: string) {
@@ -127,6 +135,21 @@ interface InspectedContainer {
   readonly HostConfig?: {
     readonly Mounts?: readonly InspectedMount[];
   };
+  readonly State?: {
+    readonly Running?: unknown;
+    readonly ExitCode?: unknown;
+    readonly OOMKilled?: unknown;
+    readonly StartedAt?: unknown;
+    readonly FinishedAt?: unknown;
+  };
+}
+
+interface InspectedState {
+  readonly running: boolean;
+  readonly exitCode: number;
+  readonly oomKilled: boolean;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
 }
 
 export class ContainerAttemptSpawner implements ChildSpawner {
@@ -179,7 +202,7 @@ export class ContainerAttemptSpawner implements ChildSpawner {
       }
       throw error;
     }
-    return this.inertHandle(containerId, containerName);
+    return this.settleHandle(containerId, attempt, containerName);
   }
 
   private docker(dockerArgs: readonly string[]): CommandResult {
@@ -353,12 +376,218 @@ export class ContainerAttemptSpawner implements ChildSpawner {
     }
   }
 
-  private inertHandle(
+  private inspectState(containerId: string): InspectedState | null {
+    const result = this.docker(['inspect', containerId]);
+    if (result.status !== 0) return null;
+    try {
+      const parsed: unknown = JSON.parse(result.stdout);
+      if (!Array.isArray(parsed) || parsed.length !== 1) return null;
+      const state = (parsed[0] as InspectedContainer).State;
+      if (state === undefined || typeof state !== 'object' || state === null) {
+        return null;
+      }
+      if (
+        typeof state.Running !== 'boolean' ||
+        typeof state.ExitCode !== 'number' ||
+        !Number.isSafeInteger(state.ExitCode) ||
+        typeof state.OOMKilled !== 'boolean'
+      ) {
+        return null;
+      }
+      const timestamps = [state.StartedAt, state.FinishedAt];
+      if (
+        !timestamps.every(
+          (timestamp) => timestamp === null || typeof timestamp === 'string',
+        )
+      ) {
+        return null;
+      }
+      return {
+        running: state.Running,
+        exitCode: state.ExitCode,
+        oomKilled: state.OOMKilled,
+        startedAt: typeof state.StartedAt === 'string' ? state.StartedAt : null,
+        finishedAt:
+          typeof state.FinishedAt === 'string' ? state.FinishedAt : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private settleHandle(
     containerId: string,
+    attempt: AttemptSpawnContext,
     containerName: string,
   ): SpawnedCampaignChild {
     const stdoutLines: string[] = [];
     const stderrLines: string[] = [];
+    const stdoutCbs: ((line: string) => void)[] = [];
+    const stderrCbs: ((line: string) => void)[] = [];
+    const exitCbs: ((info: ChildExitInfo) => void)[] = [];
+    let exitInfo: ChildExitInfo | null = null;
+    let published = false;
+
+    const deliver = (
+      buffer: string,
+      lines: string[],
+      cbs: ((line: string) => void)[],
+      chunk: string,
+    ): string => {
+      const parts = (buffer + chunk).split('\n');
+      const rest = parts.pop() ?? '';
+      for (const line of parts) {
+        lines.push(line);
+        for (const cb of cbs) cb(line);
+      }
+      return rest;
+    };
+
+    const writeExit = (
+      state: InspectedState | null,
+      info: ChildExitInfo,
+    ): void => {
+      writeFileSync(
+        join(attempt.attemptDir, 'exit.json'),
+        `${JSON.stringify(
+          {
+            code: info.code,
+            signal: info.signal,
+            oom_killed: state?.oomKilled === true,
+            started_at: state?.startedAt ?? null,
+            finished_at: state?.finishedAt ?? null,
+          },
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      );
+    };
+
+    const publish = (
+      state: InspectedState | null,
+      waitCode: number | null,
+      waitValid: boolean,
+    ): void => {
+      if (published) return;
+      const trustworthy =
+        waitValid &&
+        state !== null &&
+        !state.running &&
+        waitCode === state.exitCode;
+      const code = trustworthy ? state.exitCode : null;
+      const signal: ChildExitInfo['signal'] =
+        trustworthy && state.oomKilled ? 'SIGKILL' : null;
+      const info: ChildExitInfo = { code, signal };
+      writeExit(state, info);
+      published = true;
+      exitInfo = info;
+      for (const cb of exitCbs) cb(info);
+    };
+
+    const follow = async (): Promise<void> => {
+      const stdoutFd = openSync(attempt.stdoutLog, 'r');
+      const stderrFd = openSync(attempt.stderrLog, 'r');
+      let stdoutOffset = 0;
+      let stderrOffset = 0;
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+      let waitDone = false;
+      let waitCode: number | null = null;
+      let waitValid = false;
+      const waitPromise = Promise.resolve().then(() =>
+        this.args.dockerWait
+          ? this.args.dockerWait(containerId)
+          : Promise.reject(new Error('docker wait seam is not configured')),
+      );
+      void waitPromise.then(
+        (code: unknown) => {
+          if (
+            typeof code === 'number' &&
+            Number.isSafeInteger(code) &&
+            code >= 0
+          ) {
+            waitCode = code;
+            waitValid = true;
+          }
+          waitDone = true;
+        },
+        () => {
+          waitDone = true;
+        },
+      );
+      const buffer = Buffer.alloc(64 * 1024);
+      try {
+        for (;;) {
+          const stdoutRead = fsReadSync(
+            stdoutFd,
+            buffer,
+            0,
+            buffer.length,
+            stdoutOffset,
+          );
+          if (stdoutRead > 0) {
+            stdoutOffset += stdoutRead;
+            stdoutBuffer = deliver(
+              stdoutBuffer,
+              stdoutLines,
+              stdoutCbs,
+              buffer.subarray(0, stdoutRead).toString('utf8'),
+            );
+          }
+          const stderrRead = fsReadSync(
+            stderrFd,
+            buffer,
+            0,
+            buffer.length,
+            stderrOffset,
+          );
+          if (stderrRead > 0) {
+            stderrOffset += stderrRead;
+            stderrBuffer = deliver(
+              stderrBuffer,
+              stderrLines,
+              stderrCbs,
+              buffer.subarray(0, stderrRead).toString('utf8'),
+            );
+          }
+          if (waitDone && stdoutRead === 0 && stderrRead === 0) {
+            if (stdoutBuffer !== '') {
+              stdoutBuffer = deliver(
+                stdoutBuffer,
+                stdoutLines,
+                stdoutCbs,
+                '\n',
+              );
+            }
+            if (stderrBuffer !== '') {
+              stderrBuffer = deliver(
+                stderrBuffer,
+                stderrLines,
+                stderrCbs,
+                '\n',
+              );
+            }
+            break;
+          }
+          await this.args.clock.sleepUntil(
+            this.args.clock.now() + FOLLOW_POLL_SECONDS,
+          );
+        }
+      } finally {
+        closeSync(stdoutFd);
+        closeSync(stderrFd);
+      }
+      const state = this.inspectState(containerId);
+      publish(state, waitCode, waitValid);
+    };
+
+    void follow().catch(() => {
+      // A malformed attempt log or an unexpected follower failure is a typed
+      // failed child, never an unhandled rejection or a fabricated success.
+      publish(null, null, false);
+    });
+
     return {
       handle: {
         kind: 'container',
@@ -374,12 +603,18 @@ export class ContainerAttemptSpawner implements ChildSpawner {
       },
       onStdoutLine(cb) {
         for (const line of stdoutLines) cb(line);
+        stdoutCbs.push(cb);
       },
       onStderrLine(cb) {
         for (const line of stderrLines) cb(line);
+        stderrCbs.push(cb);
       },
-      onExit(_cb) {
-        // Durable following and terminal publication are Task 3.
+      onExit(cb) {
+        if (exitInfo !== null) {
+          cb(exitInfo);
+          return;
+        }
+        exitCbs.push(cb);
       },
     };
   }
