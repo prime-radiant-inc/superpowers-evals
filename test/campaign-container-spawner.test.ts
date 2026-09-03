@@ -15,6 +15,7 @@ import type {
   CommandRunner,
 } from '../src/agents/command-runner.ts';
 import {
+  AttemptContainerSpawnError,
   buildAttemptMounts,
   ContainerAttemptSpawner,
   containerNameForAttempt,
@@ -430,7 +431,18 @@ test('removes a created container when start fails', () => {
     fx.expectedMounts,
   );
   fx.runner.startStatus = 1;
-  expect(() => makeSpawner(fx.runner).spawn(fx.spec)).toThrow(/start/i);
+  let thrown: unknown;
+  try {
+    makeSpawner(fx.runner).spawn(fx.spec);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(AttemptContainerSpawnError);
+  expect(thrown).toMatchObject({
+    containerId,
+    cleanup: 'verified-absent',
+  });
+  expect((thrown as Error).message).toMatch(/start/i);
   expect(fx.runner.calls.map((call) => call.args[0])).toEqual([
     'create',
     'inspect',
@@ -450,7 +462,18 @@ test('reports both the original verification failure and failed exact-ID cleanup
     },
   );
   fx.runner.rmStatus = 1;
-  expect(() => makeSpawner(fx.runner).spawn(fx.spec)).toThrow(
+  let thrown: unknown;
+  try {
+    makeSpawner(fx.runner).spawn(fx.spec);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(AttemptContainerSpawnError);
+  expect(thrown).toMatchObject({
+    containerId,
+    cleanup: 'unverified',
+  });
+  expect((thrown as Error).message).toMatch(
     /identity.*cleanup|cleanup.*identity/i,
   );
   expect(fx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
@@ -462,7 +485,18 @@ test('reports both the original verification failure and failed exact-ID cleanup
   );
   startFx.runner.startStatus = 1;
   startFx.runner.rmStatus = 1;
-  expect(() => makeSpawner(startFx.runner).spawn(startFx.spec)).toThrow(
+  let startThrown: unknown;
+  try {
+    makeSpawner(startFx.runner).spawn(startFx.spec);
+  } catch (error) {
+    startThrown = error;
+  }
+  expect(startThrown).toBeInstanceOf(AttemptContainerSpawnError);
+  expect(startThrown).toMatchObject({
+    containerId,
+    cleanup: 'unverified',
+  });
+  expect((startThrown as Error).message).toMatch(
     /start.*cleanup|cleanup.*start/i,
   );
   expect(startFx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
