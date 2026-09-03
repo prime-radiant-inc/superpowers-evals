@@ -50,6 +50,13 @@ import { ApplianceError } from './errors.ts';
 import { assertNoFollowDirChain, assertRealDirNoFollow } from './safe-fs.ts';
 import type { ApplianceConfig, LoadedApplianceConfig } from './types.ts';
 
+export {
+  COPILOT_SUPERVISOR_ENV_NAMES,
+  GRADER_SOURCE_ENV_BY_RUNTIME_NAME,
+  QUORUM_GRADER_SOURCE_MODE,
+  SUPERVISOR_NETWORK_ENV_NAMES,
+} from '../credentials/grader.ts';
+
 export interface ProjectedAuthMount {
   readonly name: 'codex' | 'gemini' | 'kimi' | 'pi';
   readonly path: string;
@@ -803,7 +810,7 @@ const BUNDLE_EVAL_SCRIPT = [
   'done',
 ].join('\n');
 
-function evaluateBundleEnv(
+export function evaluateBundleEnv(
   envContent: string,
   names: readonly string[],
 ): Map<string, string> {
@@ -833,6 +840,28 @@ function evaluateBundleEnv(
   return values;
 }
 
+/** Read one bundle source through a single pinned generation and evaluate the
+ * requested names. Attempt projection reuses this so the campaign path and
+ * Phase 1 staging read the bundle the exact same way. */
+export function readBundleEnvForProjection(
+  bundleDir: string,
+  names: readonly string[],
+  pinnedBundle?: PinnedDir,
+): ReadonlyMap<string, string> {
+  const bundlePin =
+    pinnedBundle ?? pinAbsoluteDir(bundleDir, 'credential bundle');
+  let envContent: string | null;
+  try {
+    envContent = readBundleSource(bundlePin, 'credentials.env', true);
+  } finally {
+    if (pinnedBundle === undefined) closePin(bundlePin);
+  }
+  if (envContent === null) {
+    throw scopeError('credential bundle is missing credentials.env');
+  }
+  return evaluateBundleEnv(envContent, [...names]);
+}
+
 // Single-quote a value for a POSIX shell, escaping embedded single quotes
 // (the same idiom the copilot env-file writer uses).
 function shellSingleQuote(value: string): string {
@@ -849,7 +878,7 @@ interface AgentEnvSelection {
   readonly secrets: readonly LabeledSecret[];
 }
 
-function selectAgentEnv(
+export function selectAgentEnv(
   scope: LiveCredentialScope,
   bundleEnv: ReadonlyMap<string, string>,
 ): AgentEnvSelection {
@@ -896,7 +925,7 @@ interface SupervisorSelection {
   readonly graderAuthValues: readonly string[];
 }
 
-function buildSupervisorEnv(
+export function buildSupervisorEnv(
   scope: LiveCredentialScope,
   bundleEnv: ReadonlyMap<string, string>,
 ): SupervisorSelection {
@@ -1221,7 +1250,7 @@ function planOAuth(
 // every nonempty grader auth value: any equality fails closed, even across
 // differently named channels. Values are never logged, hashed, serialized,
 // or included in the error — only the channel labels are.
-function assertDistinctFromGraderAuth(
+export function assertDistinctFromGraderAuth(
   agentSecrets: readonly LabeledSecret[],
   graderAuthValues: readonly string[],
 ): void {
@@ -1325,18 +1354,6 @@ export function stageLiveCredentialMaterial(
   // descriptor-relative to that pin, so a bundle swapped between reads cannot
   // redirect any later read. The env bytes are handed to bash via stdin — the
   // path is never reopened.
-  const bundlePin = pinAbsoluteDir(bundleDir, 'credential bundle');
-  let oauthPlan: OAuthPlan | null;
-  let envContent: string | null;
-  try {
-    oauthPlan = planOAuth(scope, bundlePin);
-    envContent = readBundleSource(bundlePin, 'credentials.env', true);
-  } finally {
-    closePin(bundlePin);
-  }
-  if (envContent === null) {
-    throw scopeError('credential bundle is missing credentials.env');
-  }
   const names = new Set<string>();
   for (const projection of scope.agentEnv) {
     for (const source of projection.sourceNames) {
@@ -1353,7 +1370,15 @@ export function stageLiveCredentialMaterial(
   for (const name of COPILOT_SUPERVISOR_ENV_NAMES) {
     names.add(name);
   }
-  const bundleEnv = evaluateBundleEnv(envContent, [...names]);
+  const bundlePin = pinAbsoluteDir(bundleDir, 'credential bundle');
+  let oauthPlan: OAuthPlan | null;
+  let bundleEnv: ReadonlyMap<string, string>;
+  try {
+    oauthPlan = planOAuth(scope, bundlePin);
+    bundleEnv = readBundleEnvForProjection(bundleDir, [...names], bundlePin);
+  } finally {
+    closePin(bundlePin);
+  }
 
   const agent = selectAgentEnv(scope, bundleEnv);
   const supervisor = buildSupervisorEnv(scope, bundleEnv);
