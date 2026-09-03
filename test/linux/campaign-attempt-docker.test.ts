@@ -64,6 +64,7 @@ interface DockerContainer {
     readonly Env?: readonly string[];
     readonly Image?: string;
     readonly Init?: boolean;
+    readonly Labels?: Readonly<Record<string, string>> | null;
   };
   readonly HostConfig?: {
     readonly Init?: boolean;
@@ -339,10 +340,6 @@ function assertNoSecretBytes(
       expect(bytes.includes(Buffer.from(value, 'utf8'))).toBe(false);
     }
   }
-}
-
-function assertNoSecretsInTree(root: string, values: readonly string[]): void {
-  assertNoSecretBytes(filesUnder(root), values);
 }
 
 function withEnvironment<T>(
@@ -623,6 +620,59 @@ async function loadCampaignRuntime(root: string): Promise<CampaignRuntime> {
   };
 }
 
+async function attemptCleanup(
+  errors: unknown[],
+  action: () => void | Promise<void>,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    errors.push(error);
+  }
+}
+
+async function cleanupFixtureResources(args: {
+  readonly captured: ReadonlySet<string>;
+  readonly provider: FakeProvider;
+  readonly checkout: SyntheticCheckout;
+  readonly tempDir: string;
+}): Promise<void> {
+  const errors: unknown[] = [];
+  for (const id of args.captured) {
+    await attemptCleanup(errors, () => {
+      const result = runProcess('docker', ['rm', '-f', id]);
+      if (
+        result.status !== 0 &&
+        !result.stderr.includes(`No such container: ${id}`)
+      ) {
+        throw new Error(`exact captured-container cleanup failed for ${id}`);
+      }
+    });
+  }
+  await attemptCleanup(errors, () => args.provider.stop());
+  await attemptCleanup(errors, () => args.checkout.cleanup());
+  await attemptCleanup(errors, () => {
+    rmSync(args.tempDir, { recursive: true, force: true });
+  });
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'fixture cleanup failed');
+  }
+}
+
+async function awaitRunAndCleanup(
+  run: Promise<number> | null,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  const errors: unknown[] = [];
+  await attemptCleanup(errors, async () => {
+    if (run !== null) await run;
+  });
+  await attemptCleanup(errors, cleanup);
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'campaign run or fixture cleanup failed');
+  }
+}
+
 async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
   const tempDir = mkdtempSync(join(tmpdir(), 'quorum-task1c-'));
   let checkout: SyntheticCheckout | null = null;
@@ -733,7 +783,7 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
     const activeProvider = provider;
     const activeCheckout = checkout;
     const captured = new Set<string>();
-    let cleaned = false;
+    let cleanupPromise: Promise<void> | null = null;
     return {
       tempDir,
       checkout: activeCheckout,
@@ -756,26 +806,32 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
         }
       },
       cleanup: async () => {
-        if (cleaned) return;
-        cleaned = true;
-        for (const id of captured) {
-          const result = runProcess('docker', ['rm', '-f', id]);
-          if (
-            result.status !== 0 &&
-            !result.stderr.includes(`No such container: ${id}`)
-          ) {
-            throw new Error('exact captured-container cleanup failed');
-          }
+        if (cleanupPromise === null) {
+          cleanupPromise = cleanupFixtureResources({
+            captured,
+            provider: activeProvider,
+            checkout: activeCheckout,
+            tempDir,
+          });
         }
-        await activeProvider.stop();
-        activeCheckout.cleanup();
-        rmSync(tempDir, { recursive: true, force: true });
+        await cleanupPromise;
       },
     };
   } catch (error) {
-    if (provider !== null) await provider.stop();
-    checkout?.cleanup();
-    rmSync(tempDir, { recursive: true, force: true });
+    const cleanupErrors: unknown[] = [];
+    await attemptCleanup(cleanupErrors, async () => {
+      if (provider !== null) await provider.stop();
+    });
+    await attemptCleanup(cleanupErrors, () => checkout?.cleanup());
+    await attemptCleanup(cleanupErrors, () => {
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        'synthetic fixture setup and cleanup failed',
+      );
+    }
     throw error;
   }
 }
@@ -811,6 +867,28 @@ function assertContainerMountAudit(
   const sources = mounts
     .map((mount) => mount.Source)
     .filter((source): source is string => source !== undefined);
+  const labels = container.Config?.Labels;
+  const attemptId = labels?.['quorum.attempt_id'];
+  if (typeof attemptId !== 'string' || attemptId === '') {
+    throw new Error('container inspect had no attempt identity label');
+  }
+  expect(labels?.['quorum.campaign_id']).toBe(fixture.campaignId);
+  const attemptsRoot = join(fixture.campaignDir, 'attempts');
+  const attemptDir = join(attemptsRoot, attemptId);
+  const allowedAttemptSources = new Set([
+    attemptDir,
+    join(attemptDir, '.stage', 'subject.env'),
+    join(attemptDir, '.stage', 'grader.env'),
+    join(attemptDir, '.stage', 'passwd'),
+    join(attemptDir, '.stage', 'group'),
+  ]);
+  const attemptSources = sources.filter(
+    (source) =>
+      source === attemptsRoot || source.startsWith(`${attemptsRoot}${sep}`),
+  );
+  expect(
+    attemptSources.every((source) => allowedAttemptSources.has(source)),
+  ).toBe(true);
   expect(sources.includes(fixture.bundleDir)).toBe(false);
   expect(sources.includes(join(fixture.campaignDir, 'journal.db'))).toBe(false);
   expect(sources.includes(fixture.campaignDir)).toBe(false);
@@ -865,23 +943,87 @@ function assertAttemptLogsPrivate(fixture: DockerFixture): void {
   }
 }
 
-function assertProviderRecords(fixture: DockerFixture): void {
+interface ProviderRecord {
+  readonly headers: Record<string, string | null>;
+  readonly conversation_fingerprint: string;
+  readonly turn: number;
+}
+
+function providerRecords(fixture: DockerFixture): ProviderRecord[] {
   const raw = readFileSync(fixture.providerRecord, 'utf8').trim();
   expect(raw).not.toBe('');
-  const records = raw.split(/\r?\n/).map(
-    (line) =>
-      JSON.parse(line) as {
-        headers: Record<string, string | null>;
-      },
-  );
-  expect(records.length).toBeGreaterThan(0);
+  return raw.split(/\r?\n/).map((line) => JSON.parse(line) as ProviderRecord);
+}
+
+function assertProviderRecords(
+  fixture: DockerFixture,
+  expectedConversations: number,
+): void {
+  const records = providerRecords(fixture);
+  expect(records.length).toBe(expectedConversations * 4);
+  const turnsByConversation = new Map<string, number[]>();
   for (const record of records) {
+    const turns =
+      turnsByConversation.get(record.conversation_fingerprint) ?? [];
+    turns.push(record.turn);
+    turnsByConversation.set(record.conversation_fingerprint, turns);
     expect(record.headers['x_api_key']).toBe(fixture.graderValue);
-    for (const [name, value] of Object.entries(record.headers)) {
-      if (value === fixture.graderValue) expect(name).toBe('x_api_key');
-      expect(value).not.toBe(fixture.subjectValue);
-    }
+    const graderHeaders = Object.entries(record.headers)
+      .filter(([, value]) => value?.includes(fixture.graderValue) === true)
+      .map(([name]) => name);
+    expect(graderHeaders).toEqual(['x_api_key']);
+    expect(
+      Object.values(record.headers).every(
+        (value) => value?.includes(fixture.subjectValue) !== true,
+      ),
+    ).toBe(true);
   }
+  const sequences = [...turnsByConversation.values()].sort((left, right) =>
+    left.join(',').localeCompare(right.join(',')),
+  );
+  expect(turnsByConversation.size).toBe(expectedConversations);
+  expect(sequences).toEqual(
+    Array.from({ length: expectedConversations }, () => [1, 2, 3, 4]),
+  );
+}
+
+function jobRecordFiles(fixture: DockerFixture): string[] {
+  // Direct campaignRun bypasses the appliance invocation wrapper, so this
+  // fixture normally has no state/jobs record. Keep that target explicit for
+  // any job record created by the wrapper path without scanning credentials.
+  return [
+    join(fixture.campaignDir, 'campaign.json'),
+    ...filesUnder(join(fixture.tempDir, 'state', 'jobs')),
+  ];
+}
+
+function attemptLogFiles(fixture: DockerFixture): string[] {
+  return attemptDirs(fixture.campaignDir).flatMap((attemptDir) =>
+    ['stdout.log', 'stderr.log']
+      .map((name) => join(attemptDir, name))
+      .filter((path) => existsSync(path)),
+  );
+}
+
+function assertNoCredentialValuesInControlArtifacts(
+  fixture: DockerFixture,
+  inspected: readonly DockerContainer[],
+): void {
+  // Do not scan the whole campaign tree: subject-evidence/env.txt is a
+  // deliberately credential-bearing witness for assertSubjectIsolation.
+  const dockerInspection = inspected.map((container) =>
+    Buffer.from(JSON.stringify(container)),
+  );
+  const journal = [
+    Buffer.from(JSON.stringify(journalEvents(fixture.campaignDir))),
+    join(fixture.campaignDir, 'journal.db'),
+  ];
+  const jobRecords = jobRecordFiles(fixture);
+  const logs = attemptLogFiles(fixture);
+  assertNoSecretBytes(
+    [...dockerInspection, ...journal, ...jobRecords, ...logs],
+    [fixture.subjectValue, fixture.graderValue],
+  );
 }
 
 function assertFullJournal(
@@ -952,15 +1094,8 @@ it('publishes complete fake container attempts with scoped credentials', async (
     }
     assertAttemptLogsPrivate(fixture);
     assertSubjectIsolation(fixture);
-    assertProviderRecords(fixture);
-    assertNoSecretsInTree(fixture.campaignDir, [
-      fixture.subjectValue,
-      fixture.graderValue,
-    ]);
-    assertNoSecretBytes(
-      inspected.map((container) => Buffer.from(JSON.stringify(container))),
-      [fixture.subjectValue, fixture.graderValue],
-    );
+    assertProviderRecords(fixture, 2);
+    assertNoCredentialValuesInControlArtifacts(fixture, inspected);
 
     const published = publishedRunDirs(fixture.checkout.root);
     expect(published.length).toBe(2);
@@ -1031,8 +1166,7 @@ it('turns docker stop into a stopped verdict and publishes exit evidence', async
     ).toBe(true);
     assertAttemptLogsPrivate(fixture);
   } finally {
-    if (run !== null) await run;
-    await fixture.cleanup();
+    await awaitRunAndCleanup(run, fixture.cleanup);
   }
 });
 
@@ -1047,13 +1181,11 @@ it('retains mode-0600 logs after a SIGKILL without leaving a running agent', asy
     expect(await run).toBe(0);
     expect(dockerInspect(ids[0]!).State?.Running).toBe(false);
     assertAttemptLogsPrivate(fixture);
-    assertNoSecretsInTree(fixture.campaignDir, [
-      fixture.subjectValue,
-      fixture.graderValue,
+    assertNoCredentialValuesInControlArtifacts(fixture, [
+      dockerInspect(ids[0]!),
     ]);
   } finally {
-    if (run !== null) await run;
-    await fixture.cleanup();
+    await awaitRunAndCleanup(run, fixture.cleanup);
   }
 });
 
@@ -1071,7 +1203,10 @@ it('gives parallel attempts the same tmux path and separate backing mounts', asy
           entry.startsWith('TMUX_TMPDIR='),
         ) ?? '',
     );
-    expect(tmuxTmpdirs).toEqual(['/run/quorum/attempt', '/run/quorum/attempt']);
+    expect(tmuxTmpdirs).toEqual([
+      'TMUX_TMPDIR=/run/quorum/attempt',
+      'TMUX_TMPDIR=/run/quorum/attempt',
+    ]);
     const attemptBackingSources = inspected.map((container) => {
       const mount = (container.Mounts ?? []).find(
         (candidate) =>
@@ -1103,7 +1238,6 @@ it('gives parallel attempts the same tmux path and separate backing mounts', asy
     stopContainers(ids);
     expect(await run).toBe(0);
   } finally {
-    if (run !== null) await run;
-    await fixture.cleanup();
+    await awaitRunAndCleanup(run, fixture.cleanup);
   }
 });

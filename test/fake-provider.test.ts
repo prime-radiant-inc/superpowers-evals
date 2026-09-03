@@ -78,6 +78,11 @@ interface SdkRuntime {
   readonly load: (resolvedPath: string) => unknown;
 }
 
+type FetchImplementation = (
+  input: URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
 type FakeProvider = ReturnType<typeof startFakeProvider>;
 
 const ALL_TOOLS = [
@@ -203,11 +208,7 @@ function isTransientProviderConnectionError(error: unknown): boolean {
 async function withProviderConnectionRetry<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
-  for (
-    let attempt = 1;
-    attempt <= PROVIDER_CONNECT_ATTEMPTS;
-    attempt += 1
-  ) {
+  for (let attempt = 1; attempt <= PROVIDER_CONNECT_ATTEMPTS; attempt += 1) {
     try {
       return await operation();
     } catch (error) {
@@ -255,7 +256,7 @@ function makeAnthropicClient(
 function makeTransport(
   baseUrl: string,
   sdkRuntime: SdkRuntime = defaultSdkRuntime,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: FetchImplementation = fetch,
 ): {
   readonly usesSdk: boolean;
   readonly send: (body: MessagesRequest) => Promise<ToolResponse>;
