@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdirSync,
@@ -160,6 +161,53 @@ test('campaign worker runs with one lock and explicit controller seams', async (
   expect(Bun.env['QUORUM_LIVE_SPEND_LOCK']).toBe(priorLockEnv);
 });
 
+test('campaign worker never promotes a stopping job during readiness or completion', async () => {
+  const fx = fixture();
+  let sawStoppingAtReady = false;
+  await runCampaignWorker(fx.loaded, fx.jobId, new ImageRunner(`${DIGEST}\n`), {
+    runCampaign: async (_dir, opts) => {
+      updateJob(fx.loaded, fx.jobId, (current) => ({
+        ...current,
+        status: 'stopping',
+      }));
+      opts.onReady?.();
+      sawStoppingAtReady = readJob(fx.loaded, fx.jobId).status === 'stopping';
+      return 0;
+    },
+  });
+  expect(sawStoppingAtReady).toBe(true);
+  expect(readJob(fx.loaded, fx.jobId).status).toBe('stopping');
+});
+
+test('campaign worker never replaces a concurrently cancelled job with failed', async () => {
+  const fx = fixture();
+  const original = new Error('controller failed');
+  await expect(
+    runCampaignWorker(fx.loaded, fx.jobId, new ImageRunner(`${DIGEST}\n`), {
+      runCampaign: async () => {
+        updateJob(fx.loaded, fx.jobId, (current) => ({
+          ...current,
+          status: 'cancelled',
+        }));
+        throw original;
+      },
+    }),
+  ).rejects.toBe(original);
+  expect(readJob(fx.loaded, fx.jobId).status).toBe('cancelled');
+});
+
+test('campaign worker resolves its image before taking run.lock', async () => {
+  const fx = fixture();
+  const runner = new ImageRunner(`${DIGEST}\n`);
+  runner.run = () => {
+    expect(existsSync(join(fx.loaded.paths.locks, 'run.lock'))).toBe(false);
+    return { status: 0, stdout: `${DIGEST}\n`, stderr: '' };
+  };
+  await runCampaignWorker(fx.loaded, fx.jobId, runner, {
+    runCampaign: async () => 0,
+  });
+});
+
 test('campaign worker records image movement and controller failures without stranding its lock', async () => {
   const moved = fixture();
   await expect(
@@ -258,6 +306,7 @@ test('detached spawn returns pid identity and appends child output to private lo
       writeSync(stderrFd, 'stderr-bytes');
       return {
         pid: 4242,
+        once: () => undefined,
         unref: () => {
           unrefCount += 1;
         },
@@ -273,6 +322,31 @@ test('detached spawn returns pid identity and appends child output to private lo
   expect(readFileSync(job.artifacts.stderr_log, 'utf8')).toContain(
     'stderr-bytes',
   );
+  expect(() => writeSync(stdoutFd, 'after-close')).toThrow();
+  expect(() => writeSync(stderrFd, 'after-close')).toThrow();
+});
+
+test('detached spawn records an asynchronous child error without an unhandled event', async () => {
+  const fx = fixture();
+  let stdoutFd = -1;
+  let stderrFd = -1;
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    unref(): void;
+  };
+  child.pid = 4242;
+  child.unref = () => {};
+  spawnDetachedWorker(fx.loaded, fx.jobId, (_command, _args, options) => {
+    const stdio = options?.stdio as [unknown, number, number];
+    stdoutFd = stdio[1];
+    stderrFd = stdio[2];
+    queueMicrotask(() => child.emit('error', new Error('hostile raw detail')));
+    return child as never;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const job = readJob(fx.loaded, fx.jobId);
+  expect(job.status).toBe('failed');
+  expect(job.error?.message).not.toContain('hostile raw detail');
   expect(() => writeSync(stdoutFd, 'after-close')).toThrow();
   expect(() => writeSync(stderrFd, 'after-close')).toThrow();
 });
