@@ -111,12 +111,12 @@ export function buildAttemptMounts(
 interface InspectedMount {
   readonly Type?: string;
   readonly Source?: string;
-  readonly Target?: string;
-  readonly ReadOnly?: boolean;
+  readonly Destination?: string;
   readonly RW?: boolean;
 }
 
 interface InspectedContainer {
+  readonly Id?: string;
   readonly Name?: string;
   readonly Image?: string;
   readonly Config?: {
@@ -164,7 +164,19 @@ export class ContainerAttemptSpawner implements ChildSpawner {
         );
       }
     } catch (error) {
-      this.removeExactContainer(containerId);
+      try {
+        this.removeExactContainer(containerId);
+      } catch (cleanupError) {
+        const originalMessage =
+          error instanceof Error ? error.message : 'container operation failed';
+        const cleanupMessage =
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : 'exact container cleanup failed';
+        throw new AttemptContainerError(
+          `${originalMessage}; ${cleanupMessage}`,
+        );
+      }
       throw error;
     }
     return this.inertHandle(containerId, containerName);
@@ -191,6 +203,8 @@ export class ContainerAttemptSpawner implements ChildSpawner {
       `quorum.attempt_id=${attempt.attemptId}`,
       '--label',
       `quorum.evals_sha=${this.args.evalsSha}`,
+      '--label',
+      `quorum.image_digest=${this.args.imageDigest}`,
       '--user',
       `${this.args.uid}:${this.args.gid}`,
       '--workdir',
@@ -269,12 +283,14 @@ export class ContainerAttemptSpawner implements ChildSpawner {
     );
     const labels = observed.Config?.Labels;
     const identityMatches =
+      observed.Id === containerId &&
       actualName === containerName &&
       imageIds.length > 0 &&
       imageIds.every((image) => image === this.args.imageDigest) &&
       labels?.['quorum.campaign_id'] === this.args.campaignId &&
       labels['quorum.attempt_id'] === attempt.attemptId &&
-      labels['quorum.evals_sha'] === this.args.evalsSha;
+      labels['quorum.evals_sha'] === this.args.evalsSha &&
+      labels['quorum.image_digest'] === this.args.imageDigest;
     if (!identityMatches) {
       throw new AttemptContainerError(
         'container identity, image, or label verification failed',
@@ -282,32 +298,35 @@ export class ContainerAttemptSpawner implements ChildSpawner {
     }
 
     const observedMounts = observed.Mounts ?? observed.HostConfig?.Mounts;
-    if (!this.sameMounts(attempt.mounts, observedMounts ?? [])) {
+    if (!this.sameMounts(attempt.mounts, observedMounts)) {
       throw new AttemptContainerError('container mount verification failed');
     }
   }
 
   private sameMounts(
     expected: readonly AttemptMount[],
-    observed: readonly InspectedMount[],
+    observed: unknown,
   ): boolean {
-    const key = (mount: {
-      readonly Type?: string;
-      readonly Source?: string;
-      readonly Target?: string;
-      readonly ReadOnly?: boolean;
-      readonly RW?: boolean;
-    }): string => {
-      const readOnly =
-        mount.ReadOnly !== undefined ? mount.ReadOnly : mount.RW === false;
-      return `${mount.Type ?? ''}|${mount.Source ?? ''}|${mount.Target ?? ''}|${readOnly}`;
+    if (!Array.isArray(observed)) return false;
+    const key = (mount: unknown): string => {
+      if (mount === null || typeof mount !== 'object') return 'malformed';
+      const record = mount as InspectedMount;
+      if (
+        typeof record.Type !== 'string' ||
+        typeof record.Source !== 'string' ||
+        typeof record.Destination !== 'string' ||
+        typeof record.RW !== 'boolean'
+      ) {
+        return 'malformed';
+      }
+      return `${record.Type}|${record.Source}|${record.Destination}|${!record.RW}`;
     };
     const expectedKeys = expected.map((mount) =>
       key({
         Type: 'bind',
         Source: mount.source,
-        Target: mount.target,
-        ReadOnly: mount.mode === 'ro',
+        Destination: mount.target,
+        RW: mount.mode === 'rw',
       }),
     );
     const observedKeys = observed.map(key);
@@ -325,9 +344,13 @@ export class ContainerAttemptSpawner implements ChildSpawner {
   }
 
   private removeExactContainer(containerId: string): void {
-    // Cleanup errors must not replace the original typed failure, and Docker
-    // receives only the validated full ID captured from create.
-    this.docker(['rm', containerId]);
+    // Docker receives only the validated full ID captured from create. A
+    // failed cleanup is itself a hard failure: the caller must not report a
+    // verification/start failure as if the created container was removed.
+    const result = this.docker(['rm', containerId]);
+    if (result.status !== 0) {
+      throw new AttemptContainerError('exact container cleanup failed');
+    }
   }
 
   private inertHandle(
