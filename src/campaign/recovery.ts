@@ -534,6 +534,15 @@ export async function killJournaledPgids(args: {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
     if (terminalAttempts.has(attemptId)) continue;
+    if ('container_id' in event.payload) {
+      // Child 1 container arm: verified death is a container stop against the
+      // exact container ID. The stop seam lands with the container spawner
+      // (Task 11); until then a journaled container handle here is LOUD.
+      stream.write(
+        `run_allocated ${event.payload.attempt_id} journaled a container handle (${event.payload.container_id}) — container stop seam not injected; recorded, not verified\n`,
+      );
+      continue;
+    }
     await disposeGroup(event.payload.pgid, attemptId);
     // The subject outlives its group (C10): reach the run's tmux host on
     // every disposition — a group that is already gone is the crash-path

@@ -1134,6 +1134,14 @@ export async function runCampaignDispatch(
     write: (s: string) => void process.stdout.write(s),
   };
   const spawner = args.spawner ?? new DetachedChildSpawner();
+  const pgidOf = (child: SpawnedCampaignChild): number => {
+    if (child.handle.kind !== 'process') {
+      throw new DispatcherError(
+        'process-group operation on a container child — the container path routes through docker stop (child 1 routing)',
+      );
+    }
+    return child.handle.pgid;
+  };
   // Production default is the REAL probe — a stub here would let a lease
   // reclamation misjudge a live holder (mandated behavior never rides a
   // fake default; tests inject their own probe).
@@ -1702,8 +1710,9 @@ export async function runCampaignDispatch(
           released += 1;
           continue;
         }
+        const pgid = pgidOf(sample.child);
         const result = await killGroupVerified({
-          pgid: sample.child.pid,
+          pgid,
           birthTsMs: sample.childBirthTsMs,
           identity,
           signal: signalGroup,
@@ -1712,9 +1721,7 @@ export async function runCampaignDispatch(
           graceSeconds: killGrace,
         });
         if (result === 'alive' || result === 'unknown') {
-          failures.push(
-            `pgid ${sample.child.pid} (${sample.attemptId}: ${result})`,
-          );
+          failures.push(`pgid ${pgid} (${sample.attemptId}: ${result})`);
           continue;
         }
         // Verified dead ('dead', or 'stale' — the pid was reused, so the
@@ -2051,21 +2058,33 @@ export async function runCampaignDispatch(
           `invariant violated: allocation for ${sample.attemptId} (run ${runId}) arrived in state ${state} — a spawned sample is dispositioned only after its allocation is journaled or its child is verified dead (R-JRN-8)`,
         );
       }
-      if (signalGroup(child.pid, 0) === 'esrch') {
+      if (
+        child.handle.kind === 'process' &&
+        signalGroup(child.handle.pgid, 0) === 'esrch'
+      ) {
         stream.write(
-          `run_allocated for ${sample.attemptId} but process group ${child.pid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
+          `run_allocated for ${sample.attemptId} but process group ${child.handle.pgid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
         );
         return;
       }
       await appendCritical([
         {
           type: 'run_allocated',
-          payload: {
-            attempt_id: sample.attemptId,
-            run_id: runId,
-            pgid: child.pid,
-            ...keyGrantsPayload(sample.grants),
-          },
+          payload:
+            child.handle.kind === 'container'
+              ? {
+                  attempt_id: sample.attemptId,
+                  run_id: runId,
+                  container_id: child.handle.containerId,
+                  image_digest: child.handle.imageDigest,
+                  ...keyGrantsPayload(sample.grants),
+                }
+              : {
+                  attempt_id: sample.attemptId,
+                  run_id: runId,
+                  pgid: child.handle.pgid,
+                  ...keyGrantsPayload(sample.grants),
+                },
         },
       ]);
     };
@@ -2209,8 +2228,9 @@ export async function runCampaignDispatch(
         stream.write(
           `allocation wait for ${sample.attemptId} expired (${ALLOCATION_WAIT_BUDGET_SECONDS}s budget, no run_allocated line) — killing the unallocated child before its disposition (R-JRN-8: no allocation can follow a terminal)\n`,
         );
+        const pgid = pgidOf(child);
         const result = await killGroupVerified({
-          pgid: child.pid,
+          pgid,
           birthTsMs: sample.childBirthTsMs,
           identity,
           signal: signalGroup,
@@ -2219,7 +2239,7 @@ export async function runCampaignDispatch(
           graceSeconds: killGrace,
         });
         if (result === 'alive' || result === 'unknown') {
-          failures.push(`pgid ${child.pid} (${sample.attemptId}: ${result})`);
+          failures.push(`pgid ${pgid} (${sample.attemptId}: ${result})`);
           continue;
         }
         sample.abandoned = true;
@@ -3090,7 +3110,10 @@ export async function runCampaignDispatch(
           },
         };
         const child = spawner.spawn(spec);
-        sample.childBirthTsMs = identity.startTimeMs(child.pid);
+        sample.childBirthTsMs =
+          child.handle.kind === 'process'
+            ? identity.startTimeMs(child.handle.pgid)
+            : null;
         if (grants.subjectEnv !== undefined) {
           incrementInFlight(subjectName, grants.subjectEnv);
         }
