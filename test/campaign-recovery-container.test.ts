@@ -1,14 +1,28 @@
 import { expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ContainerStopper } from '../src/campaign/container-spawner.ts';
 import type {
   GroupSignaler,
   SubjectHostProbe,
 } from '../src/campaign/dispatcher.ts';
+import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import {
+  type CampaignChildProbe,
+  cancelCampaign,
   killJournaledPgids,
+  type ResumeArgs,
+  resumeCampaign,
   type UnverifiedContainerRecord,
 } from '../src/campaign/recovery.ts';
 import type { JournalEvent } from '../src/contracts/campaign/journal-events.ts';
+import { FakeClock } from '../src/scheduler/clock.ts';
+import {
+  journaledTypes,
+  lockDir,
+  NO_LIVE_CHILD,
+  publishedContainerCampaign,
+} from './campaign-recovery-fixtures.ts';
 
 const CAMPAIGN_ID = 'c'.repeat(64);
 const ATTEMPT_ID = 'attempt-1';
@@ -43,10 +57,27 @@ function unverifiedRecord(): UnverifiedContainerRecord {
 }
 
 function noProcessRecoveryProbes(): {
+  identity: ProcessIdentityProbe;
+  child: CampaignChildProbe;
   signal: GroupSignaler;
   subjectHost: SubjectHostProbe;
 } {
   return {
+    identity: {
+      exists: () => {
+        throw new Error('process identity probe must not run for a container');
+      },
+      startTimeMs: () => {
+        throw new Error(
+          'process start-time probe must not run for a container',
+        );
+      },
+    },
+    child: {
+      commandLine: () => {
+        throw new Error('campaign-child probe must not run for a container');
+      },
+    },
     signal: () => {
       throw new Error('process-group probe must not run for a container');
     },
@@ -108,6 +139,11 @@ test('recovery reports a surviving container loudly and never counts it stopped'
   expect(report.unverifiedContainers).toEqual([unverifiedRecord()]);
   expect(loud.join('')).toMatch(/survived stop\+kill/);
   expect(loud.join('')).toMatch(/still spending/);
+  expect(loud.join('')).toContain(`attempt ${ATTEMPT_ID}`);
+  expect(loud.join('')).toContain(`run ${RUN_ID}`);
+  expect(loud.join('')).toContain('quorum-attempt-campaign-attempt');
+  expect(loud.join('')).toContain(CONTAINER_ID);
+  expect(loud.join('')).toContain(IMAGE_DIGEST);
 });
 
 test('recovery without a stopper refuses to verify a container handle loudly', async () => {
@@ -122,6 +158,11 @@ test('recovery without a stopper refuses to verify a container handle loudly', a
   expect(report.unverifiedContainers).toEqual([unverifiedRecord()]);
   expect(loud.join('')).toMatch(/no container stopper injected/);
   expect(loud.join('')).toMatch(/recorded, not verified/);
+  expect(loud.join('')).toContain(`attempt ${ATTEMPT_ID}`);
+  expect(loud.join('')).toContain(`run ${RUN_ID}`);
+  expect(loud.join('')).toContain('quorum-attempt-campaign-attempt');
+  expect(loud.join('')).toContain(CONTAINER_ID);
+  expect(loud.join('')).toContain(IMAGE_DIGEST);
 });
 
 test('recovery propagates a container stopper failure instead of classifying death', async () => {
@@ -134,4 +175,91 @@ test('recovery propagates a container stopper failure instead of classifying dea
   await expect(
     killJournaledPgids(recoveryArgs({ containerStop })),
   ).rejects.toThrow('docker unavailable');
+});
+
+function resumeFixtureArgs(
+  dir: string,
+  containerStop: ContainerStopper,
+  lockName: string,
+): ResumeArgs {
+  return {
+    campaignDir: dir,
+    credentials: {},
+    evalsCheckout: dir,
+    gauntletCheckout: dir,
+    superpowersCheckout: dir,
+    clock: new FakeClock(1),
+    identity: NO_LIVE_CHILD,
+    lockPath: lockDir(lockName),
+    stream: { write: () => {} },
+    containerStop,
+  };
+}
+
+function aliveContainerStopper(ids: string[]): ContainerStopper {
+  return {
+    stop: async (containerId) => {
+      ids.push(containerId);
+      return 'alive';
+    },
+  };
+}
+
+test('resume forwards the container stopper and refuses before journal mutation when the container survives', async () => {
+  const { dir } = publishedContainerCampaign();
+  const before = journaledTypes(dir, 2);
+  const stopped: string[] = [];
+
+  await expect(
+    resumeCampaign(
+      resumeFixtureArgs(
+        dir,
+        aliveContainerStopper(stopped),
+        'container-resume-forward.d',
+      ),
+    ),
+  ).rejects.toThrow(/container.*could not be verified dead/i);
+
+  expect(stopped).toEqual(['a'.repeat(64)]);
+  expect(journaledTypes(dir, 2)).toEqual(before);
+});
+
+test('resume forwards the container stopper through cancel-request precedence', async () => {
+  const { dir } = publishedContainerCampaign();
+  writeFileSync(join(dir, 'cancel-request'), '1\noperator test\n');
+  const before = journaledTypes(dir, 2);
+  const stopped: string[] = [];
+
+  await expect(
+    resumeCampaign(
+      resumeFixtureArgs(
+        dir,
+        aliveContainerStopper(stopped),
+        'container-resume-cancel-forward.d',
+      ),
+    ),
+  ).rejects.toThrow(/cancellation could not complete/i);
+
+  expect(stopped).toEqual(['a'.repeat(64)]);
+  expect(journaledTypes(dir, 2)).toEqual(before);
+});
+
+test('direct post-crash cancel forwards the container stopper and refuses terminal mutation when the container survives', async () => {
+  const { dir } = publishedContainerCampaign();
+  const before = journaledTypes(dir, 2);
+  const stopped: string[] = [];
+
+  const result = await cancelCampaign({
+    campaignDir: dir,
+    reason: 'operator test',
+    clock: new FakeClock(1),
+    identity: NO_LIVE_CHILD,
+    lockPath: lockDir('container-cancel-forward.d'),
+    stream: { write: () => {} },
+    containerStop: aliveContainerStopper(stopped),
+  });
+
+  expect(result).toEqual({ cancelled: false, postCrash: true });
+  expect(stopped).toEqual(['a'.repeat(64)]);
+  expect(journaledTypes(dir, 2)).toEqual(before);
 });

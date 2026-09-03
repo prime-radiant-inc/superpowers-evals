@@ -348,6 +348,10 @@ export interface UnverifiedContainerRecord {
   readonly image_digest: string;
 }
 
+function containerDescriptor(container: UnverifiedContainerRecord): string {
+  return `container ${container.container_name} (id ${container.container_id}, attempt ${container.attempt_id}, run ${container.run_id}, image ${container.image_digest})`;
+}
+
 /** Every group the report could not prove dead. Both verbs gate on this:
  *  resume refuses to re-admit, cancel refuses to journal a terminal. */
 export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
@@ -357,9 +361,8 @@ export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
 function unverifiedContainerDescriptions(
   report: KillJournaledPgidsReport,
 ): string[] {
-  return report.unverifiedContainers.map(
-    (container) =>
-      `${container.container_name} (id ${container.container_id}, attempt ${container.attempt_id}, run ${container.run_id})`,
+  return report.unverifiedContainers.map((container) =>
+    containerDescriptor(container),
   );
 }
 
@@ -581,7 +584,7 @@ export async function killJournaledPgids(args: {
         // its stopper, process-group and tmux probes cannot establish whole-
         // attempt death, so retain the immutable identity for diagnosis.
         stream.write(
-          `run_allocated ${event.payload.attempt_id} journaled a container handle (${event.payload.container_id}) — no container stopper injected; recorded, not verified\n`,
+          `run_allocated ${event.payload.attempt_id} journaled ${containerDescriptor(record)} — no container stopper injected; recorded, not verified\n`,
         );
         unverifiedContainers.push(record);
         continue;
@@ -596,7 +599,7 @@ export async function killJournaledPgids(args: {
         containersSurvived.push(event.payload.container_id);
         unverifiedContainers.push(record);
         stream.write(
-          `orphan container ${event.payload.container_id} (attempt ${attemptId}) survived stop+kill — operator action: docker rm -f it before resuming; it is still spending\n`,
+          `orphan ${containerDescriptor(record)} survived stop+kill — operator action: docker rm -f it before resuming; it is still spending\n`,
         );
       }
       continue;
