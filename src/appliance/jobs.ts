@@ -22,6 +22,7 @@ import { atomicWriteJson, mkdirPrivate, readJsonFile } from './fs.ts';
 import { provenancePath } from './provenance.ts';
 import { assertNoFollowDirChain, ensurePrivateDirNoFollow } from './safe-fs.ts';
 import {
+  type JobCampaign,
   type JobRecord,
   JobRecordSchema,
   type LoadedApplianceStateConfig,
@@ -73,6 +74,14 @@ export type CreateJobRequest =
       readonly credentialSelection: null;
       readonly credentialScope: null;
       readonly credentialScopeSourceEvalsSha: null;
+    })
+  | (CreateJobRequestBase & {
+      readonly kind: 'campaign-run';
+      readonly runId?: never;
+      readonly credentialSelection: null;
+      readonly credentialScope: EmptyCredentialScope;
+      readonly credentialScopeSourceEvalsSha: null;
+      readonly campaign: JobCampaign;
     });
 
 type JobPatcher = (current: JobRecord) => JobRecord;
@@ -212,6 +221,7 @@ export function createJob(
     credential_selection: request.credentialSelection,
     credential_scope: request.credentialScope,
     credential_scope_source_evals_sha: request.credentialScopeSourceEvalsSha,
+    campaign: request.kind === 'campaign-run' ? request.campaign : null,
     refs: null,
     credential_bundle: null,
     container: null,

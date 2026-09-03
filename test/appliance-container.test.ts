@@ -2653,6 +2653,7 @@ function jobWithEvidence(
     credential_selection: { agent: 'gemini', credential: 'gemini_cred' },
     credential_scope: scope,
     credential_scope_source_evals_sha: 'e'.repeat(40),
+    campaign: null,
     refs: null,
     credential_bundle: null,
     container,
