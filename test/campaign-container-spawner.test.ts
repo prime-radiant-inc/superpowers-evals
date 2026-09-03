@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test';
 import {
   appendFileSync,
+  chmodSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -76,6 +79,7 @@ function followHarness(
     exitCode?: number;
     oomKilled?: boolean;
     inspectState?: unknown;
+    inspectId?: string;
     wait?: Promise<unknown>;
     waitFactory?: () => Promise<unknown>;
   } = {},
@@ -106,7 +110,7 @@ function followHarness(
     StartedAt: '2026-09-02T00:00:00Z',
     FinishedAt: '2026-09-02T00:01:00Z',
   };
-  runner.inspect.value = {
+  const inspectRecord = {
     Id: id,
     Name: `/${containerNameForAttempt(campaignId, attempt.attemptId)}`,
     Image: imageDigest,
@@ -120,19 +124,21 @@ function followHarness(
       },
     },
     Mounts: [],
-    State: state,
   };
+  runner.inspect.value = { ...inspectRecord, State: state };
   runner.results.push(
     () => ({ status: 0, stdout: `${id}\n`, stderr: '' }),
     () => ({
       status: 0,
-      stdout: JSON.stringify([runner.inspect.value]),
+      stdout: JSON.stringify([inspectRecord]),
       stderr: '',
     }),
     () => ({ status: 0, stdout: '', stderr: '' }),
     () => ({
       status: 0,
-      stdout: JSON.stringify([runner.inspect.value]),
+      stdout: JSON.stringify([
+        { ...inspectRecord, Id: opts.inspectId ?? id, State: state },
+      ]),
       stderr: '',
     }),
   );
@@ -507,6 +513,8 @@ test('waits for both durable log files, flushes final fragments, and settles onc
 
 test('writes exit.json with the inspected exit, OOM flag, and timestamps', async () => {
   const h = followHarness({ exitCode: 137, oomKilled: true });
+  writeFileSync(join(h.attempt.attemptDir, 'exit.json'), 'old\n');
+  chmodSync(join(h.attempt.attemptDir, 'exit.json'), 0o644);
   h.endWait(137);
   await h.tick();
   await h.tick();
@@ -527,6 +535,14 @@ test('writes exit.json with the inspected exit, OOM flag, and timestamps', async
     started_at: '2026-09-02T00:00:00Z',
     finished_at: '2026-09-02T00:01:00Z',
   });
+  expect(statSync(join(h.attempt.attemptDir, 'exit.json')).mode & 0o777).toBe(
+    0o600,
+  );
+  expect(
+    readdirSync(h.attempt.attemptDir).filter((name) =>
+      name.startsWith('.exit.json.'),
+    ),
+  ).toEqual([]);
 });
 
 test('reports a rejected docker wait as a typed failed exit without hanging', async () => {
@@ -569,4 +585,12 @@ test('fails closed when final inspect says the exact container is still running'
     (call) => call.args[0] === 'inspect',
   );
   expect(inspectCalls.at(-1)!.args).toEqual(['inspect', '1'.repeat(64)]);
+});
+
+test('fails closed when final inspect returns a stopped state for another container', async () => {
+  const h = followHarness({ inspectId: '2'.repeat(64) });
+  h.endWait(0);
+  await h.tick();
+  await h.tick();
+  expect(await exitWithin(h.child)).toEqual({ code: null, signal: null });
 });

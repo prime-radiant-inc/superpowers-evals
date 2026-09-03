@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   closeSync,
   readSync as fsReadSync,
+  fsyncSync,
   openSync,
-  writeFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
@@ -382,7 +386,16 @@ export class ContainerAttemptSpawner implements ChildSpawner {
     try {
       const parsed: unknown = JSON.parse(result.stdout);
       if (!Array.isArray(parsed) || parsed.length !== 1) return null;
-      const state = (parsed[0] as InspectedContainer).State;
+      const observed = parsed[0];
+      if (
+        typeof observed !== 'object' ||
+        observed === null ||
+        Array.isArray(observed) ||
+        (observed as InspectedContainer).Id !== containerId
+      ) {
+        return null;
+      }
+      const state = (observed as InspectedContainer).State;
       if (state === undefined || typeof state !== 'object' || state === null) {
         return null;
       }
@@ -447,8 +460,12 @@ export class ContainerAttemptSpawner implements ChildSpawner {
       state: InspectedState | null,
       info: ChildExitInfo,
     ): void => {
-      writeFileSync(
-        join(attempt.attemptDir, 'exit.json'),
+      const finalPath = join(attempt.attemptDir, 'exit.json');
+      const stagePath = join(
+        attempt.attemptDir,
+        `.exit.json.${process.pid}.tmp`,
+      );
+      const bytes = Buffer.from(
         `${JSON.stringify(
           {
             code: info.code,
@@ -460,8 +477,41 @@ export class ContainerAttemptSpawner implements ChildSpawner {
           null,
           2,
         )}\n`,
-        { mode: 0o600 },
+        'utf8',
       );
+      let fd: number | null = null;
+      try {
+        // wx prevents an old stage from being mistaken for this publication.
+        fd = openSync(stagePath, 'wx', 0o600);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const written = writeSync(fd, bytes, offset);
+          if (written <= 0)
+            throw new Error('exit publication made no progress');
+          offset += written;
+        }
+        fsyncSync(fd);
+        closeSync(fd);
+        fd = null;
+        renameSync(stagePath, finalPath);
+        chmodSync(finalPath, 0o600);
+        const dirFd = openSync(attempt.attemptDir, 'r');
+        try {
+          fsyncSync(dirFd);
+        } finally {
+          closeSync(dirFd);
+        }
+      } catch (error) {
+        if (fd !== null) {
+          try {
+            closeSync(fd);
+          } catch {}
+        }
+        try {
+          unlinkSync(stagePath);
+        } catch {}
+        throw error;
+      }
     };
 
     const publish = (
