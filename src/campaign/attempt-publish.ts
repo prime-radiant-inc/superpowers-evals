@@ -113,6 +113,16 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   }
 
   const staging = join(args.attemptDir, 'staging');
+  let stagingStats: ReturnType<typeof lstatSync>;
+  try {
+    stagingStats = lstatSync(staging);
+  } catch {
+    throw refusal(`attempt staging missing: ${staging}`);
+  }
+  if (stagingStats.isSymbolicLink() || !stagingStats.isDirectory()) {
+    throw refusal(`attempt staging is non-regular or symlinked: ${staging}`);
+  }
+
   let entries: string[];
   try {
     entries = readdirSync(staging);
