@@ -23,9 +23,10 @@
 // identity probeFingerprint samples, so admission — the only consumer of a
 // spawner — runs on every platform. The preflight itself is never skipped.
 import { afterAll, expect, spyOn, test } from 'bun:test';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -35,8 +36,11 @@ import {
 } from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import type { ContainerStopper } from '../src/campaign/container-spawner.ts';
-import { electWriter, openJournalRead } from '../src/campaign/journal.ts';
+import {
+  type ContainerStopper,
+  containerNameForAttempt,
+} from '../src/campaign/container-spawner.ts';
+import { electWriter } from '../src/campaign/journal.ts';
 import { REPORT_JSON_NAME } from '../src/campaign/report.ts';
 import { runTerminusSeal } from '../src/campaign/seal.ts';
 import type {
@@ -50,6 +54,10 @@ import type { Campaign } from '../src/contracts/campaign/campaign.ts';
 import { CampaignSchema } from '../src/contracts/campaign/campaign.ts';
 import { campaignDigest } from '../src/contracts/campaign/digest.ts';
 import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
+import {
+  parseAttemptManifest,
+  writeAttemptManifest,
+} from '../src/runner/manifest.ts';
 import { FakeClock } from '../src/scheduler/clock.ts';
 import {
   ALIVE_AT_5,
@@ -340,6 +348,7 @@ function sealedCampaignFixture(): { dir: string; runIds: string[] } {
   for (const [index, runId] of runIds.entries()) {
     const runDir = join(RESULTS_ROOT, runId);
     mkdirSync(runDir, { recursive: true });
+    ownDir(runDir);
     writeFileSync(
       join(runDir, 'verdict.json'),
       JSON.stringify({
@@ -421,74 +430,174 @@ test('campaignRun without options settles an already-complete campaign unchanged
 
 // ── spawner: the injected spawner runs the attempts ─────────────────────────
 
-// The scripted-child seam (the campaign-resume suite's shape): a fake child
-// is a real SpawnedCampaignChild driven by the test through the same
-// stdout/exit surface the dispatcher consumes. Its pgid must name a REAL
-// process group: recordAllocation validates it through the production kill
-// seam's 0-probe before journaling (R-SPN-2), and an impossible pgid is
-// refused as a dead group. One owned throwaway sleep process provides a
-// live group exactly the way a real detached campaign child would; the
-// test kills it in its finally.
+// The fake container child latches its protocol output and terminal state so
+// subscribers registering after spawn still observe both events, matching the
+// production container spawner's child contract without an OS process.
 class FakeChild implements SpawnedCampaignChild {
-  readonly handle: { readonly kind: 'process'; readonly pgid: number };
-  private readonly stdoutCbs: ((l: string) => void)[] = [];
-  private readonly exitCbs: ((i: ChildExitInfo) => void)[] = [];
-  constructor(pid: number) {
-    this.handle = { kind: 'process', pgid: pid };
-  }
-  get stdoutLines(): readonly string[] {
-    return [];
-  }
-  get stderrLines(): readonly string[] {
-    return [];
+  readonly handle: {
+    readonly kind: 'container';
+    readonly containerName: string;
+    readonly containerId: string;
+    readonly imageDigest: string;
+  };
+  readonly stdoutLines: string[] = [];
+  readonly stderrLines: string[] = [];
+  private readonly stdoutCbs: ((line: string) => void)[] = [];
+  private readonly stderrCbs: ((line: string) => void)[] = [];
+  private readonly exitCbs: ((info: ChildExitInfo) => void)[] = [];
+  private exitInfo: ChildExitInfo | null = null;
+  constructor(
+    containerName: string,
+    containerId: string,
+    imageDigest: string,
+    runId: string,
+  ) {
+    this.handle = {
+      kind: 'container',
+      containerName,
+      containerId,
+      imageDigest,
+    };
+    this.emitLine(`run_allocated: ${runId}`);
+    this.exit({ code: 1, signal: null });
   }
   emitLine(line: string): void {
+    this.stdoutLines.push(line);
     for (const cb of this.stdoutCbs) cb(line);
   }
-  exit(info: ChildExitInfo): void {
-    for (const cb of this.exitCbs) cb(info);
-  }
-  onStdoutLine(cb: (l: string) => void): void {
+  onStdoutLine(cb: (line: string) => void): void {
+    for (const line of this.stdoutLines) cb(line);
     this.stdoutCbs.push(cb);
   }
-  onStderrLine(cb: (l: string) => void): void {
-    void cb;
+  onStderrLine(cb: (line: string) => void): void {
+    for (const line of this.stderrLines) cb(line);
+    this.stderrCbs.push(cb);
   }
-  onExit(cb: (i: ChildExitInfo) => void): void {
+  onExit(cb: (info: ChildExitInfo) => void): void {
+    if (this.exitInfo !== null) cb(this.exitInfo);
     this.exitCbs.push(cb);
+  }
+  exit(info: ChildExitInfo): void {
+    if (this.exitInfo !== null) return;
+    this.exitInfo = info;
+    for (const cb of this.exitCbs) cb(info);
   }
 }
 
-/** A spawner whose children ride one owned, live process group: the
- * `sleep` is spawned detached (its pgid is its own pid) and killed when the
- * test is done with it. */
+/** In-memory container-path spawner matching the dispatcher-facing portion
+ * of ContainerAttemptSpawner. Its attempt roots are test-owned and its child
+ * settles itself before returning, exercising late-subscription replay. */
 class FakeSpawner implements ChildSpawner {
-  readonly kind = 'process' as const;
-  readonly spawned: { spec: CampaignChildSpec; child: FakeChild }[] = [];
-  private readonly group: { readonly pgid: number; kill(): void };
-  constructor() {
-    const proc = spawn('sleep', ['3600'], { detached: true, stdio: 'ignore' });
-    proc.unref();
-    if (proc.pid === undefined)
-      throw new Error('could not spawn a fake-pgid holder');
-    this.group = {
-      pgid: proc.pid,
-      kill(): void {
-        try {
-          proc.kill('SIGKILL');
-        } catch {
-          // already gone
-        }
-      },
+  readonly kind = 'container' as const;
+  readonly root: string;
+  readonly prepared: ReturnType<FakeSpawner['prepareAttempt']>[] = [];
+  readonly spawned: {
+    spec: CampaignChildSpec;
+    child: FakeChild;
+    runId: string;
+  }[] = [];
+  readonly manifests: ReturnType<typeof parseAttemptManifest>[] = [];
+  private readonly campaign: Campaign;
+  constructor(campaign: Campaign) {
+    this.campaign = campaign;
+    this.root = ownDir(mkdtempSync(join(tmpdir(), 'run-inject-container-')));
+  }
+  prepareAttempt(args: { attemptId: string }): {
+    attemptId: string;
+    attemptDir: string;
+    stageDir: string;
+    subjectEnvFile: string;
+    graderEnvFile: string;
+    homeDir: string;
+    stdoutLog: string;
+    stderrLog: string;
+    stagingDir: string;
+    passwdFile: string;
+    groupFile: string;
+  } {
+    const attemptDir = join(this.root, args.attemptId);
+    const stageDir = join(attemptDir, '.stage');
+    const homeDir = join(attemptDir, 'home');
+    const stagingDir = join(attemptDir, 'staging');
+    mkdirSync(stageDir, { recursive: true });
+    mkdirSync(homeDir, { recursive: true });
+    mkdirSync(stagingDir, { recursive: true });
+    chmodSync(attemptDir, 0o700);
+    chmodSync(stageDir, 0o700);
+    chmodSync(homeDir, 0o700);
+    chmodSync(stagingDir, 0o700);
+    const prepared = {
+      attemptId: args.attemptId,
+      attemptDir,
+      stageDir,
+      subjectEnvFile: join(stageDir, 'subject.env'),
+      graderEnvFile: join(stageDir, 'grader.env'),
+      homeDir,
+      stdoutLog: join(attemptDir, 'stdout.log'),
+      stderrLog: join(attemptDir, 'stderr.log'),
+      stagingDir,
+      passwdFile: join(stageDir, 'passwd'),
+      groupFile: join(stageDir, 'group'),
     };
+    for (const path of [
+      prepared.subjectEnvFile,
+      prepared.graderEnvFile,
+      prepared.passwdFile,
+      prepared.groupFile,
+      prepared.stdoutLog,
+      prepared.stderrLog,
+    ]) {
+      writeFileSync(path, '', { mode: 0o400 });
+    }
+    this.prepared.push(prepared);
+    return prepared;
   }
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild {
-    const child = new FakeChild(this.group.pgid);
-    this.spawned.push({ spec, child });
+    const attempt = spec.attempt;
+    if (attempt === undefined) {
+      throw new Error('container fake requires an attempt context');
+    }
+    const runId = `run-inject-spawn-${randomUUID()}`;
+    const runDir = join(attempt.attemptDir, 'staging', runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'verdict.json'),
+      JSON.stringify({
+        final: 'fail',
+        final_reason: 'fixture',
+        economics: { total_est_cost_usd: 0.25 },
+      }),
+    );
+    writeFileSync(
+      join(runDir, 'trajectory.json'),
+      JSON.stringify({ steps: [{ timestamp: '2026-08-29T00:00:00.000Z' }] }),
+    );
+    writeAttemptManifest(runDir, {
+      campaign_id: this.campaign.campaign_id,
+      comparison_id: 'c1',
+      block_id: 'c1:scn:x1',
+      sample_id: 'c1:scn:arm_a:x1',
+      execution_attempt_id: attempt.attemptId,
+    });
+    this.manifests.push(
+      parseAttemptManifest(readFileSync(join(runDir, 'manifest.json'), 'utf8')),
+    );
+    const child = new FakeChild(
+      containerNameForAttempt(this.campaign.campaign_id, attempt.attemptId),
+      'a'.repeat(64),
+      `sha256:${'b'.repeat(64)}`,
+      runId,
+    );
+    this.spawned.push({ spec, child, runId });
     return child;
   }
-  killGroup(): void {
-    this.group.kill();
+  async stopContainer(
+    containerId: string,
+    graceSeconds: number,
+  ): Promise<'dead'> {
+    void containerId;
+    void graceSeconds;
+    return 'dead';
   }
 }
 
@@ -521,6 +630,7 @@ function fixtureProbeFingerprint(): Campaign['contention']['host_fingerprint'] {
 function pendingCampaignFixture(): {
   dir: string;
   journaledRunId: string;
+  campaign: Campaign;
 } {
   const dir = ownDir(mkdtempSync(join(tmpdir(), 'run-inject-pending-')));
   const refs = seedRealSnapshot(dir);
@@ -542,6 +652,7 @@ function pendingCampaignFixture(): {
   const journaledRunId = `run-inject-pending-${randomUUID()}`;
   const runDir = join(RESULTS_ROOT, journaledRunId);
   mkdirSync(runDir, { recursive: true });
+  ownDir(runDir);
   writeFileSync(
     join(runDir, 'verdict.json'),
     JSON.stringify({
@@ -592,14 +703,8 @@ function pendingCampaignFixture(): {
       breach: [],
     })}\n`,
   );
-  return { dir: published.dir, journaledRunId };
+  return { dir: published.dir, journaledRunId, campaign: doc };
 }
-
-/** Real wall-clock sleep — this proof runs against RealClock, so the test
- * polls observable conditions (the spawner's spawn record, then the
- * journal's allocation event) instead of asserting timing. */
-const sleep = (ms: number): Promise<void> =>
-  new Promise((res) => setTimeout(res, ms));
 
 test('campaignRun forwards an injected spawner to the dispatcher — the remaining attempt runs through it and the campaign seals', async () => {
   // Portable proof: the preflight probe comes from the fixture seam
@@ -610,86 +715,72 @@ test('campaignRun forwards an injected spawner to the dispatcher — the remaini
   // (R-REG-19); afterAll restores their prior values.
   setProcessEnv('KEY_A', 'fixture-key-a');
   setProcessEnv('KEY_G', 'fixture-key-g');
-  const fx = pendingCampaignFixture();
-  const spawner = new FakeSpawner();
-  // The read-only journal view (R-JRN-3): safe against the live
-  // dispatcher's writer lease while the run is in flight.
-  const reader = openJournalRead(fx.dir);
-  // The spawned child's run dir is created mid-flight (after admission),
-  // so its id is tracked here and removed in finally — only this test's
-  // own unique path.
-  let spawnedRunId: string | undefined;
+  let fx: ReturnType<typeof pendingCampaignFixture> | undefined;
+  let spawner: FakeSpawner | undefined;
   try {
-    const allocatedBefore = reader
-      .readEvents()
-      .filter((e) => e.type === 'run_allocated').length;
-    const run = captureOutput(() => campaignRun(fx.dir, { spawner }));
-    // Admission: the dispatcher serves the pending sample by spawning
-    // through the INJECTED spawner (RealClock wake loop is ~1s a wave).
-    const spawnDeadline = Date.now() + 90_000;
-    while (spawner.spawned.length === 0) {
-      if (Date.now() > spawnDeadline) {
-        throw new Error('dispatcher never spawned the pending attempt');
-      }
-      await sleep(200);
-    }
-    expect(spawner.spawned.length).toBe(1);
-    const child = spawner.spawned[0]?.child;
-    if (child === undefined) throw new Error('unreachable');
-    // The child's run id travels on its `run_allocated:` stdout line; the
-    // dispatcher journals it, so the terminal evidence lands under the
-    // verb's own results root.
-    const runId = `run-inject-spawn-${randomUUID()}`;
-    spawnedRunId = runId;
-    const runDir = join(RESULTS_ROOT, runId);
-    mkdirSync(runDir, { recursive: true });
-    writeFileSync(
-      join(runDir, 'verdict.json'),
-      JSON.stringify({
-        final: 'fail',
-        final_reason: 'fixture',
-        economics: { total_est_cost_usd: 0.25 },
-      }),
+    const fixture = pendingCampaignFixture();
+    fx = fixture;
+    const fakeSpawner = new FakeSpawner(fixture.campaign);
+    spawner = fakeSpawner;
+    expect(fakeSpawner.kind).toBe('container');
+    const result = await captureOutput(() =>
+      campaignRun(fixture.dir, { spawner: fakeSpawner }),
     );
-    writeFileSync(
-      join(runDir, 'trajectory.json'),
-      JSON.stringify({ steps: [{ timestamp: '2026-08-29T00:00:00.000Z' }] }),
+    const { code, said } = result;
+    expect(fakeSpawner.spawned.length).toBe(1);
+    const spawned = fakeSpawner.spawned[0];
+    if (spawned === undefined) throw new Error('unreachable');
+    const attempt = spawned.spec.attempt;
+    if (attempt === undefined) throw new Error('missing container attempt');
+    const prepared = fakeSpawner.prepared[0];
+    if (prepared === undefined) throw new Error('missing prepared attempt');
+    expect(attempt.attemptId).toBe(prepared.attemptId);
+    expect(attempt.attemptDir.startsWith(fakeSpawner.root)).toBe(true);
+    expect(
+      join(attempt.attemptDir, 'staging').startsWith(fakeSpawner.root),
+    ).toBe(true);
+    expect(spawned.spec.cwd).toBe(join(fixture.dir, 'evals'));
+    expect(attempt.entrypoint).toBe(
+      join(fixture.dir, 'evals', 'container', 'attempt-entrypoint.sh'),
     );
-    child.emitLine(`run_allocated: ${runId}`);
-    // Bounded observation of the actual journal condition: the allocation
-    // must be journaled before the exit is driven, so the dispatcher can
-    // complete the run from it (R-JRN-8).
-    const journalDeadline = Date.now() + 30_000;
-    while (
-      reader.readEvents().filter((e) => e.type === 'run_allocated').length <=
-      allocatedBefore
-    ) {
-      if (Date.now() > journalDeadline) {
-        throw new Error('dispatcher never journaled the allocation');
-      }
-      await sleep(100);
-    }
-    child.exit({ code: 1, signal: null }); // EXIT_CODE_BY_FINAL['fail'] = 1
-    const { code, said } = await run;
+    expect(
+      attempt.mounts.some(
+        (mount) => mount.source === attempt.attemptDir && mount.mode === 'rw',
+      ),
+    ).toBe(true);
+    expect(existsSync(attempt.homeDir)).toBe(true);
+    expect(prepared.stageDir).toBe(join(attempt.attemptDir, '.stage'));
+    expect(prepared.subjectEnvFile).toBe(
+      join(prepared.stageDir, 'subject.env'),
+    );
+    expect(prepared.graderEnvFile).toBe(join(prepared.stageDir, 'grader.env'));
+    expect(prepared.passwdFile).toBe(join(prepared.stageDir, 'passwd'));
+    expect(prepared.groupFile).toBe(join(prepared.stageDir, 'group'));
+    expect(spawned.child.handle.kind).toBe('container');
+    expect(spawned.child.handle.containerId).toMatch(/^[0-9a-f]{64}$/);
+    expect(spawned.child.handle.imageDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const manifest = fakeSpawner.manifests[0];
+    if (manifest === undefined) throw new Error('missing attempt manifest');
+    expect(manifest.campaign.campaign_id).toBe(fixture.campaign.campaign_id);
+    expect(manifest.campaign.execution_attempt_id).toBe(attempt.attemptId);
+    expect(manifest.run_id).toBe(spawned.runId);
+    expect(
+      journaledTypes(fixture.dir, 2).filter((t) => t === 'run_completed'),
+    ).toHaveLength(2);
+    expect(journaledTypes(fixture.dir, 2).at(-1)).toBe('sealed');
     expect(code).toBe(0);
     expect(said).toContain('campaign run finished: completed');
-    // The spawned attempt reached a journaled terminal and the campaign
-    // sealed: settled, not merely spawned.
-    const types = journaledTypes(fx.dir, 2);
-    expect(types.filter((t) => t === 'run_completed').length).toBe(2);
-    expect(types.at(-1)).toBe('sealed');
   } finally {
-    spawner.killGroup();
-    reader.close();
-    if (spawnedRunId !== undefined) {
-      rmSync(join(RESULTS_ROOT, spawnedRunId), {
+    if (spawner !== undefined) {
+      for (const { runId } of spawner.spawned) {
+        rmSync(join(RESULTS_ROOT, runId), { recursive: true, force: true });
+      }
+    }
+    if (fx !== undefined) {
+      rmSync(join(RESULTS_ROOT, fx.journaledRunId), {
         recursive: true,
         force: true,
       });
     }
-    rmSync(join(RESULTS_ROOT, fx.journaledRunId), {
-      recursive: true,
-      force: true,
-    });
   }
 }, 180_000);
