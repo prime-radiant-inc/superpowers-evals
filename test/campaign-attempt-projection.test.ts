@@ -394,3 +394,49 @@ test('projection refuses a stage displaced during pinned writes', () => {
   expect(existsSync(stolen)).toBe(false);
   expect(readdirSync(attacker)).toEqual([]);
 });
+
+test('removal refuses a swap between identity check and deletion', () => {
+  const fx = projectionFixture();
+  const prepared = stage(fx, 'remove-window');
+  const stolen = join(prepared.attemptDir, '.stage-stolen');
+  let swapped = false;
+  const realRename = fs.renameSync;
+  const spy = spyOn(fs, 'renameSync').mockImplementation(((path, target) => {
+    if (!swapped && String(path).endsWith('/.stage')) {
+      swapped = true;
+      fs.renameSync(prepared.stageDir, stolen);
+      mkdirSync(prepared.stageDir);
+    }
+    return realRename(path, target);
+  }) as typeof fs.renameSync);
+  try {
+    expect(() => removeAttemptStage(prepared.attemptDir)).toThrow(
+      AttemptProjectionError,
+    );
+  } finally {
+    spy.mockRestore();
+  }
+  expect(swapped).toBe(true);
+  expect(existsSync(prepared.stageDir)).toBe(true);
+  expect(existsSync(stolen)).toBe(true);
+});
+
+test('removal refuses an uninspectable optional stage', () => {
+  const fx = projectionFixture();
+  const attemptDir = join(fx.campaignDir, 'attempts', 'inspection');
+  mkdirSync(attemptDir, { recursive: true });
+  const realLstat = fs.lstatSync;
+  const spy = spyOn(fs, 'lstatSync').mockImplementation(((path, options) => {
+    if (String(path).endsWith('/.stage')) {
+      throw new Error('inspection failed');
+    }
+    return realLstat(path, options);
+  }) as typeof fs.lstatSync);
+  try {
+    expect(() => removeAttemptStage(attemptDir)).toThrow(
+      AttemptProjectionError,
+    );
+  } finally {
+    spy.mockRestore();
+  }
+});
