@@ -1176,11 +1176,19 @@ export type DetachedSpawnPrimitive = (
   options: SpawnOptions,
 ) => ChildProcess;
 
+export type DetachedSpawnIdentityCallback = (
+  processInfo: LiveProcessInfo,
+) => void;
+
+export type DetachedTerminationPrimitive = (child: ChildProcess) => void;
+
 export function spawnDetachedWorker(
   loaded: LoadedApplianceStateConfig,
   jobId: string,
   spawnPrimitive: DetachedSpawnPrimitive = (command, args, options) =>
     spawn(command, [...args], options),
+  onSpawn?: DetachedSpawnIdentityCallback,
+  terminatePrimitive: DetachedTerminationPrimitive = interruptHostProcessGroup,
 ): LiveProcessInfo {
   const processModule = new URL('./process.ts', import.meta.url).href;
   const configModule = new URL('./config.ts', import.meta.url).href;
@@ -1221,15 +1229,27 @@ await dispatchDetachedWorker(loaded, jobId);
       );
     });
     const pid = child.pid;
-    if (pid === undefined || !Number.isInteger(pid) || pid <= 1) {
+    if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 1) {
+      try {
+        terminatePrimitive(child);
+      } catch {}
       throw new ApplianceError(
         'config_invalid',
         'spawn',
         DETACHED_UNSAFE_PID_MESSAGE,
       );
     }
+    const processInfo = { host_pid: pid, host_pgid: pid };
+    try {
+      onSpawn?.(processInfo);
+    } catch (error) {
+      try {
+        terminatePrimitive(child);
+      } catch {}
+      throw error;
+    }
     child.unref();
-    return { host_pid: pid, host_pgid: pid };
+    return processInfo;
   } catch (error) {
     if (
       error instanceof ApplianceError &&
