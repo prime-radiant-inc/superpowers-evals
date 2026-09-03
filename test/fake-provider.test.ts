@@ -9,13 +9,13 @@ const nodeRequire = createRequire(import.meta.url);
 const ANTHROPIC_VERSION = '2023-06-01';
 const GRADER_API_KEY = 'fake-grader-api-key';
 const MODEL = 'claude-fake-grader-0';
-const PROVIDER_CONNECT_ATTEMPTS = 20;
-const PROVIDER_CONNECT_RETRY_DELAY_MS = 50;
+const PROVIDER_CONNECT_ATTEMPTS = 60;
+const PROVIDER_CONNECT_RETRY_DELAY_MS = 100;
 
 // The full repository suite can leave a freshly-created Bun server waiting
 // for its first accept window. Keep the retry bounded and give it room to
 // finish inside the test timeout.
-setDefaultTimeout(10_000);
+setDefaultTimeout(20_000);
 
 interface Message {
   readonly role: 'user' | 'assistant';
