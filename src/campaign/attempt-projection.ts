@@ -1,25 +1,23 @@
-import {
-  chmodSync,
-  lstatSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { fchmodSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  agentEnvBody,
   assertDistinctFromGraderAuth,
+  assertPinnedDirectoryNamed,
   buildSupervisorEnv,
   COPILOT_SUPERVISOR_ENV_NAMES,
+  closePin,
+  createAndPinChild,
   GRADER_SOURCE_ENV_BY_RUNTIME_NAME,
+  pinAbsoluteDir,
+  pinChildDir,
   readBundleEnvForProjection,
+  removePinnedDirectory,
   SUPERVISOR_NETWORK_ENV_NAMES,
   selectAgentEnv,
+  writePinnedFile,
 } from '../appliance/credential-scope.ts';
-import {
-  assertRealDirNoFollow,
-  ensurePrivateDirNoFollow,
-} from '../appliance/safe-fs.ts';
-import { credentialScopeForSelection } from '../credentials/scope.ts';
+import { resolveCredentialSelection } from '../credentials/scope.ts';
 
 export class AttemptProjectionError extends Error {
   constructor(message: string) {
@@ -86,37 +84,14 @@ function safeEnvValue(value: string, label: string, attemptId: string): void {
   }
 }
 
-function writePrivateFile(
-  path: string,
-  body: string,
-  mode: number,
+function cleanupAfterFailure(
+  attemptPin: Parameters<typeof removePinnedDirectory>[0],
+  stagePin: Parameters<typeof removePinnedDirectory>[1],
   attemptId: string,
 ): void {
   try {
-    writeFileSync(path, body, { flag: 'wx', mode });
-    chmodSync(path, mode);
-  } catch (error) {
-    throw refuse(
-      attemptId,
-      `credential stage file could not be written (${(error as NodeJS.ErrnoException).code ?? 'unknown error'})`,
-    );
-  }
-}
-
-function cleanupAfterFailure(stageDir: string, attemptId: string): void {
-  try {
-    const stats = lstatSync(stageDir, { throwIfNoEntry: false });
-    if (stats !== undefined) {
-      // rmSync does not follow a symlink at its root. The no-follow check
-      // keeps a concurrently replaced directory from becoming a cleanup
-      // target outside this attempt's stage.
-      if (stats.isSymbolicLink() || !stats.isDirectory()) {
-        throw refuse(attemptId, 'credential stage became a non-directory');
-      }
-      rmSync(stageDir, { recursive: true, force: true });
-      if (lstatSync(stageDir, { throwIfNoEntry: false }) !== undefined) {
-        throw refuse(attemptId, 'credential stage survived cleanup');
-      }
+    if (!removePinnedDirectory(attemptPin, stagePin)) {
+      throw refuse(attemptId, 'credential stage survived cleanup');
     }
   } catch (error) {
     if (error instanceof AttemptProjectionError) throw error;
@@ -134,9 +109,9 @@ export function prepareAttemptStage(
 ): PreparedAttemptStage {
   assertAttemptId(args.attemptId);
 
-  const scope = (() => {
+  const resolved = (() => {
     try {
-      return credentialScopeForSelection(args.evalsRoot, {
+      return resolveCredentialSelection(args.evalsRoot, {
         agent: args.agent,
         credential: args.credentialName,
       });
@@ -147,19 +122,8 @@ export function prepareAttemptStage(
       );
     }
   })();
-  if (scope.oauth !== null) {
-    throw refuse(
-      args.attemptId,
-      `credential '${scope.credential}' requires an OAuth home projection — V2 accepts only api-key and bedrock-bearer deliveries`,
-    );
-  }
-  if (
-    scope.agentEnv.some(
-      (projection) =>
-        projection.destinationName === 'CLAUDE_CODE_OAUTH_TOKEN' ||
-        projection.destinationName === 'COPILOT_GITHUB_TOKEN',
-    )
-  ) {
+  const scope = resolved.scope;
+  if (resolved.auth !== 'api-key' && resolved.auth !== 'bedrock-bearer') {
     throw refuse(
       args.attemptId,
       `credential '${scope.credential}' requires an OAuth home projection — V2 accepts only api-key and bedrock-bearer deliveries`,
@@ -180,7 +144,8 @@ export function prepareAttemptStage(
   for (const name of COPILOT_SUPERVISOR_ENV_NAMES) names.add(name);
 
   let bundleEnv: ReadonlyMap<string, string>;
-  let stageStarted = false;
+  let attemptPin: ReturnType<typeof pinAbsoluteDir> | null = null;
+  let stagePin: ReturnType<typeof pinAbsoluteDir> | null = null;
   try {
     bundleEnv = readBundleEnvForProjection(args.bundleDir, [...names]);
     const agent = selectAgentEnv(scope, bundleEnv);
@@ -207,23 +172,40 @@ export function prepareAttemptStage(
     const passwdFile = join(stageDir, 'passwd');
     const groupFile = join(stageDir, 'group');
 
-    assertRealDirNoFollow(args.campaignDir, 'campaign directory');
-    ensurePrivateDirNoFollow(
-      args.campaignDir,
-      join(args.campaignDir, 'attempts'),
-      'campaign attempts',
-    );
-    ensurePrivateDirNoFollow(
-      join(args.campaignDir, 'attempts'),
-      attemptDir,
-      'attempt directory',
-    );
-    ensurePrivateDirNoFollow(attemptDir, homeDir, 'attempt home');
-    ensurePrivateDirNoFollow(attemptDir, stagingDir, 'attempt staging');
-    ensurePrivateDirNoFollow(attemptDir, stageDir, 'attempt credential stage');
-    stageStarted = true;
+    const campaignPin = pinAbsoluteDir(args.campaignDir, 'campaign directory');
+    let attemptsPin: ReturnType<typeof pinAbsoluteDir> | null = null;
+    let homePin: ReturnType<typeof pinAbsoluteDir> | null = null;
+    let stagingPin: ReturnType<typeof pinAbsoluteDir> | null = null;
+    try {
+      attemptsPin = createAndPinChild(
+        campaignPin,
+        'attempts',
+        'campaign attempts',
+      );
+      attemptPin = createAndPinChild(
+        attemptsPin,
+        args.attemptId,
+        'attempt directory',
+      );
+      homePin = createAndPinChild(attemptPin, 'home', 'attempt home');
+      stagingPin = createAndPinChild(attemptPin, 'staging', 'attempt staging');
+      stagePin = createAndPinChild(
+        attemptPin,
+        '.stage',
+        'attempt credential stage',
+      );
+    } finally {
+      closePin(campaignPin);
+      if (attemptsPin !== null) closePin(attemptsPin);
+      if (homePin !== null) closePin(homePin);
+      if (stagingPin !== null) closePin(stagingPin);
+    }
 
-    const entries = readdirSync(stageDir);
+    if (attemptPin === null || stagePin === null) {
+      throw refuse(args.attemptId, 'credential stage could not be pinned');
+    }
+    fchmodSync(stagePin.fd, 0o700);
+    const entries = readdirSync(stagePin.viaPath);
     for (const entry of entries) {
       if (!STAGE_ENTRIES.has(entry)) {
         throw refuse(
@@ -232,32 +214,46 @@ export function prepareAttemptStage(
         );
       }
     }
-    chmodSync(stageDir, 0o700);
-    writePrivateFile(
-      subjectEnvFile,
-      agent.entries.map(([name, value]) => `${name}=${value}`).join('\n') +
-        '\n',
+    writePinnedFile(
+      stagePin,
+      ['subject.env'],
+      agentEnvBody(agent.entries),
+      'subject env',
       0o400,
-      args.attemptId,
     );
-    writePrivateFile(
-      graderEnvFile,
+    writePinnedFile(
+      stagePin,
+      ['grader.env'],
       `${supervisor.lines.join('\n')}\n`,
+      'grader env',
       0o400,
-      args.attemptId,
     );
-    writePrivateFile(
-      passwdFile,
+    writePinnedFile(
+      stagePin,
+      ['passwd'],
       `root:x:0:0:root:/root:/bin/bash\nquorum:x:${args.uid}:${args.gid}:Quorum Attempt:${homeDir}:/bin/bash\n`,
+      'passwd',
       0o644,
-      args.attemptId,
     );
-    writePrivateFile(
-      groupFile,
+    writePinnedFile(
+      stagePin,
+      ['group'],
       `root:x:0:\nquorum:x:${args.gid}:\n`,
+      'group',
       0o644,
-      args.attemptId,
     );
+
+    assertPinnedDirectoryNamed(
+      attemptPin,
+      stagePin,
+      '.stage',
+      'attempt credential stage',
+    );
+
+    closePin(stagePin);
+    closePin(attemptPin);
+    stagePin = null;
+    attemptPin = null;
 
     return {
       attemptId: args.attemptId,
@@ -275,9 +271,9 @@ export function prepareAttemptStage(
   } catch (error) {
     // The scope/equality phase has not created anything. Once filesystem
     // setup begins, remove only this attempt's exact stage on partial writes.
-    const attemptDir = join(args.campaignDir, 'attempts', args.attemptId);
-    const stageDir = join(attemptDir, '.stage');
-    if (!stageStarted) {
+    if (attemptPin === null || stagePin === null) {
+      if (stagePin !== null) closePin(stagePin);
+      if (attemptPin !== null) closePin(attemptPin);
       if (error instanceof AttemptProjectionError) throw error;
       throw refuse(
         args.attemptId,
@@ -286,7 +282,11 @@ export function prepareAttemptStage(
           : 'credential projection refused',
       );
     }
-    cleanupAfterFailure(stageDir, args.attemptId);
+    if (attemptPin !== null && stagePin !== null) {
+      cleanupAfterFailure(attemptPin, stagePin, args.attemptId);
+    }
+    if (stagePin !== null) closePin(stagePin);
+    if (attemptPin !== null) closePin(attemptPin);
     if (error instanceof AttemptProjectionError) throw error;
     throw refuse(
       args.attemptId,
@@ -297,16 +297,25 @@ export function prepareAttemptStage(
 
 /** Remove only one attempt's credential stage and verify that it is gone. */
 export function removeAttemptStage(attemptDir: string): void {
-  const stageDir = join(attemptDir, '.stage');
+  let attemptPin: ReturnType<typeof pinAbsoluteDir> | null = null;
+  let stagePin: ReturnType<typeof pinAbsoluteDir> | null = null;
   try {
-    assertRealDirNoFollow(attemptDir, 'attempt directory');
-    rmSync(stageDir, { recursive: true, force: true });
+    attemptPin = pinAbsoluteDir(attemptDir, 'attempt directory');
+    stagePin = pinChildDir(
+      attemptPin,
+      '.stage',
+      'attempt credential stage',
+      false,
+    );
+    if (stagePin !== null && !removePinnedDirectory(attemptPin, stagePin)) {
+      throw new AttemptProjectionError(
+        'attempt credential stage survived cleanup',
+      );
+    }
   } catch {
     throw new AttemptProjectionError('attempt credential stage cleanup failed');
-  }
-  if (lstatSync(stageDir, { throwIfNoEntry: false }) !== undefined) {
-    throw new AttemptProjectionError(
-      'attempt credential stage survived cleanup',
-    );
+  } finally {
+    if (stagePin !== null) closePin(stagePin);
+    if (attemptPin !== null) closePin(attemptPin);
   }
 }

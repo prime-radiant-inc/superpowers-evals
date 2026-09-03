@@ -304,7 +304,7 @@ export function assertCredentialBundleBoundary(config: ApplianceConfig): void {
 // Child opens keep O_NOFOLLOW (+O_DIRECTORY for intermediates), so a
 // symlinked child is still ELOOP. All failures are typed; raw errnos never
 // escape.
-interface PinnedDir {
+export interface PinnedDir {
   readonly fd: number;
   // The path prefix that addresses children relative to THIS pinned
   // directory (see above); valid while fd stays open.
@@ -420,7 +420,7 @@ function openPinnedRegularFile(
   return fd;
 }
 
-function closePin(pin: PinnedDir): void {
+export function closePin(pin: PinnedDir): void {
   try {
     closeSync(pin.fd);
   } catch {}
@@ -433,7 +433,7 @@ function closePin(pin: PinnedDir): void {
 // multi-component pathname is never reopened, so no intermediate swapped for
 // a symlink after validation can redirect the anchor. Returns the pinned
 // final directory; the caller closes it. Intermediates are closed here.
-function pinAbsoluteDir(absPath: string, label: string): PinnedDir {
+export function pinAbsoluteDir(absPath: string, label: string): PinnedDir {
   const target = resolve(absPath);
   const fsRoot = parse(target).root;
   const rel = relative(fsRoot, target);
@@ -582,7 +582,7 @@ function readBundleSource(
 // Create (0700, EEXIST tolerated) and pin one child directory relative to a
 // pinned parent, no-follow. A planted symlink at the child name is refused by
 // the following no-follow open.
-function createAndPinChild(
+export function createAndPinChild(
   parent: PinnedDir,
   name: string,
   label: string,
@@ -601,6 +601,30 @@ function createAndPinChild(
   const child = openPinnedDir(childPath, name, label, true);
   if (child === null) {
     throw scopeError(`${label} is missing after creation: ${name}`);
+  }
+  fchmodSync(child.fd, 0o700);
+  return child;
+}
+
+/** Pin one required or optional child directory relative to an existing pin. */
+export function pinChildDir(
+  parent: PinnedDir,
+  name: string,
+  label: string,
+  required = true,
+): PinnedDir | null {
+  assertSafeComponent(name, label);
+  const childPath = pinnedChildPath(parent, name);
+  const child = openPinnedDir(childPath, name, label, required);
+  if (child === null && !required) {
+    try {
+      const stats = lstatSync(childPath, { throwIfNoEntry: false });
+      if (stats !== undefined) {
+        throw scopeError(`${label} is not a directory: ${name}`);
+      }
+    } catch (error) {
+      if (error instanceof ApplianceError) throw error;
+    }
   }
   return child;
 }
@@ -661,14 +685,29 @@ function sameIdentity(
 // under the fixed name) means reporting success would name a directory the
 // secret bytes no longer live in — a typed refusal.
 function assertStagingNotDisplaced(pins: StagingPins): void {
-  const pinnedId = fstatSync(pins.staging.fd, { bigint: true });
-  const named = lstatSync(pinnedChildPath(pins.scopedParent, 'staging'), {
+  assertPinnedDirectoryNamed(
+    pins.scopedParent,
+    pins.staging,
+    'staging',
+    'the staging slot',
+  );
+}
+
+export function assertPinnedDirectoryNamed(
+  parent: PinnedDir,
+  targetPin: PinnedDir,
+  name: string,
+  label: string,
+): void {
+  assertSafeComponent(name, label);
+  const pinnedId = fstatSync(targetPin.fd, { bigint: true });
+  const named = lstatSync(pinnedChildPath(parent, name), {
     bigint: true,
     throwIfNoEntry: false,
   });
   if (named === undefined || !sameIdentity(named, pinnedId)) {
     throw scopeError(
-      'the staging slot was displaced during staging: the fixed path no longer identifies the written generation; refusing to report success',
+      `${label} was displaced during staging: the fixed path no longer identifies the written generation; refusing to report success`,
     );
   }
 }
@@ -678,23 +717,26 @@ function assertStagingNotDisplaced(pins: StagingPins): void {
 // fixed name, and never touching an unrelated entry. Used for cleanup on any
 // staging failure (partial write or displacement); a generation renamed
 // entirely outside the scoped parent cannot be located and is left in place.
-function removeStagingGeneration(pins: StagingPins): void {
+export function removePinnedDirectory(
+  parent: PinnedDir,
+  targetPin: PinnedDir,
+): boolean {
   let target: { dev: bigint; ino: bigint };
   try {
-    target = fstatSync(pins.staging.fd, { bigint: true });
+    target = fstatSync(targetPin.fd, { bigint: true });
   } catch {
-    return;
+    return false;
   }
   let entries: string[];
   try {
-    entries = readdirSync(pins.scopedParent.viaPath);
+    entries = readdirSync(parent.viaPath);
   } catch {
-    return;
+    return false;
   }
   for (const name of entries) {
     let stats: ReturnType<typeof lstatSync>;
     try {
-      stats = lstatSync(pinnedChildPath(pins.scopedParent, name), {
+      stats = lstatSync(pinnedChildPath(parent, name), {
         bigint: true,
         throwIfNoEntry: false,
       });
@@ -702,15 +744,52 @@ function removeStagingGeneration(pins: StagingPins): void {
       continue;
     }
     if (stats !== undefined && sameIdentity(stats, target)) {
+      let current: ReturnType<typeof lstatSync>;
       try {
-        rmSync(pinnedChildPath(pins.scopedParent, name), {
+        current = lstatSync(pinnedChildPath(parent, name), {
+          bigint: true,
+          throwIfNoEntry: false,
+        });
+      } catch {
+        continue;
+      }
+      if (current === undefined || !sameIdentity(current, target)) {
+        continue;
+      }
+      try {
+        rmSync(pinnedChildPath(parent, name), {
           recursive: true,
           force: true,
         });
       } catch {}
-      return;
+      let remaining: string[];
+      try {
+        remaining = readdirSync(parent.viaPath);
+      } catch {
+        return false;
+      }
+      for (const remainingName of remaining) {
+        try {
+          const remainingStats = lstatSync(
+            pinnedChildPath(parent, remainingName),
+            { bigint: true, throwIfNoEntry: false },
+          );
+          if (
+            remainingStats !== undefined &&
+            sameIdentity(remainingStats, target)
+          ) {
+            return false;
+          }
+        } catch {}
+      }
+      return true;
     }
   }
+  return false;
+}
+
+function removeStagingGeneration(pins: StagingPins): void {
+  removePinnedDirectory(pins.scopedParent, pins.staging);
 }
 
 // Private no-follow write of base/parts, descriptor-relative to the pinned
@@ -718,11 +797,12 @@ function removeStagingGeneration(pins: StagingPins): void {
 // file is created O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW mode 0600 relative to
 // its pinned parent — a swapped or pre-planted component can never redirect
 // secret material outside the slot. fs failures never escape raw.
-function writePinnedFile(
+export function writePinnedFile(
   base: PinnedDir,
   parts: readonly string[],
   value: string,
   label: string,
+  mode = 0o600,
 ): void {
   for (const part of parts) {
     assertSafeComponent(part, label);
@@ -763,7 +843,7 @@ function writePinnedFile(
           fsConstants.O_CREAT |
           fsConstants.O_EXCL |
           fsConstants.O_NOFOLLOW,
-        0o600,
+        mode,
       );
     } catch (error) {
       throw scopeError(
@@ -864,7 +944,7 @@ export function readBundleEnvForProjection(
 
 // Single-quote a value for a POSIX shell, escaping embedded single quotes
 // (the same idiom the copilot env-file writer uses).
-function shellSingleQuote(value: string): string {
+export function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
@@ -1287,7 +1367,7 @@ function clearStagingSlot(loaded: LoadedApplianceConfig): void {
   }
 }
 
-function agentEnvBody(entries: readonly [string, string][]): string {
+export function agentEnvBody(entries: readonly [string, string][]): string {
   return entries
     .map(([name, value]) => `${name}=${shellSingleQuote(value)}\n`)
     .join('');
