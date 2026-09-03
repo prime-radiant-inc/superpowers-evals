@@ -594,3 +594,283 @@ test('fails closed when final inspect returns a stopped state for another contai
   await h.tick();
   expect(await exitWithin(h.child)).toEqual({ code: null, signal: null });
 });
+
+class StopDocker implements CommandRunner {
+  readonly calls: { command: string; args: readonly string[] }[] = [];
+  readonly inspectResults: (() => CommandResult)[] = [];
+  running = true;
+  readonly id: string;
+  stopResult: CommandResult = { status: 0, stdout: '', stderr: '' };
+  killResult: CommandResult = { status: 0, stdout: '', stderr: '' };
+  killStops = true;
+  stopCount = 0;
+  killCount = 0;
+
+  constructor(id: string) {
+    this.id = id;
+  }
+
+  run(command: string, args: readonly string[]): CommandResult {
+    this.calls.push({ command, args: [...args] });
+    if (command !== 'docker') return { status: 0, stdout: '', stderr: '' };
+    switch (args[0]) {
+      case 'stop':
+        this.stopCount += 1;
+        return this.stopResult;
+      case 'kill':
+        this.killCount += 1;
+        if (this.killResult.status === 0 && this.killStops)
+          this.running = false;
+        return this.killResult;
+      case 'inspect':
+        return (
+          this.inspectResults.shift()?.() ?? {
+            status: 0,
+            stdout: JSON.stringify([
+              {
+                Id: this.id,
+                State: {
+                  Running: this.running,
+                  ExitCode: 0,
+                  OOMKilled: false,
+                  StartedAt: 's',
+                  FinishedAt: this.running ? '' : 'f',
+                },
+              },
+            ]),
+            stderr: '',
+          }
+        );
+      default:
+        return { status: 0, stdout: '', stderr: '' };
+    }
+  }
+}
+
+function stopSpawner(
+  runner: StopDocker,
+  clock: FakeClock,
+  writes: string[] = [],
+): ContainerAttemptSpawner {
+  return new ContainerAttemptSpawner({
+    runner,
+    clock,
+    stream: { write: (value) => writes.push(value) },
+    campaignId,
+    campaignDir: '/camp',
+    imageRef: 'r',
+    imageDigest,
+    evalsSha,
+    bundleDir: '/bundle',
+    uid: 1,
+    gid: 1,
+  });
+}
+
+async function settleStop(
+  verdict: Promise<'dead' | 'alive'>,
+  clock: FakeClock,
+): Promise<'dead' | 'alive'> {
+  let settled = false;
+  const result = verdict.then((value) => {
+    settled = true;
+    return value;
+  });
+  for (let i = 0; i < 200 && !settled; i += 1) {
+    await Promise.resolve();
+    if (settled) break;
+    const next = clock.earliestWaiter();
+    clock.setTo(next ?? clock.now() + 0.05);
+  }
+  return await result;
+}
+
+test('stop refuses a non-canonical container identifier before Docker access', async () => {
+  const runner = new StopDocker('1'.repeat(64));
+  runner.running = false;
+  const clock = new FakeClock();
+
+  await expect(
+    stopSpawner(runner, clock).stopContainer('short-id', 1),
+  ).rejects.toThrow(/canonical full container id/i);
+  expect(runner.calls).toEqual([]);
+});
+
+test('stop exposes the ContainerStopper interface through the exact-ID routine', async () => {
+  const id = '2'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.running = false;
+  const clock = new FakeClock();
+
+  expect(await settleStop(stopSpawner(runner, clock).stop(id, 1), clock)).toBe(
+    'dead',
+  );
+});
+
+test('stop requests graceful exact-ID termination, escalates, and verifies death without tmux', async () => {
+  const id = '9'.repeat(64);
+  const runner = new StopDocker(id);
+  const clock = new FakeClock();
+  const verdict = stopSpawner(runner, clock).stopContainer(id, 1);
+
+  expect(await settleStop(verdict, clock)).toBe('dead');
+  expect(runner.calls.map((call) => call.args[0])).toEqual([
+    'stop',
+    ...Array.from({ length: 21 }, () => 'inspect'),
+    'kill',
+    'inspect',
+  ]);
+  expect(runner.calls[0]!.args).toEqual(['stop', '--time', '1', id]);
+  expect(runner.calls[22]!.args).toEqual(['kill', id]);
+  expect(
+    runner.calls
+      .filter((call) => call.args[0] === 'inspect')
+      .every((call) => call.args[1] === id),
+  ).toBe(true);
+  expect(runner.calls.some((call) => call.command === 'tmux')).toBe(false);
+});
+
+test('stop accepts an exact stopped inspect as verified death without KILL', async () => {
+  const id = 'a'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.running = false;
+  const clock = new FakeClock();
+
+  expect(
+    await settleStop(stopSpawner(runner, clock).stopContainer(id, 5), clock),
+  ).toBe('dead');
+  expect(runner.killCount).toBe(0);
+  expect(
+    runner.calls.filter((call) => call.args[0] === 'inspect'),
+  ).toHaveLength(1);
+});
+
+test('stop treats an exact inspect absence as already dead', async () => {
+  const id = 'b'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.stopResult = {
+    status: 1,
+    stdout: '',
+    stderr: `Error response from daemon: No such container: ${id}`,
+  };
+  runner.inspectResults.push(() => ({
+    status: 1,
+    stdout: '',
+    stderr: `Error: No such object: ${id}`,
+  }));
+  const clock = new FakeClock();
+
+  expect(
+    await settleStop(stopSpawner(runner, clock).stopContainer(id, 5), clock),
+  ).toBe('dead');
+  expect(runner.killCount).toBe(0);
+});
+
+test('stop never treats malformed or mismatched inspect as proof of death', async () => {
+  const id = 'c'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.inspectResults.push(
+    () => ({ status: 0, stdout: '{malformed', stderr: '' }),
+    () => ({
+      status: 0,
+      stdout: JSON.stringify([
+        {
+          Id: 'd'.repeat(64),
+          State: {
+            Running: false,
+            ExitCode: 0,
+            OOMKilled: false,
+            StartedAt: 's',
+            FinishedAt: 'f',
+          },
+        },
+      ]),
+      stderr: '',
+    }),
+  );
+  const clock = new FakeClock();
+
+  expect(
+    await settleStop(stopSpawner(runner, clock).stopContainer(id, 0.1), clock),
+  ).toBe('dead');
+  expect(runner.killCount).toBe(1);
+  expect(
+    runner.calls
+      .filter((call) => call.args[0] === 'inspect')
+      .every((call) => call.args[1] === id),
+  ).toBe(true);
+});
+
+test('stop reports alive after bounded verification when KILL fails and the container survives', async () => {
+  const id = 'e'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.killResult = {
+    status: 1,
+    stdout: '',
+    stderr: 'permission denied',
+  };
+  const clock = new FakeClock();
+  const writes: string[] = [];
+
+  expect(
+    await settleStop(
+      stopSpawner(runner, clock, writes).stopContainer(id, 0.1),
+      clock,
+    ),
+  ).toBe('alive');
+  expect(runner.killCount).toBe(1);
+  expect(runner.calls.filter((call) => call.args[0] === 'inspect').length).toBe(
+    6,
+  );
+  expect(writes.join('')).toMatch(/FAILED/);
+  expect(writes.join('')).toContain(id);
+});
+
+test('stop does not infer absence from unrelated stop or inspect stderr', async () => {
+  const id = 'f'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.stopResult = {
+    status: 1,
+    stdout: '',
+    stderr: 'No such container: other-container',
+  };
+  runner.inspectResults.push(() => ({
+    status: 1,
+    stdout: '',
+    stderr: 'No such object: other-container',
+  }));
+  runner.killResult = {
+    status: 1,
+    stdout: '',
+    stderr: 'No such container: other-container',
+  };
+  const clock = new FakeClock();
+  const writes: string[] = [];
+
+  expect(
+    await settleStop(
+      stopSpawner(runner, clock, writes).stopContainer(id, 0.1),
+      clock,
+    ),
+  ).toBe('alive');
+  expect(runner.killCount).toBe(1);
+  expect(writes.join('')).toMatch(/docker stop .*failed/);
+  expect(writes.join('')).toMatch(/docker kill .*failed/);
+});
+
+test('stop reports alive when a successful KILL still leaves the exact container running', async () => {
+  const id = '0'.repeat(64);
+  const runner = new StopDocker(id);
+  runner.killStops = false;
+  const clock = new FakeClock();
+  const writes: string[] = [];
+
+  expect(
+    await settleStop(
+      stopSpawner(runner, clock, writes).stopContainer(id, 0.1),
+      clock,
+    ),
+  ).toBe('alive');
+  expect(runner.killCount).toBe(1);
+  expect(writes.join('')).toMatch(/verify-death FAILED/);
+});
