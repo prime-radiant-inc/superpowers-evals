@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -11,7 +16,10 @@ import {
   ContainerAttemptSpawner,
   containerNameForAttempt,
 } from '../src/campaign/container-spawner.ts';
-import type { CampaignChildSpec } from '../src/campaign/spawn.ts';
+import type {
+  CampaignChildSpec,
+  ChildExitInfo,
+} from '../src/campaign/spawn.ts';
 import { FakeClock } from '../src/scheduler/clock.ts';
 
 const campaignId = 'c'.repeat(64);
@@ -22,6 +30,7 @@ const containerId = 'f'.repeat(64);
 class FakeDocker implements CommandRunner {
   readonly calls: { command: string; args: readonly string[] }[] = [];
   readonly inspect: { value: unknown } = { value: null };
+  readonly results: (() => CommandResult)[] = [];
   createdId = containerId;
   startStatus = 0;
   rmStatus = 0;
@@ -29,6 +38,7 @@ class FakeDocker implements CommandRunner {
   run(command: string, args: readonly string[]): CommandResult {
     this.calls.push({ command, args: [...args] });
     if (command !== 'docker') return { status: 0, stdout: '', stderr: '' };
+    if (this.results.length > 0) return this.results.shift()!();
     switch (args[0]) {
       case 'create':
         return { status: 0, stdout: `${this.createdId}\n`, stderr: '' };
@@ -50,6 +60,111 @@ class FakeDocker implements CommandRunner {
         return { status: 0, stdout: '', stderr: '' };
     }
   }
+}
+
+interface FollowHarness {
+  readonly attempt: NonNullable<CampaignChildSpec['attempt']>;
+  readonly clock: FakeClock;
+  readonly runner: FakeDocker;
+  readonly child: ReturnType<ContainerAttemptSpawner['spawn']>;
+  readonly endWait: (code: unknown) => void;
+  readonly tick: () => Promise<void>;
+}
+
+function followHarness(
+  opts: {
+    exitCode?: number;
+    oomKilled?: boolean;
+    inspectState?: unknown;
+    wait?: Promise<unknown>;
+    waitFactory?: () => Promise<unknown>;
+  } = {},
+): FollowHarness {
+  const attemptDir = mkdtempSync(join(tmpdir(), 'spawner-follow-'));
+  const attempt = {
+    attemptId: 'c1:s:arm_a:r1:a1',
+    attemptDir,
+    stdoutLog: join(attemptDir, 'stdout.log'),
+    stderrLog: join(attemptDir, 'stderr.log'),
+    homeDir: join(attemptDir, 'home'),
+    entrypoint: '/camp/evals/container/attempt-entrypoint.sh',
+    mounts: [],
+  } as const;
+  writeFileSync(attempt.stdoutLog, '');
+  writeFileSync(attempt.stderrLog, '');
+  const clock = new FakeClock();
+  let endWait: (code: unknown) => void = () => {};
+  const waited =
+    opts.wait ?? new Promise<unknown>((resolve) => (endWait = resolve));
+  const runner = new FakeDocker();
+  const id = '1'.repeat(64);
+  runner.createdId = id;
+  const state = opts.inspectState ?? {
+    Running: false,
+    ExitCode: opts.exitCode ?? 0,
+    OOMKilled: opts.oomKilled ?? false,
+    StartedAt: '2026-09-02T00:00:00Z',
+    FinishedAt: '2026-09-02T00:01:00Z',
+  };
+  runner.inspect.value = {
+    Id: id,
+    Name: `/${containerNameForAttempt(campaignId, attempt.attemptId)}`,
+    Image: imageDigest,
+    Config: {
+      Image: imageDigest,
+      Labels: {
+        'quorum.campaign_id': campaignId,
+        'quorum.attempt_id': attempt.attemptId,
+        'quorum.evals_sha': evalsSha,
+        'quorum.image_digest': imageDigest,
+      },
+    },
+    Mounts: [],
+    State: state,
+  };
+  runner.results.push(
+    () => ({ status: 0, stdout: `${id}\n`, stderr: '' }),
+    () => ({
+      status: 0,
+      stdout: JSON.stringify([runner.inspect.value]),
+      stderr: '',
+    }),
+    () => ({ status: 0, stdout: '', stderr: '' }),
+    () => ({
+      status: 0,
+      stdout: JSON.stringify([runner.inspect.value]),
+      stderr: '',
+    }),
+  );
+  const spawner = new ContainerAttemptSpawner({
+    runner,
+    clock,
+    stream: { write: () => {} },
+    campaignId,
+    campaignDir: '/camp',
+    imageRef: 'superpowers-evals:local',
+    imageDigest,
+    evalsSha,
+    bundleDir: '/bundle',
+    uid: 1,
+    gid: 1,
+    dockerWait: () =>
+      opts.waitFactory !== undefined
+        ? (opts.waitFactory() as Promise<number>)
+        : waited.then((code) => code as number),
+  });
+  const child = spawner.spawn({
+    command: 'bun',
+    args: [],
+    cwd: '/camp/evals',
+    env: {},
+    attempt,
+  });
+  const tick = async (): Promise<void> => {
+    clock.advance(0.05);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  return { attempt, clock, runner, child, endWait, tick };
 }
 
 function fixture(): {
@@ -340,4 +455,118 @@ test('reports both the original verification failure and failed exact-ID cleanup
     /start.*cleanup|cleanup.*start/i,
   );
   expect(startFx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
+});
+
+async function exitWithin(
+  child: ReturnType<ContainerAttemptSpawner['spawn']>,
+): Promise<ChildExitInfo> {
+  return await Promise.race([
+    new Promise<ChildExitInfo>((resolve) => child.onExit(resolve)),
+    new Promise<ChildExitInfo>((_, reject) =>
+      setTimeout(() => reject(new Error('child did not exit')), 250),
+    ),
+  ]);
+}
+
+test('follows durable logs, latches lines, and replays them to late subscribers', async () => {
+  const h = followHarness();
+  appendFileSync(h.attempt.stdoutLog, 'run_allocated: run-9\npartial');
+  await h.tick();
+  appendFileSync(h.attempt.stdoutLog, '-tail\n');
+  h.endWait(0);
+  await h.tick();
+  await h.tick();
+  const seen: string[] = [];
+  h.child.onStdoutLine((line) => seen.push(line));
+  expect(seen).toEqual(['run_allocated: run-9', 'partial-tail']);
+  expect(await exitWithin(h.child)).toEqual({ code: 0, signal: null });
+  expect(readFileSync(h.attempt.stdoutLog, 'utf8')).toBe(
+    'run_allocated: run-9\npartial-tail\n',
+  );
+});
+
+test('waits for both durable log files, flushes final fragments, and settles once', async () => {
+  const h = followHarness();
+  appendFileSync(h.attempt.stderrLog, 'err-1\nerr-2');
+  const errSeen: string[] = [];
+  let exitFired = 0;
+  h.child.onStderrLine((line) => errSeen.push(line));
+  h.child.onExit(() => {
+    exitFired += 1;
+  });
+  h.endWait(0);
+  await h.tick();
+  expect(exitFired).toBe(0);
+  await h.tick();
+  await h.tick();
+  expect(errSeen).toEqual(['err-1', 'err-2']);
+  expect(exitFired).toBe(1);
+  await h.tick();
+  expect(exitFired).toBe(1);
+});
+
+test('writes exit.json with the inspected exit, OOM flag, and timestamps', async () => {
+  const h = followHarness({ exitCode: 137, oomKilled: true });
+  h.endWait(137);
+  await h.tick();
+  await h.tick();
+  expect(await exitWithin(h.child)).toEqual({ code: 137, signal: 'SIGKILL' });
+  const recorded = JSON.parse(
+    readFileSync(join(h.attempt.attemptDir, 'exit.json'), 'utf8'),
+  ) as {
+    code: number | null;
+    signal: string | null;
+    oom_killed: boolean;
+    started_at: string | null;
+    finished_at: string | null;
+  };
+  expect(recorded).toEqual({
+    code: 137,
+    signal: 'SIGKILL',
+    oom_killed: true,
+    started_at: '2026-09-02T00:00:00Z',
+    finished_at: '2026-09-02T00:01:00Z',
+  });
+});
+
+test('reports a rejected docker wait as a typed failed exit without hanging', async () => {
+  const h = followHarness({
+    waitFactory: () => Promise.reject(new Error('wait failed')),
+  });
+  appendFileSync(h.attempt.stdoutLog, 'durable-before-rejection');
+  await h.tick();
+  await h.tick();
+  const exit = await exitWithin(h.child);
+  expect(exit).toEqual({ code: null, signal: null });
+  expect(readFileSync(h.attempt.stdoutLog, 'utf8')).toBe(
+    'durable-before-rejection',
+  );
+});
+
+test('reports malformed docker wait output as a failed exit', async () => {
+  const h = followHarness({ wait: Promise.resolve('not-a-code') });
+  h.endWait(0);
+  await h.tick();
+  await h.tick();
+  expect(await exitWithin(h.child)).toEqual({ code: null, signal: null });
+});
+
+test('fails closed when final inspect says the exact container is still running', async () => {
+  const h = followHarness({
+    inspectState: {
+      Running: true,
+      ExitCode: 0,
+      OOMKilled: false,
+      StartedAt: '2026-09-02T00:00:00Z',
+      FinishedAt: '',
+    },
+  });
+  h.endWait(0);
+  await h.tick();
+  await h.tick();
+  expect(await exitWithin(h.child)).toEqual({ code: null, signal: null });
+  const inspectCalls = h.runner.calls.filter(
+    (call) => call.args[0] === 'inspect',
+  );
+  expect(inspectCalls.at(-1)!.args).toEqual(['inspect', '1'.repeat(64)]);
 });
