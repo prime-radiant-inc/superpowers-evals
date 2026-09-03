@@ -467,6 +467,29 @@ async function settleMicrotasks(): Promise<void> {
   for (let i = 0; i < 128; i += 1) await Promise.resolve();
 }
 
+test('dispatcher calls readiness after signal installation and before admission', async () => {
+  const h = harness();
+  const order: string[] = [];
+  const args: DispatchRunArgs = {
+    ...h.args,
+    installSignals: () => {
+      order.push('signals-installed');
+      return () => {};
+    },
+    onReady: () => {
+      order.push('ready');
+      expect(h.spawner.specs).toHaveLength(0);
+    },
+  };
+  const run = runCampaignDispatch(args);
+  await settleMicrotasks();
+  expect(order).toEqual(['signals-installed', 'ready']);
+  expect(h.spawner.specs).toHaveLength(2);
+  h.spawner.settleExit(0, { code: 0, signal: null });
+  h.spawner.settleExit(1, { code: 0, signal: null });
+  await run;
+});
+
 function events(
   campaignDir: string,
 ): { type: string; payload: Record<string, unknown> }[] {

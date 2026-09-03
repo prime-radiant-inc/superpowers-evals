@@ -748,6 +748,7 @@ import { clockNowMs, hostStatsProbeForCli } from '../campaign/host-stats.ts';
 import { openJournalRead } from '../campaign/journal.ts';
 import { realProcessIdentityProbe } from '../campaign/locks.ts';
 import {
+  type CredentialEnvReader,
   cancelCampaign,
   resumeCampaign,
   universeOf,
@@ -992,6 +993,11 @@ export interface CampaignRunOptions {
    *  cancel-request precedence branch never spawns, and the worker passes
    *  one ContainerAttemptSpawner explicitly as both. */
   readonly containerStop?: ContainerStopper;
+  /** Batch credential presence check supplied by the appliance worker. */
+  readonly credentialEnvReader?: CredentialEnvReader;
+  /** Controller readiness callback, after signal installation and before
+   * admission. */
+  readonly onReady?: () => void;
 }
 
 export async function campaignRun(
@@ -1067,6 +1073,10 @@ export async function campaignRun(
       ...(opts.containerStop !== undefined
         ? { containerStop: opts.containerStop }
         : {}),
+      ...(opts.credentialEnvReader !== undefined
+        ? { credentialEnvReader: opts.credentialEnvReader }
+        : {}),
+      ...(opts.onReady !== undefined ? { onReady: opts.onReady } : {}),
     });
     process.stdout.write(
       `campaign run finished: ${outcome.status}${

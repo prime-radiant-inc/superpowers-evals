@@ -1916,9 +1916,18 @@ export interface ResumeArgs {
   readonly subjectHost?: SubjectHostProbe;
   /** Exact-ID Docker stop seam for journaled container allocations. */
   readonly containerStop?: ContainerStopper;
+  /** Reads the registered key names at the resume boundary. */
+  readonly credentialEnvReader?: CredentialEnvReader;
+  /** Controller readiness callback, after signal installation and before
+   * admission. */
+  readonly onReady?: () => void;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
 }
+
+export type CredentialEnvReader = (
+  names: readonly string[],
+) => ReadonlyMap<string, string>;
 
 /** Fail-closed intake of the frozen document (C1: no production-path cast
  *  bridges this read). Both verbs derive campaign identity, the block/sample
@@ -1947,21 +1956,24 @@ function readPublishedCampaign(campaignDir: string): Campaign {
 function assertKeyEnvsPresent(
   campaign: Campaign,
   credentials: Readonly<Record<string, Credential>>,
+  reader: CredentialEnvReader = (names) => {
+    const values = new Map<string, string>();
+    for (const name of names) {
+      const value = getEnv(name);
+      if (value !== undefined) values.set(name, value);
+    }
+    return values;
+  },
 ): void {
   const missing: string[] = [];
-  const require = (envNames: readonly string[]): void => {
-    for (const envName of envNames) {
-      const value = getEnv(envName);
-      if (value === undefined || value === '') missing.push(envName);
-    }
-  };
+  const requiredNames = new Set<string>();
   for (const arm of campaign.execution_surface) {
     if (arm.auth !== 'api-key') continue;
     if (arm.key_env_names.length === 0) {
       missing.push(`${arm.name}: api-key arm with no registered key env name`);
       continue;
     }
-    require(arm.key_env_names);
+    for (const name of arm.key_env_names) requiredNames.add(name);
   }
   // The grader credential is MANDATORY: an incomplete registry must refuse
   // here, not slip past the preflight and surface later as a dispatch error
@@ -1980,7 +1992,12 @@ function assertKeyEnvsPresent(
         `${campaign.grader.credential}: api-key auth with no api_key_env/key_pool`,
       );
     }
-    require(names);
+    for (const name of names) requiredNames.add(name);
+  }
+  const values = reader([...requiredNames]);
+  for (const name of requiredNames) {
+    const value = values.get(name);
+    if (value === undefined || value === '') missing.push(name);
   }
   if (missing.length > 0) {
     throw new RecoveryError(
@@ -2491,7 +2508,7 @@ export async function resumeCampaign(
         disk_tolerance_pct: campaign.contention.disk_tolerance_pct,
       },
     );
-    assertKeyEnvsPresent(campaign, args.credentials);
+    assertKeyEnvsPresent(campaign, args.credentials, args.credentialEnvReader);
 
     // 5. Reconstruct the handle + refs cross-check + verify (R-RCV-6).
     const handle = reconstructCampaignSnapshot({
@@ -2545,6 +2562,7 @@ export async function resumeCampaign(
       ...(args.graceSeconds !== undefined
         ? { killGraceSeconds: args.graceSeconds }
         : {}),
+      ...(args.onReady !== undefined ? { onReady: args.onReady } : {}),
       stream,
     });
     if (outcome.status !== 'completed') return outcome;
