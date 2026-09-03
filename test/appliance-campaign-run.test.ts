@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -30,6 +31,8 @@ import { ApplianceError } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
   cancelJob,
+  DETACHED_SPAWN_ACK,
+  type DetachedSpawnIdentityCallback,
   detachedWorkerEnv,
   dispatchDetachedWorker,
   spawnDetachedWorker,
@@ -174,7 +177,10 @@ function campaignActionFixture(): {
     spawnDetachedWorker: (_loaded, jobId, onSpawn) => {
       spawned.push(jobId);
       const identity = { host_pid: 4242, host_pgid: 4242 };
-      onSpawn?.(identity);
+      const acknowledgment = onSpawn?.(identity);
+      if (onSpawn !== undefined) {
+        expect(acknowledgment).toBe(DETACHED_SPAWN_ACK);
+      }
       return identity;
     },
     runWorker: async () => undefined,
@@ -485,27 +491,57 @@ for (const [label, output] of [
   });
 }
 
-test('campaign action marks its single job failed when detached identity persistence fails', async () => {
+test('campaign action fails terminally when real identity persistence fails after child creation', async () => {
   const fx = campaignActionFixture();
-  fx.actions = createApplianceActions({
+  let callbackAttempted = false;
+  let unrefCount = 0;
+  let terminationCount = 0;
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    unref(): void;
+  };
+  child.pid = 4242;
+  child.unref = () => {
+    unrefCount += 1;
+  };
+  const actions = createApplianceActions({
     loadStateConfig: () => fx.loaded,
     loadCredentialConfig: () => fx.loaded,
     commandRunner: fx.runner,
-    spawnDetachedWorker: () => ({ host_pid: null, host_pgid: null }),
+    spawnDetachedWorker: (loaded, jobId, onSpawn) => {
+      const jobPath = join(loaded.paths.jobs, jobId, 'job.json');
+      const obstructedPath = `${jobPath}.obstructed`;
+      const callback: DetachedSpawnIdentityCallback = (identity) => {
+        callbackAttempted = true;
+        return onSpawn?.(identity) ?? DETACHED_SPAWN_ACK;
+      };
+      return spawnDetachedWorker(
+        loaded,
+        jobId,
+        () => {
+          renameSync(jobPath, obstructedPath);
+          return child as never;
+        },
+        callback,
+        () => {
+          terminationCount += 1;
+          renameSync(obstructedPath, jobPath);
+        },
+      );
+    },
     runWorker: async () => undefined,
   });
   await expect(
-    fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
-  ).rejects.toThrow(/safe host pid/);
-  const jobId = fx
-    .jobIds()
-    .find((id) => readJob(fx.loaded, id).command.argv[3] === fx.selector);
-  expect(jobId).toBeDefined();
-  if (jobId !== undefined) {
-    const failed = readJob(fx.loaded, jobId);
-    expect(failed.status).toBe('failed');
-    expect(failed.finished_at).not.toBeNull();
-  }
+    actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toMatchObject({ message: 'detached worker spawn failed' });
+  expect(callbackAttempted).toBe(true);
+  expect(unrefCount).toBe(0);
+  expect(terminationCount).toBe(1);
+  const jobs = fx.jobIds();
+  expect(jobs).toHaveLength(1);
+  const failed = readJob(fx.loaded, jobs[0] as string);
+  expect(failed.status).toBe('failed');
+  expect(failed.finished_at).not.toBeNull();
 });
 
 test('campaign action marks its single job failed when detached spawn throws', async () => {
@@ -757,10 +793,41 @@ test('detached spawn invokes identity persistence before unref', () => {
     (processInfo) => {
       order.push('callback');
       expect(processInfo).toEqual({ host_pid: 4242, host_pgid: 4242 });
+      return DETACHED_SPAWN_ACK;
     },
   );
   expect(identity).toEqual({ host_pid: 4242, host_pgid: 4242 });
   expect(order).toEqual(['callback', 'unref']);
+});
+
+test('detached spawn rejects a thenable identity acknowledgement before unref', () => {
+  const fx = fixture();
+  let unrefCount = 0;
+  let terminationCount = 0;
+  const child = {
+    pid: 4242,
+    once: () => undefined,
+    unref: () => {
+      unrefCount += 1;
+    },
+  };
+  const thenableCallback = ((): Promise<typeof DETACHED_SPAWN_ACK> =>
+    Promise.resolve(
+      DETACHED_SPAWN_ACK,
+    )) as unknown as DetachedSpawnIdentityCallback;
+  expect(() =>
+    spawnDetachedWorker(
+      fx.loaded,
+      fx.jobId,
+      () => child as never,
+      thenableCallback,
+      () => {
+        terminationCount += 1;
+      },
+    ),
+  ).toThrow('detached worker spawn failed');
+  expect(unrefCount).toBe(0);
+  expect(terminationCount).toBe(1);
 });
 
 test('detached spawn terminates and keeps a referenced child when identity persistence throws', () => {

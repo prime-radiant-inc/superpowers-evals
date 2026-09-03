@@ -570,6 +570,16 @@ test('campaign run routes its closed selector and json option to the action', as
   expect(JSON.parse(stdout.join(''))).toEqual({ ok: true, job_id: 'job-1' });
 });
 
+test('campaign run rejects malformed extra options before the action', () => {
+  const proc = spawnSync(
+    'bun',
+    ['src/appliance/cli.ts', 'campaign', 'run', 'prefix-suite', '--extra'],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+  expect(proc.status).not.toBe(0);
+  expect(`${proc.stderr}${proc.stdout}`).toContain("unknown option '--extra'");
+});
+
 test('default dry-run prune creates and chmods no state dirs', () => {
   // Real subprocess against the DEFAULT actions: a dry-run report must not
   // materialize or re-chmod state/{jobs,locks,provenance}.

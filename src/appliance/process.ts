@@ -72,6 +72,11 @@ export interface LiveProcessInfo {
   readonly host_pgid: number | null;
 }
 
+export interface DetachedProcessInfo {
+  readonly host_pid: number;
+  readonly host_pgid: number;
+}
+
 export interface LiveCommandArgs {
   readonly command: string;
   readonly args: readonly string[];
@@ -1168,9 +1173,11 @@ export type DetachedSpawnPrimitive = (
   options: SpawnOptions,
 ) => ChildProcess;
 
+export const DETACHED_SPAWN_ACK: unique symbol = Symbol('detached-spawn-ack');
+
 export type DetachedSpawnIdentityCallback = (
-  processInfo: LiveProcessInfo,
-) => void;
+  processInfo: DetachedProcessInfo,
+) => typeof DETACHED_SPAWN_ACK;
 
 export type DetachedTerminationPrimitive = (child: ChildProcess) => void;
 
@@ -1231,9 +1238,19 @@ await dispatchDetachedWorker(loaded, jobId);
         DETACHED_UNSAFE_PID_MESSAGE,
       );
     }
-    const processInfo = { host_pid: pid, host_pgid: pid };
+    const processInfo: DetachedProcessInfo = {
+      host_pid: pid,
+      host_pgid: pid,
+    };
     try {
-      onSpawn?.(processInfo);
+      const acknowledgment = onSpawn?.(processInfo);
+      if (onSpawn !== undefined && acknowledgment !== DETACHED_SPAWN_ACK) {
+        throw new ApplianceError(
+          'config_invalid',
+          'spawn',
+          DETACHED_SPAWN_FAILURE_MESSAGE,
+        );
+      }
     } catch (error) {
       try {
         terminatePrimitive(child);
