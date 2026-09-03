@@ -46,6 +46,10 @@ export const realAttemptDocker: AttemptDocker = defaultCommandRunner;
 
 export type DockerWait = (containerId: string) => Promise<number>;
 
+export interface ContainerStopper {
+  stop(containerId: string, graceSeconds: number): Promise<'dead' | 'alive'>;
+}
+
 export interface ContainerAttemptSpawnerArgs {
   readonly runner: CommandRunner;
   readonly clock: Clock;
@@ -156,7 +160,13 @@ interface InspectedState {
   readonly finishedAt: string | null;
 }
 
-export class ContainerAttemptSpawner implements ChildSpawner {
+type StopInspectResult =
+  | { readonly kind: 'running'; readonly state: InspectedState }
+  | { readonly kind: 'stopped'; readonly state: InspectedState }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unknown' };
+
+export class ContainerAttemptSpawner implements ChildSpawner, ContainerStopper {
   readonly kind = 'container' as const;
   private readonly args: ContainerAttemptSpawnerArgs;
 
@@ -383,8 +393,31 @@ export class ContainerAttemptSpawner implements ChildSpawner {
   private inspectState(containerId: string): InspectedState | null {
     const result = this.docker(['inspect', containerId]);
     if (result.status !== 0) return null;
+    return this.parseInspectState(result.stdout, containerId);
+  }
+
+  private inspectForStop(containerId: string): StopInspectResult {
+    const result = this.docker(['inspect', containerId]);
+    if (result.status !== 0) {
+      const stderr = result.stderr.trim();
+      if (stderr === `Error: No such object: ${containerId}`) {
+        return { kind: 'absent' };
+      }
+      return { kind: 'unknown' };
+    }
+    const state = this.parseInspectState(result.stdout, containerId);
+    if (state === null) return { kind: 'unknown' };
+    return state.running
+      ? { kind: 'running', state }
+      : { kind: 'stopped', state };
+  }
+
+  private parseInspectState(
+    stdout: string,
+    containerId: string,
+  ): InspectedState | null {
     try {
-      const parsed: unknown = JSON.parse(result.stdout);
+      const parsed: unknown = JSON.parse(stdout);
       if (!Array.isArray(parsed) || parsed.length !== 1) return null;
       const observed = parsed[0];
       if (
@@ -426,6 +459,73 @@ export class ContainerAttemptSpawner implements ChildSpawner {
     } catch {
       return null;
     }
+  }
+
+  async stopContainer(
+    containerId: string,
+    graceSeconds: number,
+  ): Promise<'dead' | 'alive'> {
+    if (!CONTAINER_ID_RE.test(containerId)) {
+      throw new AttemptContainerError(
+        'container stop requires a canonical full container id',
+      );
+    }
+    const grace = Number.isFinite(graceSeconds) ? Math.max(0, graceSeconds) : 0;
+    const verifiedDead = async (deadline: number): Promise<boolean> => {
+      for (;;) {
+        const observed = this.inspectForStop(containerId);
+        if (observed.kind === 'absent' || observed.kind === 'stopped') {
+          return true;
+        }
+        if (this.args.clock.now() >= deadline) return false;
+        await this.args.clock.sleepUntil(
+          this.args.clock.now() + FOLLOW_POLL_SECONDS,
+        );
+      }
+    };
+
+    const stopped = this.docker([
+      'stop',
+      '--time',
+      String(Math.max(1, Math.floor(grace))),
+      containerId,
+    ]);
+    if (
+      stopped.status !== 0 &&
+      stopped.stderr.trim() !==
+        `Error response from daemon: No such container: ${containerId}` &&
+      stopped.stderr.trim() !== `Error: No such container: ${containerId}`
+    ) {
+      this.args.stream.write(
+        `docker stop ${containerId} failed: ${stopped.stderr.trim()} — continuing to verify\n`,
+      );
+    }
+    if (await verifiedDead(this.args.clock.now() + grace)) return 'dead';
+
+    const killed = this.docker(['kill', containerId]);
+    if (
+      killed.status !== 0 &&
+      killed.stderr.trim() !==
+        `Error response from daemon: No such container: ${containerId}` &&
+      killed.stderr.trim() !== `Error: No such container: ${containerId}`
+    ) {
+      this.args.stream.write(
+        `docker kill ${containerId} failed: ${killed.stderr.trim()} — continuing to verify\n`,
+      );
+    }
+    if (await verifiedDead(this.args.clock.now() + grace)) return 'dead';
+
+    this.args.stream.write(
+      `container ${containerId} survived stop+kill past ${graceSeconds}s grace — verify-death FAILED; abort the enclosing operation loudly\n`,
+    );
+    return 'alive';
+  }
+
+  async stop(
+    containerId: string,
+    graceSeconds: number,
+  ): Promise<'dead' | 'alive'> {
+    return await this.stopContainer(containerId, graceSeconds);
   }
 
   private settleHandle(
