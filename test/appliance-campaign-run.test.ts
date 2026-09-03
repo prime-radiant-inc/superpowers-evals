@@ -20,6 +20,7 @@ import {
   imageDigestOf,
   runCampaignWorker,
 } from '../src/appliance/campaign-run.ts';
+import { ApplianceError } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
   cancelJob,
@@ -343,10 +344,50 @@ test('detached spawn records an asynchronous child error without an unhandled ev
     queueMicrotask(() => child.emit('error', new Error('hostile raw detail')));
     return child as never;
   });
+  updateJob(fx.loaded, fx.jobId, (current) => ({
+    ...current,
+    status: 'stopping',
+  }));
   await new Promise((resolve) => setTimeout(resolve, 0));
   const job = readJob(fx.loaded, fx.jobId);
-  expect(job.status).toBe('failed');
-  expect(job.error?.message).not.toContain('hostile raw detail');
+  expect(job.status).toBe('stopping');
+  expect(job.error?.message ?? '').not.toContain('hostile raw detail');
+  expect(() => writeSync(stdoutFd, 'after-close')).toThrow();
+  expect(() => writeSync(stderrFd, 'after-close')).toThrow();
+});
+
+test('detached spawn sanitizes synchronous hostile errors and closes descriptors', () => {
+  const fx = fixture();
+  let stdoutFd = -1;
+  let stderrFd = -1;
+  const hostileDetail = 'hostile synchronous secret';
+  let thrown: unknown;
+
+  try {
+    spawnDetachedWorker(fx.loaded, fx.jobId, (_command, _args, options) => {
+      const stdio = options?.stdio as [unknown, number, number];
+      stdoutFd = stdio[1];
+      stderrFd = stdio[2];
+      throw new ApplianceError('config_invalid', 'spawn', hostileDetail);
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(ApplianceError);
+  expect((thrown as Error).message).toBe('detached worker spawn failed');
+  expect((thrown as Error).message).not.toContain(hostileDetail);
+
+  const job = readJob(fx.loaded, fx.jobId);
+  const persisted = readFileSync(
+    join(fx.loaded.paths.jobs, fx.jobId, 'job.json'),
+    'utf8',
+  );
+  const logs =
+    readFileSync(job.artifacts.stdout_log, 'utf8') +
+    readFileSync(job.artifacts.stderr_log, 'utf8');
+  expect(persisted).not.toContain(hostileDetail);
+  expect(logs).not.toContain(hostileDetail);
   expect(() => writeSync(stdoutFd, 'after-close')).toThrow();
   expect(() => writeSync(stderrFd, 'after-close')).toThrow();
 });
