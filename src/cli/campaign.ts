@@ -1058,6 +1058,11 @@ export async function campaignRun(
       evalsCheckout: checkouts.evalsCheckout,
       gauntletCheckout: checkouts.gauntletCheckout,
       superpowersCheckout: checkouts.superpowersCheckout,
+      // R-LCK-2's injectable host-stats probe, resolved at the real CLI
+      // boundary: unset QUORUM_HOST_STATS_PROBE_FIXTURE keeps the real Linux
+      // probe (production semantics); a fixture path makes the preflight
+      // portable for tests. Same diskPath the recovery default would use.
+      probe: hostStatsProbeForCli(campaignDir),
       ...(opts.spawner !== undefined ? { spawner: opts.spawner } : {}),
       ...(opts.containerStop !== undefined
         ? { containerStop: opts.containerStop }

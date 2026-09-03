@@ -15,26 +15,28 @@
 // unverified (the R-RCV-1 refusal, journal untouched) and a 'dead' stop must
 // complete a requested cancellation (aborted + campaign_cancelled LAST).
 //
-// The full spawner-run proof (a resumed campaign whose remaining attempt is
-// spawned by the injected spawner and driven to seal) is Linux-only: the
-// resume preflight samples the host through the production probe, whose
-// non-Linux refusal IS the R-LCK-3 designated-host discipline — on any other
-// platform admission is unreachable by design, so the test skips rather than
-// assert a refusal that would prove nothing about the spawner.
+// The full spawner-run proof is portable: the resume preflight samples the
+// host through the CLI boundary's fixture-probe seam — QUORUM_HOST_STATS_
+// PROBE_FIXTURE (hostStatsProbeForCli, R-LCK-2) is pointed at
+// test/fixtures/host-stats.json for this file, and the registered
+// fingerprint carries the fixture's mem/disk totals plus the live CPU
+// identity probeFingerprint samples, so admission — the only consumer of a
+// spawner — runs on every platform. The preflight itself is never skipped.
 import { afterAll, expect, spyOn, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
-  statfsSync,
   writeFileSync,
 } from 'node:fs';
-import { cpus, tmpdir, totalmem } from 'node:os';
-import { join, resolve } from 'node:path';
+import { cpus, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import type { ContainerStopper } from '../src/campaign/container-spawner.ts';
-import { electWriter } from '../src/campaign/journal.ts';
+import { electWriter, openJournalRead } from '../src/campaign/journal.ts';
 import { REPORT_JSON_NAME } from '../src/campaign/report.ts';
 import { runTerminusSeal } from '../src/campaign/seal.ts';
 import type {
@@ -64,17 +66,49 @@ import {
 // The run verb resolves its source checkouts from the environment (C12b)
 // and acquires the live-spend lock at the default path, so both seams are
 // pointed at throwaway test values for the whole file, restored afterwards.
+// EVERY env this file touches is snapshotted here — including the fixture
+// probe seam and the credential keys the preflight demands (R-REG-19) —
+// and restored to its exact prior value (set or unset), never blindly
+// deleted.
 const PRIOR_ENV = new Map<string, string | undefined>(
-  ['GAUNTLET_ROOT', 'SUPERPOWERS_ROOT', 'QUORUM_LIVE_SPEND_LOCK'].map((k) => [
-    k,
-    getEnv(k),
-  ]),
+  [
+    'GAUNTLET_ROOT',
+    'SUPERPOWERS_ROOT',
+    'QUORUM_LIVE_SPEND_LOCK',
+    'QUORUM_HOST_STATS_PROBE_FIXTURE',
+    'KEY_A',
+    'KEY_G',
+  ].map((k) => [k, getEnv(k)]),
 );
 const CHECKOUT_STANDIN = mkdtempSync(join(tmpdir(), 'run-inject-checkout-'));
+const SPEND_LOCK_DIR = lockDir('run-inject-spend.lock.d');
 setProcessEnv('GAUNTLET_ROOT', CHECKOUT_STANDIN);
 setProcessEnv('SUPERPOWERS_ROOT', CHECKOUT_STANDIN);
-setProcessEnv('QUORUM_LIVE_SPEND_LOCK', lockDir('run-inject-spend.lock.d'));
+setProcessEnv('QUORUM_LIVE_SPEND_LOCK', SPEND_LOCK_DIR);
+
+// The CLI-boundary fixture-probe seam (R-LCK-2): with this set, campaignRun
+// resolves its preflight probe from the established passing sample instead
+// of the real Linux host, so the spawner proof is portable.
+const HOST_STATS_FIXTURE = resolve(
+  import.meta.dir,
+  'fixtures',
+  'host-stats.json',
+);
+setProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE', HOST_STATS_FIXTURE);
+
+// Every temp dir this file uniquely creates is registered here and removed
+// in afterAll — never a shared path, never a dir another run may own.
+const OWNED_DIRS: string[] = [];
+function ownDir(dir: string): string {
+  OWNED_DIRS.push(dir);
+  return dir;
+}
 afterAll(() => {
+  rmSync(CHECKOUT_STANDIN, { recursive: true, force: true });
+  rmSync(dirname(SPEND_LOCK_DIR), { recursive: true, force: true });
+  for (const dir of OWNED_DIRS) {
+    rmSync(dir, { recursive: true, force: true });
+  }
   for (const [key, prior] of PRIOR_ENV) {
     if (prior === undefined) deleteProcessEnv(key);
     else setProcessEnv(key, prior);
@@ -87,8 +121,9 @@ const SIDECAR = 'contention-telemetry.jsonl';
 
 // The run verb's results root is the evals checkout's own results/ tree
 // (resolveCampaignResultsRoot's default) — the same root the report CLI
-// tests write their run dirs into. Unique run IDs + explicit cleanup keep
-// the shared tree clean.
+// tests write their run dirs into. Every run dir this file creates carries
+// a randomUUID-unique id and is removed in the owning test's finally, so
+// concurrent runs and retained artifacts in the shared tree are untouched.
 const RESULTS_ROOT = resolve(import.meta.dir, '..', 'results');
 
 const CREDENTIALS_YAML = [
@@ -156,41 +191,29 @@ function commitCredentialsIntoEvals(campaignDir: string): string {
   ).stdout.trim();
 }
 
-/** Capture process.stderr during an async verb call (the CLI-boundary
- * refusal channel), restoring the stream in finally. */
-async function captureStderr(fn: () => Promise<number>): Promise<{
-  code: number;
-  loud: string;
-}> {
-  const spy = spyOn(process.stderr, 'write');
+/** Capture BOTH stdio streams during an async verb call — the verb's
+ * finish/resume lines AND the CLI-boundary refusal channel — restoring the
+ * streams in finally. Nothing the verb prints leaks into test output. */
+async function captureOutput(
+  fn: () => Promise<number>,
+): Promise<{ code: number; said: string; loud: string }> {
+  const out = spyOn(process.stdout, 'write');
+  const err = spyOn(process.stderr, 'write');
+  let said = '';
   let loud = '';
-  spy.mockImplementation((chunk: string) => {
+  out.mockImplementation((chunk: string) => {
+    said += String(chunk);
+    return true;
+  });
+  err.mockImplementation((chunk: string) => {
     loud += String(chunk);
     return true;
   });
   try {
-    return { code: await fn(), loud };
+    return { code: await fn(), said, loud };
   } finally {
-    spy.mockRestore();
-  }
-}
-
-/** Capture process.stdout during an async verb call (the verb's finish line
- * and the resume banner), restoring the stream in finally. */
-async function captureStdout(fn: () => Promise<number>): Promise<{
-  code: number;
-  said: string;
-}> {
-  const spy = spyOn(process.stdout, 'write');
-  let said = '';
-  spy.mockImplementation((chunk: string) => {
-    said += String(chunk);
-    return true;
-  });
-  try {
-    return { code: await fn(), said };
-  } finally {
-    spy.mockRestore();
+    out.mockRestore();
+    err.mockRestore();
   }
 }
 
@@ -203,6 +226,7 @@ test('campaignRun forwards the container stopper to normal resume recovery', asy
   // cannot be verified dead, so the resume must refuse BEFORE any journal
   // mutation, with the exact ID recorded by the stopper.
   const fx = publishedContainerCampaign();
+  ownDir(fx.dir);
   writeCredentials(fx.dir);
   const stopped: string[] = [];
   const containerStop: ContainerStopper = {
@@ -213,7 +237,7 @@ test('campaignRun forwards the container stopper to normal resume recovery', asy
   };
   const before = journaledTypes(fx.dir, 2);
 
-  const { code, loud } = await captureStderr(() =>
+  const { code, loud } = await captureOutput(() =>
     campaignRun(fx.dir, { containerStop }),
   );
 
@@ -232,6 +256,7 @@ test('campaignRun forwards the container stopper through cancel-request preceden
   // 'dead' stop must let the pinned cancel order journal aborted per
   // in-flight block and campaign_cancelled LAST.
   const fx = publishedContainerCampaign();
+  ownDir(fx.dir);
   writeFileSync(
     join(fx.dir, 'cancel-request'),
     `${Date.now()}\noperator halt\n`,
@@ -254,7 +279,7 @@ test('campaignRun forwards the container stopper through cancel-request preceden
     },
   };
 
-  const { code, said } = await captureStdout(() =>
+  const { code, said } = await captureOutput(() =>
     campaignRun(fx.dir, { spawner, containerStop }),
   );
 
@@ -275,7 +300,7 @@ test('campaignRun forwards the container stopper through cancel-request preceden
  * republishes the artifact pair, and resolves 'completed' — zero attempts
  * to spawn, so the no-options call settles it with no behavioral change. */
 function sealedCampaignFixture(): { dir: string; runIds: string[] } {
-  const dir = mkdtempSync(join(tmpdir(), 'run-inject-sealed-'));
+  const dir = ownDir(mkdtempSync(join(tmpdir(), 'run-inject-sealed-')));
   const refs = seedRealSnapshot(dir);
   const evalsSha = commitCredentialsIntoEvals(dir);
   const single = reportCampaign({ singleArm: true });
@@ -288,7 +313,10 @@ function sealedCampaignFixture(): { dir: string; runIds: string[] } {
   const digest = campaignDigest(parsed);
   const doc: Campaign = { ...parsed, campaign_id: digest, digest };
   const published = publishedCampaign({ inFlight: false, doc, dir });
-  const runIds = ['run-inject-sealed-r1', 'run-inject-sealed-r2'];
+  const runIds = [
+    `run-inject-sealed-${randomUUID()}`,
+    `run-inject-sealed-${randomUUID()}`,
+  ];
   const steps = [
     {
       kind: 'run' as const,
@@ -378,7 +406,7 @@ test('campaignRun without options settles an already-complete campaign unchanged
   // with the sealed-tail republication — no flag, no behavior change.
   const fx = sealedCampaignFixture();
   try {
-    const { code, said } = await captureStdout(() => campaignRun(fx.dir));
+    const { code, said } = await captureOutput(() => campaignRun(fx.dir));
     expect(code).toBe(0);
     expect(said).toContain('campaign run finished: completed');
     // The completion marker is back on disk, digest-verified by the fold.
@@ -391,13 +419,16 @@ test('campaignRun without options settles an already-complete campaign unchanged
   }
 }, 120_000);
 
-// ── spawner: the injected spawner runs the attempts (Linux-designated host) ──
+// ── spawner: the injected spawner runs the attempts ─────────────────────────
 
 // The scripted-child seam (the campaign-resume suite's shape): a fake child
-// is a real SpawnedCampaignChild over an impossible pgid, driven by the
-// test through the same stdout/exit surface the dispatcher consumes.
-const FAKE_PID_BASE = 900_000_001;
-
+// is a real SpawnedCampaignChild driven by the test through the same
+// stdout/exit surface the dispatcher consumes. Its pgid must name a REAL
+// process group: recordAllocation validates it through the production kill
+// seam's 0-probe before journaling (R-SPN-2), and an impossible pgid is
+// refused as a dead group. One owned throwaway sleep process provides a
+// live group exactly the way a real detached campaign child would; the
+// test kills it in its finally.
 class FakeChild implements SpawnedCampaignChild {
   readonly handle: { readonly kind: 'process'; readonly pgid: number };
   private readonly stdoutCbs: ((l: string) => void)[] = [];
@@ -428,31 +459,57 @@ class FakeChild implements SpawnedCampaignChild {
   }
 }
 
+/** A spawner whose children ride one owned, live process group: the
+ * `sleep` is spawned detached (its pgid is its own pid) and killed when the
+ * test is done with it. */
 class FakeSpawner implements ChildSpawner {
   readonly kind = 'process' as const;
   readonly spawned: { spec: CampaignChildSpec; child: FakeChild }[] = [];
-  private nextPid = FAKE_PID_BASE;
+  private readonly group: { readonly pgid: number; kill(): void };
+  constructor() {
+    const proc = spawn('sleep', ['3600'], { detached: true, stdio: 'ignore' });
+    proc.unref();
+    if (proc.pid === undefined)
+      throw new Error('could not spawn a fake-pgid holder');
+    this.group = {
+      pgid: proc.pid,
+      kill(): void {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // already gone
+        }
+      },
+    };
+  }
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild {
-    const child = new FakeChild(this.nextPid++);
+    const child = new FakeChild(this.group.pgid);
     this.spawned.push({ spec, child });
     return child;
   }
+  killGroup(): void {
+    this.group.kill();
+  }
 }
 
-/** The registered fingerprint of the host THIS process runs on: the resume
- * preflight compares it against a fresh production-probe sample (exact
- * cpu_model/cpu_cores, tolerance bands on mem/disk — Decision D-4), so the
- * fixture document must carry the live host's own identity. */
-function liveFingerprint(
-  diskPath: string,
-): Campaign['contention']['host_fingerprint'] {
+/** The registered fingerprint of the host the FIXTURE PROBE pins: the
+ * resume preflight compares it against a fresh sample from
+ * hostStatsProbeForCli (exact cpu_model/cpu_cores, tolerance bands on
+ * mem/disk — Decision D-4). The probe reads test/fixtures/host-stats.json
+ * through the QUORUM_HOST_STATS_PROBE_FIXTURE seam, so mem/disk come from
+ * that sample and only the CPU identity is the live host's own
+ * (probeFingerprint supplies it). */
+function fixtureProbeFingerprint(): Campaign['contention']['host_fingerprint'] {
+  const stats = JSON.parse(readFileSync(HOST_STATS_FIXTURE, 'utf8')) as {
+    mem_total_bytes: number;
+    disk_total_bytes: number;
+  };
   const cpu = cpus();
-  const fs = statfsSync(diskPath);
   return {
-    cpu_model: cpu[0]?.model ?? 'unknown',
+    cpu_model: cpu[0]?.model ?? '',
     cpu_cores: cpu.length,
-    mem_bytes: totalmem(),
-    disk_total_bytes: fs.blocks * fs.bsize,
+    mem_bytes: stats.mem_total_bytes,
+    disk_total_bytes: stats.disk_total_bytes,
   };
 }
 
@@ -465,7 +522,7 @@ function pendingCampaignFixture(): {
   dir: string;
   journaledRunId: string;
 } {
-  const dir = mkdtempSync(join(tmpdir(), 'run-inject-pending-'));
+  const dir = ownDir(mkdtempSync(join(tmpdir(), 'run-inject-pending-')));
   const refs = seedRealSnapshot(dir);
   const evalsSha = commitCredentialsIntoEvals(dir);
   const single = reportCampaign({ singleArm: true });
@@ -476,13 +533,13 @@ function pendingCampaignFixture(): {
     digest: 'd'.repeat(64),
     contention: {
       ...single.contention,
-      host_fingerprint: liveFingerprint(dir),
+      host_fingerprint: fixtureProbeFingerprint(),
     },
   });
   const digest = campaignDigest(parsed);
   const doc: Campaign = { ...parsed, campaign_id: digest, digest };
   const published = publishedCampaign({ inFlight: false, doc, dir });
-  const journaledRunId = 'run-inject-pending-r1';
+  const journaledRunId = `run-inject-pending-${randomUUID()}`;
   const runDir = join(RESULTS_ROOT, journaledRunId);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(
@@ -539,73 +596,100 @@ function pendingCampaignFixture(): {
 }
 
 /** Real wall-clock sleep — this proof runs against RealClock, so the test
- * polls the spawner until the dispatcher admits and spawns. */
+ * polls observable conditions (the spawner's spawn record, then the
+ * journal's allocation event) instead of asserting timing. */
 const sleep = (ms: number): Promise<void> =>
   new Promise((res) => setTimeout(res, ms));
 
-test.skipIf(process.platform !== 'linux')(
-  'campaignRun forwards an injected spawner to the dispatcher — the remaining attempt runs through it and the campaign seals',
-  async () => {
-    // Linux-only by R-LCK-3: the resume preflight samples the host through
-    // the production probe, which refuses everywhere but the designated
-    // Linux appliance — on any other host admission (the only thing that
-    // consumes a spawner) is unreachable, so there is nothing to prove.
-    setProcessEnv('KEY_A', 'fixture-key-a');
-    setProcessEnv('KEY_G', 'fixture-key-g');
-    const fx = pendingCampaignFixture();
-    const spawner = new FakeSpawner();
-    try {
-      const run = captureStdout(() => campaignRun(fx.dir, { spawner }));
-      // Admission: the dispatcher serves the pending sample by spawning
-      // through the INJECTED spawner (RealClock wake loop is ~1s a wave).
-      const deadline = Date.now() + 90_000;
-      while (spawner.spawned.length === 0) {
-        if (Date.now() > deadline) {
-          throw new Error('dispatcher never spawned the pending attempt');
-        }
-        await sleep(200);
+test('campaignRun forwards an injected spawner to the dispatcher — the remaining attempt runs through it and the campaign seals', async () => {
+  // Portable proof: the preflight probe comes from the fixture seam
+  // (QUORUM_HOST_STATS_PROBE_FIXTURE, read by hostStatsProbeForCli at the
+  // CLI boundary), so admission is reachable on every platform and the
+  // test exercises the REAL campaignRun + injected fake spawner
+  // end-to-end. KEY_A/KEY_G are the preflight's credential envs
+  // (R-REG-19); afterAll restores their prior values.
+  setProcessEnv('KEY_A', 'fixture-key-a');
+  setProcessEnv('KEY_G', 'fixture-key-g');
+  const fx = pendingCampaignFixture();
+  const spawner = new FakeSpawner();
+  // The read-only journal view (R-JRN-3): safe against the live
+  // dispatcher's writer lease while the run is in flight.
+  const reader = openJournalRead(fx.dir);
+  // The spawned child's run dir is created mid-flight (after admission),
+  // so its id is tracked here and removed in finally — only this test's
+  // own unique path.
+  let spawnedRunId: string | undefined;
+  try {
+    const allocatedBefore = reader
+      .readEvents()
+      .filter((e) => e.type === 'run_allocated').length;
+    const run = captureOutput(() => campaignRun(fx.dir, { spawner }));
+    // Admission: the dispatcher serves the pending sample by spawning
+    // through the INJECTED spawner (RealClock wake loop is ~1s a wave).
+    const spawnDeadline = Date.now() + 90_000;
+    while (spawner.spawned.length === 0) {
+      if (Date.now() > spawnDeadline) {
+        throw new Error('dispatcher never spawned the pending attempt');
       }
-      expect(spawner.spawned.length).toBe(1);
-      const child = spawner.spawned[0]?.child;
-      if (child === undefined) throw new Error('unreachable');
-      // The child's run id travels on its `run_allocated:` stdout line; the
-      // dispatcher journals it, so the terminal evidence lands under the
-      // verb's own results root.
-      const runId = `run-${child.handle.pgid}`;
-      const runDir = join(RESULTS_ROOT, runId);
-      mkdirSync(runDir, { recursive: true });
-      writeFileSync(
-        join(runDir, 'verdict.json'),
-        JSON.stringify({
-          final: 'fail',
-          final_reason: 'fixture',
-          economics: { total_est_cost_usd: 0.25 },
-        }),
-      );
-      writeFileSync(
-        join(runDir, 'trajectory.json'),
-        JSON.stringify({ steps: [{ timestamp: '2026-08-29T00:00:00.000Z' }] }),
-      );
-      child.emitLine(`run_allocated: ${runId}`);
-      await sleep(1500); // let the dispatcher journal the allocation
-      child.exit({ code: 0, signal: null });
-      const { code, said } = await run;
-      expect(code).toBe(0);
-      expect(said).toContain('campaign run finished: completed');
-      // The spawned attempt reached a journaled terminal and the campaign
-      // sealed: settled, not merely spawned.
-      const types = journaledTypes(fx.dir, 2);
-      expect(types.filter((t) => t === 'run_completed').length).toBe(2);
-      expect(types.at(-1)).toBe('sealed');
-      rmSync(join(RESULTS_ROOT, runId), { recursive: true, force: true });
-    } finally {
-      deleteProcessEnv('KEY_A');
-      deleteProcessEnv('KEY_G');
-      rmSync(join(RESULTS_ROOT, fx.journaledRunId), {
+      await sleep(200);
+    }
+    expect(spawner.spawned.length).toBe(1);
+    const child = spawner.spawned[0]?.child;
+    if (child === undefined) throw new Error('unreachable');
+    // The child's run id travels on its `run_allocated:` stdout line; the
+    // dispatcher journals it, so the terminal evidence lands under the
+    // verb's own results root.
+    const runId = `run-inject-spawn-${randomUUID()}`;
+    spawnedRunId = runId;
+    const runDir = join(RESULTS_ROOT, runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'verdict.json'),
+      JSON.stringify({
+        final: 'fail',
+        final_reason: 'fixture',
+        economics: { total_est_cost_usd: 0.25 },
+      }),
+    );
+    writeFileSync(
+      join(runDir, 'trajectory.json'),
+      JSON.stringify({ steps: [{ timestamp: '2026-08-29T00:00:00.000Z' }] }),
+    );
+    child.emitLine(`run_allocated: ${runId}`);
+    // Bounded observation of the actual journal condition: the allocation
+    // must be journaled before the exit is driven, so the dispatcher can
+    // complete the run from it (R-JRN-8).
+    const journalDeadline = Date.now() + 30_000;
+    while (
+      reader.readEvents().filter((e) => e.type === 'run_allocated').length <=
+      allocatedBefore
+    ) {
+      if (Date.now() > journalDeadline) {
+        throw new Error('dispatcher never journaled the allocation');
+      }
+      await sleep(100);
+    }
+    child.exit({ code: 1, signal: null }); // EXIT_CODE_BY_FINAL['fail'] = 1
+    const { code, said } = await run;
+    expect(code).toBe(0);
+    expect(said).toContain('campaign run finished: completed');
+    // The spawned attempt reached a journaled terminal and the campaign
+    // sealed: settled, not merely spawned.
+    const types = journaledTypes(fx.dir, 2);
+    expect(types.filter((t) => t === 'run_completed').length).toBe(2);
+    expect(types.at(-1)).toBe('sealed');
+  } finally {
+    spawner.killGroup();
+    reader.close();
+    if (spawnedRunId !== undefined) {
+      rmSync(join(RESULTS_ROOT, spawnedRunId), {
         recursive: true,
         force: true,
       });
     }
-  },
-  180_000,
-);
+    rmSync(join(RESULTS_ROOT, fx.journaledRunId), {
+      recursive: true,
+      force: true,
+    });
+  }
+}, 180_000);
