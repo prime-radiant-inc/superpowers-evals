@@ -236,6 +236,7 @@ const DELIVERY_BY_FAMILY: Readonly<
     subscription: () => mountOnly({ kind: 'codex', mountName: 'codex' }),
   },
   copilot: { oauth: copilotOAuth },
+  fake: { 'api-key': apiKey },
   gemini: { 'api-key': geminiApiKey, oauth: geminiOAuth },
   hermes: { 'api-key': apiKey },
   kimi: {

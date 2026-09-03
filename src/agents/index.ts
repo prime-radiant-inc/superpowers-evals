@@ -411,6 +411,7 @@ let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
   //   00-quorum-smoke-hello-world-copilot-copilot_default-linux-20260904T165452Z-84d7
   //   (pass; no plugins dir staged; verdict provenance superpowers_rev null).
   copilot: { ref: true, none: true },
+  fake: { ref: false, none: true },
 };
 
 /** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()
