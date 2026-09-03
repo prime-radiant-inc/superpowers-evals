@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
   closeSync,
-  type Dirent,
   fchmodSync,
   constants as fsConstants,
   fstatSync,
@@ -88,42 +87,6 @@ export const AttemptManifestSchema = z
 
 export type AttemptManifest = z.infer<typeof AttemptManifestSchema>;
 
-export interface AttemptManifestFsOps {
-  closeSync(fd: number): void;
-  fchmodSync(fd: number, mode: number): void;
-  fstatSync(fd: number): Stats;
-  fsyncSync(fd: number): void;
-  lstatSync(path: string): Stats;
-  openSync(path: string, flags: number, mode?: number): number;
-  readSync(
-    fd: number,
-    buffer: Uint8Array,
-    offset: number,
-    length: number,
-    position: number | null,
-  ): number;
-  readdirSync(path: string): Dirent[];
-  realpathSync(path: string): string;
-  renameSync(oldPath: string, newPath: string): void;
-  unlinkSync(path: string): void;
-  writeSync(fd: number, buffer: Uint8Array): number;
-}
-
-export const ATTEMPT_MANIFEST_FS: AttemptManifestFsOps = {
-  closeSync,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  readSync,
-  readdirSync: (path) => readdirSync(path, { withFileTypes: true }),
-  realpathSync,
-  renameSync,
-  unlinkSync,
-  writeSync: (fd, buffer) => writeSync(fd, buffer),
-};
-
 export function parseAttemptManifest(raw: string): AttemptManifest {
   return AttemptManifestSchema.parse(JSON.parse(raw));
 }
@@ -152,20 +115,17 @@ function pinnedPath(fd: number, stat: Stats): string {
     : `/proc/self/fd/${fd}`;
 }
 
-function openDirectory(
-  path: string,
-  ops: AttemptManifestFsOps,
-): PinnedDirectory {
-  const fd = ops.openSync(path, READ_DIRECTORY_FLAGS);
+function openDirectory(path: string): PinnedDirectory {
+  const fd = openSync(path, READ_DIRECTORY_FLAGS);
   try {
-    const stat = ops.fstatSync(fd);
+    const stat = fstatSync(fd);
     if (!stat.isDirectory()) {
       throw manifestError(`non-directory artifact path refused: ${path}`);
     }
     return { fd, viaPath: pinnedPath(fd, stat) };
   } catch (error) {
     try {
-      ops.closeSync(fd);
+      closeSync(fd);
     } catch {
       // Preserve the original validation error.
     }
@@ -173,19 +133,21 @@ function openDirectory(
   }
 }
 
-function collectFiles(
-  runDir: string,
-  ops: AttemptManifestFsOps,
-): { files: AttemptManifest['files']; rootPath: string } {
+function collectFiles(runDir: string): {
+  files: AttemptManifest['files'];
+  rootPath: string;
+} {
   const found: AttemptManifest['files'] = [];
-  const rootPath = ops.realpathSync(runDir);
+  const rootPath = realpathSync(runDir);
 
   const walk = (
     directory: PinnedDirectory,
     displayPath: string,
     isRoot: boolean,
   ): void => {
-    for (const entry of ops.readdirSync(directory.viaPath)) {
+    for (const entry of readdirSync(directory.viaPath, {
+      withFileTypes: true,
+    })) {
       const path = join(displayPath, entry.name).split(sep).join('/');
       if (path === MANIFEST_NAME || path === MANIFEST_STAGE_NAME) continue;
       if (!isManifestPath(path)) {
@@ -198,13 +160,13 @@ function collectFiles(
         if (isRoot && EXCLUDED_TOP_LEVEL_DIRS.has(entry.name)) {
           continue;
         }
-        const child = openDirectory(`${directory.viaPath}/${entry.name}`, ops);
+        const child = openDirectory(`${directory.viaPath}/${entry.name}`);
         try {
           walk(child, path, false);
           if (
             !isSameFile(
-              ops.fstatSync(child.fd),
-              ops.lstatSync(`${directory.viaPath}/${entry.name}`),
+              fstatSync(child.fd),
+              lstatSync(`${directory.viaPath}/${entry.name}`),
             )
           ) {
             throw manifestError(
@@ -212,25 +174,25 @@ function collectFiles(
             );
           }
         } finally {
-          ops.closeSync(child.fd);
+          closeSync(child.fd);
         }
         continue;
       }
       if (!entry.isFile()) {
         throw manifestError(`non-regular artifact refused: ${path}`);
       }
-      found.push(digestFile(directory, path, ops));
+      found.push(digestFile(directory, path));
     }
     // Every nested directory's entries are durable before the root manifest
     // can bless the inventory.
-    ops.fsyncSync(directory.fd);
+    fsyncSync(directory.fd);
   };
 
-  const rootDirectory = openDirectory(rootPath, ops);
+  const rootDirectory = openDirectory(rootPath);
   try {
     walk(rootDirectory, '', true);
   } finally {
-    ops.closeSync(rootDirectory.fd);
+    closeSync(rootDirectory.fd);
   }
   return {
     files: found.sort((a, b) =>
@@ -243,32 +205,31 @@ function collectFiles(
 function digestFile(
   parent: PinnedDirectory,
   path: string,
-  ops: AttemptManifestFsOps,
 ): AttemptManifest['files'][number] {
   const name = path.split('/').at(-1);
   if (name === undefined) {
     throw manifestError(`artifact path is not normalized: ${path}`);
   }
   const fullPath = `${parent.viaPath}/${name}`;
-  const initialPathStat = ops.lstatSync(fullPath);
+  const initialPathStat = lstatSync(fullPath);
   if (!initialPathStat.isFile()) {
     throw manifestError(`non-regular artifact refused: ${path}`);
   }
-  const fd = ops.openSync(fullPath, READ_FILE_FLAGS);
+  const fd = openSync(fullPath, READ_FILE_FLAGS);
   try {
-    const initialFdStat = ops.fstatSync(fd);
+    const initialFdStat = fstatSync(fd);
     if (
       !initialFdStat.isFile() ||
       !isSameFile(initialPathStat, initialFdStat)
     ) {
       throw manifestError(`artifact changed while it was being read: ${path}`);
     }
-    ops.fsyncSync(fd);
+    fsyncSync(fd);
     const hash = createHash('sha256');
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let size = 0;
     while (true) {
-      const bytesRead = ops.readSync(fd, buffer, 0, buffer.length, null);
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
       if (bytesRead < 0) {
         throw manifestError(`artifact read failed: ${path}`);
@@ -276,8 +237,8 @@ function digestFile(
       hash.update(buffer.subarray(0, bytesRead));
       size += bytesRead;
     }
-    const finalFdStat = ops.fstatSync(fd);
-    const finalPathStat = ops.lstatSync(fullPath);
+    const finalFdStat = fstatSync(fd);
+    const finalPathStat = lstatSync(fullPath);
     if (
       !finalFdStat.isFile() ||
       !isSameFile(initialFdStat, finalFdStat) ||
@@ -286,16 +247,16 @@ function digestFile(
     ) {
       throw manifestError(`artifact changed while it was being read: ${path}`);
     }
-    ops.fsyncSync(fd);
+    fsyncSync(fd);
     return { path, size, sha256: hash.digest('hex') };
   } finally {
-    ops.closeSync(fd);
+    closeSync(fd);
   }
 }
 
-function removeIfPresent(path: string, ops: AttemptManifestFsOps): boolean {
+function removeIfPresent(path: string): boolean {
   try {
-    ops.unlinkSync(path);
+    unlinkSync(path);
     return true;
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
@@ -303,23 +264,18 @@ function removeIfPresent(path: string, ops: AttemptManifestFsOps): boolean {
   }
 }
 
-function syncDirectory(path: string, ops: AttemptManifestFsOps): void {
-  const directory = openDirectory(path, ops);
+function syncDirectory(path: string): void {
+  const directory = openDirectory(path);
   try {
-    ops.fsyncSync(directory.fd);
+    fsyncSync(directory.fd);
   } finally {
-    ops.closeSync(directory.fd);
+    closeSync(directory.fd);
   }
 }
 
-function cleanupPath(
-  path: string,
-  runDir: string,
-  ops: AttemptManifestFsOps,
-  errors: string[],
-): void {
+function cleanupPath(path: string, runDir: string, errors: string[]): void {
   try {
-    if (removeIfPresent(path, ops)) syncDirectory(runDir, ops);
+    if (removeIfPresent(path)) syncDirectory(runDir);
   } catch (error: unknown) {
     errors.push(
       `${path}: ${error instanceof Error ? error.message : String(error)}`,
@@ -333,21 +289,19 @@ function cleanupPath(
 export function writeAttemptManifest(
   runDir: string,
   campaign: CampaignIdentity,
-  ops: AttemptManifestFsOps = ATTEMPT_MANIFEST_FS,
 ): void {
   const stagePath = join(runDir, MANIFEST_STAGE_NAME);
   const finalPath = join(runDir, MANIFEST_NAME);
   let fd: number | null = null;
-  let renameAttempted = false;
   try {
     // A new invocation invalidates any old blessing before validation starts.
-    if (removeIfPresent(finalPath, ops)) syncDirectory(runDir, ops);
-    if (removeIfPresent(stagePath, ops)) syncDirectory(runDir, ops);
+    if (removeIfPresent(finalPath)) syncDirectory(runDir);
+    if (removeIfPresent(stagePath)) syncDirectory(runDir);
     const parsedCampaign = CampaignIdentitySchema.parse(campaign);
     const runId = basename(runDir);
     if (runId.length === 0)
       throw manifestError('run directory has no basename');
-    const collected = collectFiles(runDir, ops);
+    const collected = collectFiles(runDir);
     const files = collected.files;
     const manifest: AttemptManifest = AttemptManifestSchema.parse({
       schema_version: 1,
@@ -355,7 +309,7 @@ export function writeAttemptManifest(
       campaign: parsedCampaign,
       files,
     });
-    fd = ops.openSync(
+    fd = openSync(
       stagePath,
       fsConstants.O_WRONLY |
         fsConstants.O_CREAT |
@@ -369,30 +323,29 @@ export function writeAttemptManifest(
     const bytes = Buffer.from(body, 'utf8');
     let offset = 0;
     while (offset < bytes.length) {
-      const written = ops.writeSync(fd, bytes.subarray(offset));
+      const written = writeSync(fd, bytes.subarray(offset));
       if (written <= 0) throw manifestError('manifest stage made no progress');
       offset += written;
     }
-    ops.fchmodSync(fd, 0o600);
-    ops.fsyncSync(fd);
-    ops.closeSync(fd);
+    fchmodSync(fd, 0o600);
+    fsyncSync(fd);
+    closeSync(fd);
     fd = null;
-    renameAttempted = true;
-    ops.renameSync(stagePath, finalPath);
-    syncDirectory(collected.rootPath, ops);
+    renameSync(stagePath, finalPath);
+    syncDirectory(collected.rootPath);
   } catch (error: unknown) {
     if (fd !== null) {
       try {
-        ops.closeSync(fd);
+        closeSync(fd);
       } catch {
         // Preserve the publication error.
       }
     }
     const cleanupErrors: string[] = [];
-    cleanupPath(stagePath, runDir, ops, cleanupErrors);
-    if (renameAttempted) {
-      cleanupPath(finalPath, runDir, ops, cleanupErrors);
-    }
+    cleanupPath(stagePath, runDir, cleanupErrors);
+    // Retry invalidating the final even when the initial preflight unlink
+    // failed; a stale blessing must never survive a refused invocation.
+    cleanupPath(finalPath, runDir, cleanupErrors);
     if (error instanceof RunnerError && cleanupErrors.length === 0) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     const cleanupDetail =
