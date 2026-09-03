@@ -24,6 +24,7 @@ class FakeDocker implements CommandRunner {
   readonly inspect: { value: unknown } = { value: null };
   createdId = containerId;
   startStatus = 0;
+  rmStatus = 0;
 
   run(command: string, args: readonly string[]): CommandResult {
     this.calls.push({ command, args: [...args] });
@@ -40,7 +41,11 @@ class FakeDocker implements CommandRunner {
       case 'start':
         return { status: this.startStatus, stdout: '', stderr: 'secret=never' };
       case 'rm':
-        return { status: 0, stdout: '', stderr: '' };
+        return {
+          status: this.rmStatus,
+          stdout: '',
+          stderr: 'rm failed=secret',
+        };
       default:
         return { status: 0, stdout: '', stderr: '' };
     }
@@ -111,8 +116,9 @@ function inspected(
   attemptId: string,
   mounts: readonly { source: string; target: string; mode: 'ro' | 'rw' }[],
   over: Record<string, unknown> = {},
-): unknown {
+): Record<string, unknown> {
   return {
+    Id: containerId,
     Name: `/${containerNameForAttempt(campaignId, attemptId)}`,
     Image: imageDigest,
     Config: {
@@ -120,13 +126,14 @@ function inspected(
         'quorum.campaign_id': campaignId,
         'quorum.attempt_id': attemptId,
         'quorum.evals_sha': evalsSha,
+        'quorum.image_digest': imageDigest,
       },
     },
     Mounts: mounts.map((mount) => ({
       Type: 'bind',
       Source: mount.source,
-      Target: mount.target,
-      ReadOnly: mount.mode === 'ro',
+      Destination: mount.target,
+      RW: mount.mode === 'rw',
     })),
     ...over,
   };
@@ -158,6 +165,7 @@ test('creates with pinned digest and immutable identity, verifies, then starts',
     `quorum.attempt_id=${fx.spec.attempt!.attemptId}`,
   );
   expect(createArgs).toContain(`quorum.evals_sha=${evalsSha}`);
+  expect(createArgs).toContain(`quorum.image_digest=${imageDigest}`);
   expect(createArgs).toContain('QUORUM_COVERED_BY_LIVE_SPEND_LOCK=1');
   expect(createArgs).not.toContain('sk-ant-secret');
   expect(createArgs).not.toContain('grader-secret');
@@ -179,6 +187,7 @@ test('rejects a non-canonical create id before trusting it', () => {
 
 test('removes the exact container and never starts for every identity mismatch', () => {
   const mismatches: Record<string, unknown>[] = [
+    { Id: '0'.repeat(64) },
     { Name: '/wrong-name' },
     { Image: `sha256:${'a'.repeat(64)}` },
     {
@@ -202,6 +211,22 @@ test('removes the exact container and never starts for every identity mismatch',
         },
       },
     },
+    {
+      Config: {
+        Labels: {
+          'quorum.image_digest': `sha256:${'a'.repeat(64)}`,
+        },
+      },
+    },
+    {
+      Config: {
+        Labels: {
+          'quorum.campaign_id': campaignId,
+          'quorum.attempt_id': 'c1:s:arm_a:r1:a1',
+          'quorum.evals_sha': evalsSha,
+        },
+      },
+    },
   ];
   for (const mismatch of mismatches) {
     const fx = fixture();
@@ -220,6 +245,21 @@ test('removes the exact container and never starts for every identity mismatch',
     ]);
     expect(fx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
   }
+});
+
+test('rejects the legacy Target/ReadOnly mount shape as malformed', () => {
+  const fx = fixture();
+  fx.runner.inspect.value = {
+    ...inspected(fx.spec.attempt!.attemptId, fx.expectedMounts),
+    Mounts: fx.expectedMounts.map((mount) => ({
+      Type: 'bind',
+      Source: mount.source,
+      Target: mount.target,
+      ReadOnly: mount.mode === 'ro',
+    })),
+  };
+  expect(() => makeSpawner(fx.runner).spawn(fx.spec)).toThrow(/mount/i);
+  expect(fx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
 });
 
 test('removes the exact container and never starts for missing, extra, writable, or cross-attempt mounts', () => {
@@ -272,4 +312,32 @@ test('removes a created container when start fails', () => {
     'rm',
   ]);
   expect(fx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
+});
+
+test('reports both the original verification failure and failed exact-ID cleanup', () => {
+  const fx = fixture();
+  fx.runner.inspect.value = inspected(
+    fx.spec.attempt!.attemptId,
+    fx.expectedMounts,
+    {
+      Id: '0'.repeat(64),
+    },
+  );
+  fx.runner.rmStatus = 1;
+  expect(() => makeSpawner(fx.runner).spawn(fx.spec)).toThrow(
+    /identity.*cleanup|cleanup.*identity/i,
+  );
+  expect(fx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
+
+  const startFx = fixture();
+  startFx.runner.inspect.value = inspected(
+    startFx.spec.attempt!.attemptId,
+    startFx.expectedMounts,
+  );
+  startFx.runner.startStatus = 1;
+  startFx.runner.rmStatus = 1;
+  expect(() => makeSpawner(startFx.runner).spawn(startFx.spec)).toThrow(
+    /start.*cleanup|cleanup.*start/i,
+  );
+  expect(startFx.runner.calls.at(-1)!.args).toEqual(['rm', containerId]);
 });
