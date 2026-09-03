@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -332,6 +333,25 @@ test('publish rejects a symlinked manifest without moving staging', () => {
     ).toThrow(AttemptPublishError);
     expect(existsSync(runDir)).toBe(true);
     expect(existsSync(join(paths.resultsRoot, 'run-pub-11'))).toBe(false);
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish rejects a symlinked staging anchor without moving its source', () => {
+  const paths = staged('run-pub-16');
+  const staging = join(paths.attemptDir, 'staging');
+  const movedStaging = join(paths.attemptDir, 'home');
+  renameSync(staging, movedStaging);
+  symlinkSync(movedStaging, staging);
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(AttemptPublishError);
+    expect(existsSync(join(movedStaging, 'run-pub-16', 'verdict.json'))).toBe(
+      true,
+    );
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-16'))).toBe(false);
   } finally {
     clean(paths);
   }
