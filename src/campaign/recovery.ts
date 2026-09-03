@@ -39,6 +39,7 @@ import { getEnv } from '../env.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
 import { loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
+import type { ContainerStopper } from './container-spawner.ts';
 import {
   type BlockInterval,
   breachWindows,
@@ -315,8 +316,15 @@ export interface KillJournaledPgidsReport {
   readonly reclaimedUnsafe: number[];
   /** Signaled but survived TERM+KILL — the caller must refuse to proceed. */
   readonly survived: number[];
+  /** Container allocations whose exact Docker stop/verification seam proved
+   *  the whole attempt dead. */
+  readonly containersStopped: string[];
+  /** Container allocations whose exact Docker stop/verification seam found
+   *  the container still alive. Callers must refuse to proceed. */
+  readonly containersSurvived: string[];
   /** Container allocations whose exact Docker stop/verification seam is not
-   *  available in this recovery path. Callers must refuse to proceed. */
+   *  available, or whose stop did not prove death. Callers must refuse to
+   *  proceed. */
   readonly unverifiedContainers: UnverifiedContainerRecord[];
   /** Runs whose tmux subject host (gauntlet's private server, which the
    *  group kill never reaches — C10) was killed and VERIFIED gone. */
@@ -389,6 +397,8 @@ export async function killJournaledPgids(args: {
   signal?: GroupSignaler;
   /** C10 subject-host seam; production default realSubjectHostProbe. */
   subjectHost?: SubjectHostProbe;
+  /** Exact-ID Docker stop seam for journaled container allocations. */
+  containerStop?: ContainerStopper;
   clock?: Clock;
   stream?: { write(s: string): void };
   graceSeconds?: number;
@@ -400,6 +410,7 @@ export async function killJournaledPgids(args: {
   const child = args.child ?? realCampaignChildProbe;
   const signal = args.signal ?? realGroupSignaler;
   const subjectHost = args.subjectHost ?? realSubjectHostProbe;
+  const containerStop = args.containerStop;
   const clock = args.clock ?? new RealClock();
   const graceSeconds = args.graceSeconds ?? KILL_GRACE_SECONDS;
 
@@ -414,6 +425,8 @@ export async function killJournaledPgids(args: {
   const reclaimedBenign: number[] = [];
   const reclaimedUnsafe: number[] = [];
   const survived: number[] = [];
+  const containersStopped: string[] = [];
+  const containersSurvived: string[] = [];
   const unverifiedContainers: UnverifiedContainerRecord[] = [];
   const subjectHostsKilled: SubjectHostRecord[] = [];
   const subjectHostsSurvived: SubjectHostRecord[] = [];
@@ -556,19 +569,36 @@ export async function killJournaledPgids(args: {
     const attemptId = event.payload.attempt_id;
     if (terminalAttempts.has(attemptId)) continue;
     if ('container_id' in event.payload) {
-      // Child 1 container arm: verified death is a container stop against the
-      // exact container ID. The stop seam lands with the container spawner
-      // (Task 11); until then a journaled container handle here is LOUD.
-      stream.write(
-        `run_allocated ${event.payload.attempt_id} journaled a container handle (${event.payload.container_id}) — container stop seam not injected; recorded, not verified\n`,
-      );
-      unverifiedContainers.push({
+      const record = {
         attempt_id: event.payload.attempt_id,
         run_id: event.payload.run_id,
         container_name: event.payload.container_name,
         container_id: event.payload.container_id,
         image_digest: event.payload.image_digest,
-      });
+      };
+      if (containerStop === undefined) {
+        // A container's exact ID is the only valid recovery handle. Without
+        // its stopper, process-group and tmux probes cannot establish whole-
+        // attempt death, so retain the immutable identity for diagnosis.
+        stream.write(
+          `run_allocated ${event.payload.attempt_id} journaled a container handle (${event.payload.container_id}) — no container stopper injected; recorded, not verified\n`,
+        );
+        unverifiedContainers.push(record);
+        continue;
+      }
+      const outcome = await containerStop.stop(
+        event.payload.container_id,
+        graceSeconds,
+      );
+      if (outcome === 'dead') {
+        containersStopped.push(event.payload.container_id);
+      } else {
+        containersSurvived.push(event.payload.container_id);
+        unverifiedContainers.push(record);
+        stream.write(
+          `orphan container ${event.payload.container_id} (attempt ${attemptId}) survived stop+kill — operator action: docker rm -f it before resuming; it is still spending\n`,
+        );
+      }
       continue;
     }
     await disposeGroup(event.payload.pgid, attemptId);
@@ -604,6 +634,8 @@ export async function killJournaledPgids(args: {
     reclaimedBenign,
     reclaimedUnsafe,
     survived,
+    containersStopped,
+    containersSurvived,
     unverifiedContainers,
     subjectHostsKilled,
     subjectHostsSurvived,
@@ -1879,6 +1911,8 @@ export interface ResumeArgs {
    *  orphan kill and the dispatcher's own kills. Production omits it
    *  (realSubjectHostProbe); tests never reach real tmux. */
   readonly subjectHost?: SubjectHostProbe;
+  /** Exact-ID Docker stop seam for journaled container allocations. */
+  readonly containerStop?: ContainerStopper;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
 }
@@ -2054,6 +2088,9 @@ export async function resumeCampaign(
       ...(args.subjectHost !== undefined
         ? { subjectHost: args.subjectHost }
         : {}),
+      ...(args.containerStop !== undefined
+        ? { containerStop: args.containerStop }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { graceSeconds: args.graceSeconds }
         : {}),
@@ -2124,6 +2161,9 @@ export async function resumeCampaign(
         ...(args.subjectHost !== undefined
           ? { subjectHost: args.subjectHost }
           : {}),
+        ...(args.containerStop !== undefined
+          ? { containerStop: args.containerStop }
+          : {}),
         ...(args.graceSeconds !== undefined
           ? { graceSeconds: args.graceSeconds }
           : {}),
@@ -2147,7 +2187,7 @@ export async function resumeCampaign(
         throw new RecoveryError(
           `resume refused: container(s) ${unverifiedContainers.join(
             ', ',
-          )} could not be verified dead — the container stop seam is not injected; they may still be spending; stop and inspect each exact container by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
+          )} could not be verified dead — the exact-ID stop was unavailable or the container survived stop+kill; it may still be spending; stop and inspect each exact container by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
         );
       }
       // The same precondition for the subject the group never held (C10):
@@ -2558,6 +2598,8 @@ export interface CancelArgs {
   readonly signal?: GroupSignaler;
   readonly child?: CampaignChildProbe;
   readonly subjectHost?: SubjectHostProbe;
+  /** Exact-ID Docker stop seam for journaled container allocations. */
+  readonly containerStop?: ContainerStopper;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
   /** Durability seam for the cancel-request marker (see StoragePauseArgs). */
@@ -2734,6 +2776,9 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
       ...(args.subjectHost !== undefined
         ? { subjectHost: args.subjectHost }
         : {}),
+      ...(args.containerStop !== undefined
+        ? { containerStop: args.containerStop }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { graceSeconds: args.graceSeconds }
         : {}),
@@ -2757,7 +2802,7 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
       stream.write(
         `cancel: container(s) ${unverifiedContainers.join(
           ', ',
-        )} could not be verified dead — the container stop seam is not injected; operator action: stop and inspect each exact container by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
+        )} could not be verified dead — the exact-ID stop was unavailable or the container survived stop+kill; operator action: stop and inspect each exact container by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
       );
       return { cancelled: false, postCrash: true };
     }
