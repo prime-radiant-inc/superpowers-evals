@@ -7,6 +7,8 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -20,6 +22,10 @@ import {
   imageDigestOf,
   runCampaignWorker,
 } from '../src/appliance/campaign-run.ts';
+import {
+  type ApplianceActions,
+  createApplianceActions,
+} from '../src/appliance/cli.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
 import { createJob, readJob, updateJob } from '../src/appliance/jobs.ts';
 import {
@@ -31,6 +37,10 @@ import {
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 import { EMPTY_CREDENTIAL_SCOPE } from '../src/credentials/scope.ts';
 import { prepareJobRequest } from './appliance-job-fixtures.ts';
+import {
+  campaignDoc as authenticCampaignDoc,
+  publishedCampaign,
+} from './campaign-recovery-fixtures.ts';
 
 const DIGEST = `sha256:${'a'.repeat(64)}`;
 
@@ -48,7 +58,10 @@ class ImageRunner implements CommandRunner {
   }
 }
 
-function fixture(): { loaded: LoadedApplianceConfig; jobId: string } {
+function fixture(withJob = true): {
+  loaded: LoadedApplianceConfig;
+  jobId: string;
+} {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'campaign-worker-')));
   const evals = join(root, 'evals');
   for (const path of [
@@ -94,6 +107,7 @@ function fixture(): { loaded: LoadedApplianceConfig; jobId: string } {
       provenance: join(root, 'state', 'provenance'),
     },
   };
+  if (!withJob) return { loaded, jobId: '' };
   const job = createJob(loaded, {
     kind: 'campaign-run',
     superpowersRef: 'e'.repeat(40),
@@ -113,6 +127,380 @@ function fixture(): { loaded: LoadedApplianceConfig; jobId: string } {
   });
   return { loaded, jobId: job.job_id };
 }
+
+class CampaignActionRunner implements CommandRunner {
+  readonly calls: Array<{ command: string; args: readonly string[] }> = [];
+  readonly imageDigest: string;
+
+  constructor(imageDigest = DIGEST) {
+    this.imageDigest = imageDigest;
+  }
+
+  run(command: string, args: readonly string[]): CommandResult {
+    this.calls.push({ command, args });
+    if (command === 'docker') {
+      return { status: 0, stdout: `${this.imageDigest}\n`, stderr: '' };
+    }
+    if (command === 'git' && args.includes('rev-parse')) {
+      return { status: 0, stdout: `${'c'.repeat(40)}\n`, stderr: '' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  }
+}
+
+function campaignActionFixture(): {
+  loaded: LoadedApplianceConfig;
+  actions: ApplianceActions;
+  runner: CampaignActionRunner;
+  selector: string;
+  campaignId: string;
+  spawned: string[];
+  jobIds: () => string[];
+} {
+  const fx = fixture(false);
+  const selector = 'prefix-suite';
+  const campaignDir = join(fx.loaded.config.evals.path, 'campaigns', selector);
+  mkdirSync(campaignDir, { recursive: true });
+  const published = publishedCampaign({
+    dir: campaignDir,
+    doc: authenticCampaignDoc(),
+  });
+  const runner = new CampaignActionRunner();
+  const spawned: string[] = [];
+  const actions = createApplianceActions({
+    loadStateConfig: () => fx.loaded,
+    loadCredentialConfig: () => fx.loaded,
+    commandRunner: runner,
+    spawnDetachedWorker: (_loaded, jobId) => {
+      spawned.push(jobId);
+      return { host_pid: 4242, host_pgid: 4242 };
+    },
+    runWorker: async () => undefined,
+  });
+  return {
+    loaded: fx.loaded,
+    actions,
+    runner,
+    selector,
+    campaignId: published.doc.campaign_id,
+    spawned,
+    jobIds: () =>
+      readdirSync(fx.loaded.paths.jobs).filter((id) =>
+        existsSync(join(fx.loaded.paths.jobs, id, 'job.json')),
+      ),
+  };
+}
+
+test('campaign action persists the authenticated full identity and detached controller identity', async () => {
+  const fx = campaignActionFixture();
+  const result = await fx.actions.campaignRun({
+    campaignSelector: fx.selector,
+    json: false,
+  });
+  const job = result as ReturnType<typeof readJob>;
+  expect(job.kind).toBe('campaign-run');
+  expect(job.status).toBe('preflighting');
+  expect(job.campaign?.campaign_id).toBe(fx.campaignId);
+  expect(job.campaign?.campaign_id).not.toBe(fx.selector);
+  expect(job.campaign?.campaign_dir).toBe(
+    join(fx.loaded.config.evals.path, 'campaigns', fx.selector),
+  );
+  expect(job.campaign?.evals_sha).toBe(authenticCampaignDoc().refs.evals);
+  expect(job.campaign?.helper_sha).toBe('c'.repeat(40));
+  expect(job.command.argv).toEqual([
+    'evals-appliance',
+    'campaign',
+    'run',
+    fx.selector,
+  ]);
+  expect(job.credential_selection).toBeNull();
+  expect(job.credential_scope).toEqual(EMPTY_CREDENTIAL_SCOPE);
+  expect(job.process).toEqual({
+    host_pid: 4242,
+    host_pgid: 4242,
+    container_pid: null,
+    container_pgid: null,
+  });
+  expect(fx.spawned).toEqual([job.job_id]);
+});
+
+test('campaign action refuses invalid or missing selectors before creating a job', async () => {
+  const fx = campaignActionFixture();
+  expect(fx.jobIds()).toEqual([]);
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: '../escape', json: false }),
+  ).rejects.toThrow(/closed basename/);
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: 'does-not-exist', json: false }),
+  ).rejects.toThrow(/campaign not found/);
+  expect(fx.jobIds()).toEqual([]);
+  expect(fx.spawned).toEqual([]);
+});
+
+test('campaign action refuses any present run lock without reclaiming it', async () => {
+  const fx = campaignActionFixture();
+  mkdirSync(join(fx.loaded.paths.locks, 'run.lock'));
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toMatchObject({ code: 'lock_busy' });
+  expect(fx.spawned).toEqual([]);
+  expect(fx.jobIds()).toEqual([]);
+});
+
+for (const [label, prepare] of [
+  [
+    'a held lock',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      const lockDir = join(fx.loaded.paths.locks, 'run.lock');
+      mkdirSync(lockDir);
+      writeFileSync(
+        join(lockDir, 'lock.json'),
+        JSON.stringify({ pid: process.pid }),
+      );
+    },
+  ],
+  [
+    'a stale lock',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      const lockDir = join(fx.loaded.paths.locks, 'run.lock');
+      mkdirSync(lockDir);
+      writeFileSync(
+        join(lockDir, 'lock.json'),
+        JSON.stringify({ pid: 999999999, job_id: 'stale-job' }),
+      );
+    },
+  ],
+  [
+    'a malformed lock',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      const lockDir = join(fx.loaded.paths.locks, 'run.lock');
+      mkdirSync(lockDir);
+      writeFileSync(join(lockDir, 'lock.json'), '{not-json');
+    },
+  ],
+  [
+    'a symlink lock',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      symlinkSync(
+        fx.loaded.paths.jobs,
+        join(fx.loaded.paths.locks, 'run.lock'),
+      );
+    },
+  ],
+  [
+    'a non-directory lock',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      writeFileSync(join(fx.loaded.paths.locks, 'run.lock'), 'not-a-lock');
+    },
+  ],
+] as const) {
+  test(`campaign action refuses ${label} before creating a job`, async () => {
+    const fx = campaignActionFixture();
+    prepare(fx);
+    expect(fx.jobIds()).toEqual([]);
+    await expect(
+      fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+    ).rejects.toMatchObject({ code: 'lock_busy' });
+    expect(fx.jobIds()).toEqual([]);
+    expect(fx.spawned).toEqual([]);
+  });
+}
+
+for (const [label, value] of [
+  ['an absent live-spend lock', undefined],
+  ['a relative live-spend lock', 'state/live-spend.lock'],
+] as const) {
+  test(`campaign action refuses ${label} before creating a job`, async () => {
+    const fx = campaignActionFixture();
+    if (value === undefined) {
+      delete (fx.loaded.config as { live_spend_lock?: string }).live_spend_lock;
+    } else {
+      Object.assign(fx.loaded.config, { live_spend_lock: value });
+    }
+    expect(fx.jobIds()).toEqual([]);
+    await expect(
+      fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+    ).rejects.toMatchObject({ code: 'config_invalid' });
+    expect(fx.jobIds()).toEqual([]);
+    expect(fx.spawned).toEqual([]);
+  });
+}
+
+for (const [label, prepare] of [
+  [
+    'a symlinked campaign directory',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      const campaignDir = join(
+        fx.loaded.config.evals.path,
+        'campaigns',
+        fx.selector,
+      );
+      rmSync(campaignDir, { recursive: true, force: true });
+      symlinkSync(fx.loaded.paths.jobs, campaignDir);
+    },
+  ],
+  [
+    'an escaping campaign directory',
+    (fx: ReturnType<typeof campaignActionFixture>) => {
+      const campaignDir = join(
+        fx.loaded.config.evals.path,
+        'campaigns',
+        fx.selector,
+      );
+      rmSync(campaignDir, { recursive: true, force: true });
+      symlinkSync(fx.loaded.config.root, campaignDir);
+    },
+  ],
+] as const) {
+  test(`campaign action refuses ${label} before creating a job`, async () => {
+    const fx = campaignActionFixture();
+    prepare(fx);
+    expect(fx.jobIds()).toEqual([]);
+    await expect(
+      fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+    ).rejects.toMatchObject({ code: 'config_invalid' });
+    expect(fx.jobIds()).toEqual([]);
+    expect(fx.spawned).toEqual([]);
+  });
+}
+
+test('campaign action refuses an unauthentic document before creating a job', async () => {
+  const fx = campaignActionFixture();
+  writeFileSync(
+    join(
+      fx.loaded.config.evals.path,
+      'campaigns',
+      fx.selector,
+      'campaign.json',
+    ),
+    JSON.stringify({
+      ...authenticCampaignDoc(),
+      campaign_id: 'not-the-digest',
+    }),
+  );
+  expect(fx.jobIds()).toEqual([]);
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toMatchObject({ code: 'config_invalid' });
+  expect(fx.jobIds()).toEqual([]);
+  expect(fx.spawned).toEqual([]);
+});
+
+test('campaign action refuses an unanchored document before creating a job', async () => {
+  const fx = campaignActionFixture();
+  const campaignDir = join(
+    fx.loaded.config.evals.path,
+    'campaigns',
+    fx.selector,
+  );
+  rmSync(campaignDir, { recursive: true, force: true });
+  mkdirSync(campaignDir);
+  writeFileSync(
+    join(campaignDir, 'campaign.json'),
+    JSON.stringify(authenticCampaignDoc()),
+  );
+  expect(fx.jobIds()).toEqual([]);
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toMatchObject({ code: 'config_invalid' });
+  expect(fx.jobIds()).toEqual([]);
+  expect(fx.spawned).toEqual([]);
+});
+
+for (const [label, configure] of [
+  [
+    'an absent image',
+    (runner: CampaignActionRunner) => {
+      runner.run = () => ({ status: 1, stdout: '', stderr: 'image absent' });
+    },
+  ],
+  [
+    'a malformed image digest',
+    (runner: CampaignActionRunner) => {
+      runner.run = () => ({
+        status: 0,
+        stdout: 'sha256:not-a-digest\n',
+        stderr: '',
+      });
+    },
+  ],
+] as const) {
+  test(`campaign action refuses ${label} before creating a job`, async () => {
+    const fx = campaignActionFixture();
+    configure(fx.runner);
+    expect(fx.jobIds()).toEqual([]);
+    await expect(
+      fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+    ).rejects.toThrow();
+    expect(fx.jobIds()).toEqual([]);
+    expect(fx.spawned).toEqual([]);
+  });
+}
+
+test('campaign action refuses a credential bundle fault before creating a job', async () => {
+  const fx = campaignActionFixture();
+  const actions = createApplianceActions({
+    loadStateConfig: () => fx.loaded,
+    loadCredentialConfig: () => {
+      throw new ApplianceError('config_invalid', 'bundle', 'bundle fault');
+    },
+    commandRunner: fx.runner,
+    spawnDetachedWorker: () => {
+      throw new Error('must not spawn');
+    },
+    runWorker: async () => undefined,
+  });
+  expect(fx.jobIds()).toEqual([]);
+  await expect(
+    actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toMatchObject({ code: 'config_invalid' });
+  expect(fx.jobIds()).toEqual([]);
+  expect(fx.spawned).toEqual([]);
+});
+
+test('campaign action marks its single job failed when detached identity persistence fails', async () => {
+  const fx = campaignActionFixture();
+  fx.actions = createApplianceActions({
+    loadStateConfig: () => fx.loaded,
+    loadCredentialConfig: () => fx.loaded,
+    commandRunner: fx.runner,
+    spawnDetachedWorker: () => ({ host_pid: null, host_pgid: null }),
+    runWorker: async () => undefined,
+  });
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toThrow(/safe host pid/);
+  const jobId = fx
+    .jobIds()
+    .find((id) => readJob(fx.loaded, id).command.argv[3] === fx.selector);
+  expect(jobId).toBeDefined();
+  if (jobId !== undefined) {
+    const failed = readJob(fx.loaded, jobId);
+    expect(failed.status).toBe('failed');
+    expect(failed.finished_at).not.toBeNull();
+  }
+});
+
+test('campaign action marks its single job failed when detached spawn throws', async () => {
+  const fx = campaignActionFixture();
+  fx.actions = createApplianceActions({
+    loadStateConfig: () => fx.loaded,
+    loadCredentialConfig: () => fx.loaded,
+    commandRunner: fx.runner,
+    spawnDetachedWorker: () => {
+      throw new Error('spawn setup failed');
+    },
+    runWorker: async () => undefined,
+  });
+  await expect(
+    fx.actions.campaignRun({ campaignSelector: fx.selector, json: false }),
+  ).rejects.toThrow('spawn setup failed');
+  const jobs = fx.jobIds();
+  expect(jobs).toHaveLength(1);
+  const failed = readJob(fx.loaded, jobs[0] as string);
+  expect(failed.status).toBe('failed');
+  expect(failed.finished_at).not.toBeNull();
+});
 
 test('imageDigestOf accepts exactly one canonical digest line', () => {
   expect(
@@ -162,7 +550,7 @@ test('campaign worker runs with one lock and explicit controller seams', async (
   expect(Bun.env['QUORUM_LIVE_SPEND_LOCK']).toBe(priorLockEnv);
 });
 
-test('campaign worker never promotes a stopping job during readiness or completion', async () => {
+test('campaign worker preserves a stopping status observed by its readiness patch callback', async () => {
   const fx = fixture();
   let sawStoppingAtReady = false;
   await runCampaignWorker(fx.loaded, fx.jobId, new ImageRunner(`${DIGEST}\n`), {
@@ -180,7 +568,7 @@ test('campaign worker never promotes a stopping job during readiness or completi
   expect(readJob(fx.loaded, fx.jobId).status).toBe('stopping');
 });
 
-test('campaign worker never replaces a concurrently cancelled job with failed', async () => {
+test('campaign worker preserves a cancelled status observed by its failure patch callback', async () => {
   const fx = fixture();
   const original = new Error('controller failed');
   await expect(
