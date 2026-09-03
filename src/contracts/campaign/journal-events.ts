@@ -90,16 +90,54 @@ const RunAllocatedGrantPayload = z
       });
     }
   });
+export const ContainerIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export const ImageDigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
+export const RunAllocatedContainerPayload = z
+  .object({
+    attempt_id: z.string().min(1),
+    run_id: z.string().min(1),
+    container_name: z.string().min(1),
+    container_id: ContainerIdSchema,
+    image_digest: ImageDigestSchema,
+    key_grants: z.array(KeyGrantEntrySchema).max(2),
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    const roles = payload.key_grants.map((g) => g.role);
+    if (new Set(roles).size !== roles.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['key_grants'],
+        message: 'at most one grant entry per role',
+      });
+    }
+    const envs = payload.key_grants.map((g) => g.env);
+    if (new Set(envs).size !== envs.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['key_grants'],
+        message: 'grant env names must be unique',
+      });
+    }
+  });
 export type RunAllocatedPayload =
   | z.infer<typeof RunAllocatedLegacyPayload>
-  | z.infer<typeof RunAllocatedGrantPayload>;
+  | z.infer<typeof RunAllocatedGrantPayload>
+  | z.infer<typeof RunAllocatedContainerPayload>;
 export const RunAllocatedEvent = envelope(
   'run_allocated',
-  // E7.5 two-arm union. Strict objects make the union key-discriminable: a
+  // Child-1 third arm: the container path journals container identity in
+  // place of pgid. Strict objects keep the union key-discriminable.
+  // Strict objects make the union key-discriminable: a
   // fresh payload carries key_grants (legacy arm rejects the unknown key),
   // a legacy payload may carry key_env (fresh arm rejects without
   // key_grants). D3 never emits the legacy arm after E7.
-  z.union([RunAllocatedGrantPayload, RunAllocatedLegacyPayload]),
+  z.union([
+    RunAllocatedGrantPayload,
+    RunAllocatedContainerPayload,
+    RunAllocatedLegacyPayload,
+  ]),
 );
 
 /** E7.5 reader rule: prefer key_grants; fall back to legacy key_env as the

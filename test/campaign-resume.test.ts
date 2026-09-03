@@ -86,14 +86,14 @@ afterAll(() => {
 const FAKE_PID_BASE = 900_000_001;
 
 class FakeChild implements SpawnedCampaignChild {
-  readonly pid: number;
+  readonly handle: { readonly kind: 'process'; readonly pgid: number };
   private readonly stdout: string[] = [];
   private readonly stderr: string[] = [];
   private readonly stdoutCbs: ((l: string) => void)[] = [];
   private readonly stderrCbs: ((l: string) => void)[] = [];
   private readonly exitCbs: ((i: ChildExitInfo) => void)[] = [];
   constructor(pid: number) {
-    this.pid = pid;
+    this.handle = { kind: 'process', pgid: pid };
   }
   get stdoutLines(): readonly string[] {
     return this.stdout;
@@ -120,6 +120,7 @@ class FakeChild implements SpawnedCampaignChild {
 }
 
 class FakeSpawner implements ChildSpawner {
+  readonly kind = 'process' as const;
   readonly spawned: { spec: CampaignChildSpec; child: FakeChild }[] = [];
   private nextPid = FAKE_PID_BASE;
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild {
@@ -1120,7 +1121,7 @@ test('resume drives the whole pinned order: kill/reconcile -> rerun re-entry -> 
   await tick(clock, 1);
   expect(spawner.spawned.length).toBe(2);
   for (const { child } of spawner.spawned) {
-    const runId = `run-${child.pid}`;
+    const runId = `run-${child.handle.pgid}`;
     seedRunDir(fx.resultsRoot, runId, 'pass');
     child.emitLine(`run_allocated: ${runId}`);
   }

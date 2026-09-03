@@ -215,7 +215,9 @@ function foldPrefix(
         currentAttempt.set(event.payload.sample_id, event.payload.attempt_id);
         break;
       case 'run_allocated':
-        allocated.set(event.payload.attempt_id, event.payload.pgid);
+        if ('pgid' in event.payload) {
+          allocated.set(event.payload.attempt_id, event.payload.pgid);
+        }
         break;
       case 'run_completed':
         if (attemptSample.has(event.payload.attempt_id)) {

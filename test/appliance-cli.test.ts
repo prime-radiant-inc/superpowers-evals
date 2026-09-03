@@ -46,6 +46,7 @@ function noopActions(
     costs: async () => ({ ok: true }),
     import: async () => ({ ok: true }),
     prune: async () => ({ ok: true }),
+    campaignRun: async () => ({ ok: true }),
     ...overrides,
   };
 }
@@ -540,6 +541,43 @@ test('prune rejects unsafe --older-than-days values before the action runs', asy
     expect(exits).toEqual([1]);
   }
   expect(calls).toEqual([]);
+});
+
+test('campaign run routes its closed selector and json option to the action', async () => {
+  const calls: unknown[] = [];
+  const stdout: string[] = [];
+  const program = createApplianceProgram({
+    stdout: (text) => stdout.push(text),
+    stderr: () => undefined,
+    actions: noopActions({
+      campaignRun: async (args) => {
+        calls.push(args);
+        return { job_id: 'job-1' };
+      },
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'campaign',
+    'run',
+    'prefix-suite',
+    '--json',
+  ]);
+
+  expect(calls).toEqual([{ campaignSelector: 'prefix-suite', json: true }]);
+  expect(JSON.parse(stdout.join(''))).toEqual({ ok: true, job_id: 'job-1' });
+});
+
+test('campaign run rejects malformed extra options before the action', () => {
+  const proc = spawnSync(
+    'bun',
+    ['src/appliance/cli.ts', 'campaign', 'run', 'prefix-suite', '--extra'],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+  expect(proc.status).not.toBe(0);
+  expect(`${proc.stderr}${proc.stdout}`).toContain("unknown option '--extra'");
 });
 
 test('default dry-run prune creates and chmods no state dirs', () => {
@@ -1632,6 +1670,7 @@ function actionHarness(fx: RealConfigFixture): ActionHarness {
     commandRunner: runner,
     spawnDetachedWorker: (_loaded, jobId) => {
       detachCalls.push(jobId);
+      return { host_pid: 4242, host_pgid: 4242 };
     },
     runWorker: async (_loaded, jobId) => {
       workerCalls.push(jobId);

@@ -39,6 +39,7 @@ import { getEnv } from '../env.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
 import { loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
+import type { ContainerStopper } from './container-spawner.ts';
 import {
   type BlockInterval,
   breachWindows,
@@ -315,6 +316,16 @@ export interface KillJournaledPgidsReport {
   readonly reclaimedUnsafe: number[];
   /** Signaled but survived TERM+KILL — the caller must refuse to proceed. */
   readonly survived: number[];
+  /** Container allocations whose exact Docker stop/verification seam proved
+   *  the whole attempt dead. */
+  readonly containersStopped: string[];
+  /** Container allocations whose exact Docker stop/verification seam found
+   *  the container still alive. Callers must refuse to proceed. */
+  readonly containersSurvived: string[];
+  /** Container allocations whose exact Docker stop/verification seam is not
+   *  available, or whose stop did not prove death. Callers must refuse to
+   *  proceed. */
+  readonly unverifiedContainers: UnverifiedContainerRecord[];
   /** Runs whose tmux subject host (gauntlet's private server, which the
    *  group kill never reaches — C10) was killed and VERIFIED gone. */
   readonly subjectHostsKilled: SubjectHostRecord[];
@@ -329,10 +340,30 @@ export interface SubjectHostRecord {
   readonly server: string;
 }
 
+export interface UnverifiedContainerRecord {
+  readonly attempt_id: string;
+  readonly run_id: string;
+  readonly container_name: string;
+  readonly container_id: string;
+  readonly image_digest: string;
+}
+
+function containerDescriptor(container: UnverifiedContainerRecord): string {
+  return `container ${container.container_name} (id ${container.container_id}, attempt ${container.attempt_id}, run ${container.run_id}, image ${container.image_digest})`;
+}
+
 /** Every group the report could not prove dead. Both verbs gate on this:
  *  resume refuses to re-admit, cancel refuses to journal a terminal. */
 export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
   return [...report.survived, ...report.reclaimedUnsafe];
+}
+
+function unverifiedContainerDescriptions(
+  report: KillJournaledPgidsReport,
+): string[] {
+  return report.unverifiedContainers.map((container) =>
+    containerDescriptor(container),
+  );
 }
 
 /** Every tmux subject host the report could not prove gone, named for the
@@ -369,6 +400,8 @@ export async function killJournaledPgids(args: {
   signal?: GroupSignaler;
   /** C10 subject-host seam; production default realSubjectHostProbe. */
   subjectHost?: SubjectHostProbe;
+  /** Exact-ID Docker stop seam for journaled container allocations. */
+  containerStop?: ContainerStopper;
   clock?: Clock;
   stream?: { write(s: string): void };
   graceSeconds?: number;
@@ -380,6 +413,7 @@ export async function killJournaledPgids(args: {
   const child = args.child ?? realCampaignChildProbe;
   const signal = args.signal ?? realGroupSignaler;
   const subjectHost = args.subjectHost ?? realSubjectHostProbe;
+  const containerStop = args.containerStop;
   const clock = args.clock ?? new RealClock();
   const graceSeconds = args.graceSeconds ?? KILL_GRACE_SECONDS;
 
@@ -394,6 +428,9 @@ export async function killJournaledPgids(args: {
   const reclaimedBenign: number[] = [];
   const reclaimedUnsafe: number[] = [];
   const survived: number[] = [];
+  const containersStopped: string[] = [];
+  const containersSurvived: string[] = [];
+  const unverifiedContainers: UnverifiedContainerRecord[] = [];
   const subjectHostsKilled: SubjectHostRecord[] = [];
   const subjectHostsSurvived: SubjectHostRecord[] = [];
   /** A reclamation is BENIGN only when no campaign child can still be
@@ -534,6 +571,39 @@ export async function killJournaledPgids(args: {
     if (event.type !== 'run_allocated') continue;
     const attemptId = event.payload.attempt_id;
     if (terminalAttempts.has(attemptId)) continue;
+    if ('container_id' in event.payload) {
+      const record = {
+        attempt_id: event.payload.attempt_id,
+        run_id: event.payload.run_id,
+        container_name: event.payload.container_name,
+        container_id: event.payload.container_id,
+        image_digest: event.payload.image_digest,
+      };
+      if (containerStop === undefined) {
+        // A container's exact ID is the only valid recovery handle. Without
+        // its stopper, process-group and tmux probes cannot establish whole-
+        // attempt death, so retain the immutable identity for diagnosis.
+        stream.write(
+          `run_allocated ${event.payload.attempt_id} journaled ${containerDescriptor(record)} — no container stopper injected; recorded, not verified\n`,
+        );
+        unverifiedContainers.push(record);
+        continue;
+      }
+      const outcome = await containerStop.stop(
+        event.payload.container_id,
+        graceSeconds,
+      );
+      if (outcome === 'dead') {
+        containersStopped.push(event.payload.container_id);
+      } else {
+        containersSurvived.push(event.payload.container_id);
+        unverifiedContainers.push(record);
+        stream.write(
+          `orphan ${containerDescriptor(record)} survived stop+kill — operator action: docker rm -f it before resuming; it is still spending\n`,
+        );
+      }
+      continue;
+    }
     await disposeGroup(event.payload.pgid, attemptId);
     // The subject outlives its group (C10): reach the run's tmux host on
     // every disposition — a group that is already gone is the crash-path
@@ -567,6 +637,9 @@ export async function killJournaledPgids(args: {
     reclaimedBenign,
     reclaimedUnsafe,
     survived,
+    containersStopped,
+    containersSurvived,
+    unverifiedContainers,
     subjectHostsKilled,
     subjectHostsSurvived,
   };
@@ -1841,9 +1914,20 @@ export interface ResumeArgs {
    *  orphan kill and the dispatcher's own kills. Production omits it
    *  (realSubjectHostProbe); tests never reach real tmux. */
   readonly subjectHost?: SubjectHostProbe;
+  /** Exact-ID Docker stop seam for journaled container allocations. */
+  readonly containerStop?: ContainerStopper;
+  /** Reads the registered key names at the resume boundary. */
+  readonly credentialEnvReader?: CredentialEnvReader;
+  /** Controller readiness callback, after signal installation and before
+   * admission. */
+  readonly onReady?: () => void;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
 }
+
+export type CredentialEnvReader = (
+  names: readonly string[],
+) => ReadonlyMap<string, string>;
 
 /** Fail-closed intake of the frozen document (C1: no production-path cast
  *  bridges this read). Both verbs derive campaign identity, the block/sample
@@ -1868,25 +1952,29 @@ function readPublishedCampaign(campaignDir: string): Campaign {
 /** R-REG-19 (second occurrence, REV fable I-14): every api-key arm's
  *  registered key env NAMES plus the grader credential's env names must be
  *  present and non-empty at resume, so a key lost between registration and
- *  resume fails BEFORE any spend. Env is read only through src/env.ts. */
+ *  resume fails BEFORE any spend. The production/default reader reads env only
+ *  through src/env.ts; appliance workers inject their own bundle-backed reader. */
 function assertKeyEnvsPresent(
   campaign: Campaign,
   credentials: Readonly<Record<string, Credential>>,
+  reader: CredentialEnvReader = (names) => {
+    const values = new Map<string, string>();
+    for (const name of names) {
+      const value = getEnv(name);
+      if (value !== undefined) values.set(name, value);
+    }
+    return values;
+  },
 ): void {
   const missing: string[] = [];
-  const require = (envNames: readonly string[]): void => {
-    for (const envName of envNames) {
-      const value = getEnv(envName);
-      if (value === undefined || value === '') missing.push(envName);
-    }
-  };
+  const requiredNames = new Set<string>();
   for (const arm of campaign.execution_surface) {
     if (arm.auth !== 'api-key') continue;
     if (arm.key_env_names.length === 0) {
       missing.push(`${arm.name}: api-key arm with no registered key env name`);
       continue;
     }
-    require(arm.key_env_names);
+    for (const name of arm.key_env_names) requiredNames.add(name);
   }
   // The grader credential is MANDATORY: an incomplete registry must refuse
   // here, not slip past the preflight and surface later as a dispatch error
@@ -1905,7 +1993,12 @@ function assertKeyEnvsPresent(
         `${campaign.grader.credential}: api-key auth with no api_key_env/key_pool`,
       );
     }
-    require(names);
+    for (const name of names) requiredNames.add(name);
+  }
+  const values = reader([...requiredNames]);
+  for (const name of requiredNames) {
+    const value = values.get(name);
+    if (value === undefined || value === '') missing.push(name);
   }
   if (missing.length > 0) {
     throw new RecoveryError(
@@ -2016,6 +2109,9 @@ export async function resumeCampaign(
       ...(args.subjectHost !== undefined
         ? { subjectHost: args.subjectHost }
         : {}),
+      ...(args.containerStop !== undefined
+        ? { containerStop: args.containerStop }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { graceSeconds: args.graceSeconds }
         : {}),
@@ -2086,6 +2182,9 @@ export async function resumeCampaign(
         ...(args.subjectHost !== undefined
           ? { subjectHost: args.subjectHost }
           : {}),
+        ...(args.containerStop !== undefined
+          ? { containerStop: args.containerStop }
+          : {}),
         ...(args.graceSeconds !== undefined
           ? { graceSeconds: args.graceSeconds }
           : {}),
@@ -2102,6 +2201,14 @@ export async function resumeCampaign(
           `resume refused: process group(s) ${unverified.join(
             ', ',
           )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — they may still be spending; identify and kill them by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
+        );
+      }
+      const unverifiedContainers = unverifiedContainerDescriptions(killReport);
+      if (unverifiedContainers.length > 0) {
+        throw new RecoveryError(
+          `resume refused: container(s) ${unverifiedContainers.join(
+            ', ',
+          )} could not be verified dead — the exact-ID stop was unavailable or the container survived stop+kill; it may still be spending; stop and inspect each exact container by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
         );
       }
       // The same precondition for the subject the group never held (C10):
@@ -2402,7 +2509,7 @@ export async function resumeCampaign(
         disk_tolerance_pct: campaign.contention.disk_tolerance_pct,
       },
     );
-    assertKeyEnvsPresent(campaign, args.credentials);
+    assertKeyEnvsPresent(campaign, args.credentials, args.credentialEnvReader);
 
     // 5. Reconstruct the handle + refs cross-check + verify (R-RCV-6).
     const handle = reconstructCampaignSnapshot({
@@ -2456,6 +2563,7 @@ export async function resumeCampaign(
       ...(args.graceSeconds !== undefined
         ? { killGraceSeconds: args.graceSeconds }
         : {}),
+      ...(args.onReady !== undefined ? { onReady: args.onReady } : {}),
       stream,
     });
     if (outcome.status !== 'completed') return outcome;
@@ -2512,6 +2620,8 @@ export interface CancelArgs {
   readonly signal?: GroupSignaler;
   readonly child?: CampaignChildProbe;
   readonly subjectHost?: SubjectHostProbe;
+  /** Exact-ID Docker stop seam for journaled container allocations. */
+  readonly containerStop?: ContainerStopper;
   readonly graceSeconds?: number;
   readonly stream?: { write(s: string): void };
   /** Durability seam for the cancel-request marker (see StoragePauseArgs). */
@@ -2688,6 +2798,9 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
       ...(args.subjectHost !== undefined
         ? { subjectHost: args.subjectHost }
         : {}),
+      ...(args.containerStop !== undefined
+        ? { containerStop: args.containerStop }
+        : {}),
       ...(args.graceSeconds !== undefined
         ? { graceSeconds: args.graceSeconds }
         : {}),
@@ -2703,6 +2816,15 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
         `cancel: process group(s) ${unverified.join(
           ', ',
         )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — operator action: identify and kill them by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
+      );
+      return { cancelled: false, postCrash: true };
+    }
+    const unverifiedContainers = unverifiedContainerDescriptions(killReport);
+    if (unverifiedContainers.length > 0) {
+      stream.write(
+        `cancel: container(s) ${unverifiedContainers.join(
+          ', ',
+        )} could not be verified dead — the exact-ID stop was unavailable or the container survived stop+kill; operator action: stop and inspect each exact container by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
       );
       return { cancelled: false, postCrash: true };
     }

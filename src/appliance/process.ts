@@ -1,7 +1,13 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import {
+  type ChildProcess,
+  type SpawnOptions,
+  spawn,
+} from 'node:child_process';
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  openSync,
   readdirSync,
   readFileSync,
   statSync,
@@ -57,10 +63,18 @@ const LIVE_COMPLETION_POST_EXIT_GRACE_MS = 30_000;
 const CANCEL_GRACE_MS = 120_000;
 const CANCEL_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TRUSTED_PATH = '/usr/local/bin:/usr/bin:/bin';
+const DETACHED_SPAWN_FAILURE_MESSAGE = 'detached worker spawn failed';
+const DETACHED_UNSAFE_PID_MESSAGE =
+  'detached worker did not return a safe host pid';
 
 export interface LiveProcessInfo {
   readonly host_pid: number | null;
   readonly host_pgid: number | null;
+}
+
+export interface DetachedProcessInfo {
+  readonly host_pid: number;
+  readonly host_pgid: number;
 }
 
 export interface LiveCommandArgs {
@@ -85,7 +99,13 @@ interface ParsedArtifacts {
 export interface CancelOptions {
   readonly graceMs?: number;
   readonly pollIntervalMs?: number;
+  readonly processKill?: ProcessKill;
 }
+
+export type ProcessKill = (
+  pid: number,
+  signal?: NodeJS.Signals | number,
+) => void;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -548,7 +568,7 @@ function markTerminal(
   }));
 }
 
-function appendLog(path: string, chunk: string): void {
+export function appendLog(path: string, chunk: string): void {
   if (chunk !== '') {
     appendFileSync(path, chunk);
   }
@@ -652,18 +672,39 @@ function containerProcessGroupAlive(
   }
 }
 
-function hostProcessGroupAlive(pgid: number): boolean {
+function hostProcessGroupState(
+  pgid: number,
+  processKill: ProcessKill = process.kill.bind(process),
+): 'alive' | 'absent' | 'unknown' {
   try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch {
-    return false;
+    processKill(-pgid, 0);
+    return 'alive';
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'ESRCH'
+    ) {
+      return 'absent';
+    }
+    return 'unknown';
   }
 }
 
-function signalHostProcessGroup(pgid: number): boolean {
+function hostProcessGroupAlive(
+  pgid: number,
+  processKill: ProcessKill = process.kill.bind(process),
+): boolean {
+  return hostProcessGroupState(pgid, processKill) !== 'absent';
+}
+
+function signalHostProcessGroup(
+  pgid: number,
+  processKill: ProcessKill = process.kill.bind(process),
+): boolean {
   try {
-    process.kill(-pgid, 'SIGINT');
+    processKill(-pgid, 'SIGINT');
     return true;
   } catch {
     return false;
@@ -674,13 +715,14 @@ function jobProcessGroupAlive(
   loaded: LoadedApplianceStateConfig,
   job: JobRecord,
   runner: CommandRunner,
+  processKill: ProcessKill = process.kill.bind(process),
 ): boolean {
   const containerPgid = job.process?.container_pgid ?? null;
   if (containerPgid !== null) {
     return containerProcessGroupAlive(loaded, job, containerPgid, runner);
   }
   const hostPgid = job.process?.host_pgid ?? null;
-  return hostPgid !== null && hostProcessGroupAlive(hostPgid);
+  return hostPgid !== null && hostProcessGroupAlive(hostPgid, processKill);
 }
 
 async function waitForLiveTerminalArtifact(
@@ -722,21 +764,22 @@ function markFailed(
   error: ApplianceError,
 ): void {
   try {
-    const current = readJob(loaded, jobId);
-    if (isTerminal(current.status)) {
-      return;
-    }
-    updateJob(loaded, jobId, (job) => ({
-      ...job,
-      status: 'failed',
-      finished_at: new Date().toISOString(),
-      result: { exit_code: 1, summary: error.message },
-      error: {
-        code: error.code,
-        step: error.step,
-        message: error.message,
-      },
-    }));
+    updateJob(loaded, jobId, (job) => {
+      if (job.status === 'stopping' || isTerminal(job.status)) {
+        return job;
+      }
+      return {
+        ...job,
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        result: { exit_code: 1, summary: error.message },
+        error: {
+          code: error.code,
+          step: error.step,
+          message: error.message,
+        },
+      };
+    });
   } catch {}
 }
 
@@ -1124,15 +1167,33 @@ export async function launchLiveCommand(
   });
 }
 
+export type DetachedSpawnPrimitive = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+export const DETACHED_SPAWN_ACK: unique symbol = Symbol('detached-spawn-ack');
+
+export type DetachedSpawnIdentityCallback = (
+  processInfo: DetachedProcessInfo,
+) => typeof DETACHED_SPAWN_ACK;
+
+export type DetachedTerminationPrimitive = (child: ChildProcess) => void;
+
 export function spawnDetachedWorker(
   loaded: LoadedApplianceStateConfig,
   jobId: string,
-): void {
+  spawnPrimitive: DetachedSpawnPrimitive = (command, args, options) =>
+    spawn(command, [...args], options),
+  onSpawn?: DetachedSpawnIdentityCallback,
+  terminatePrimitive: DetachedTerminationPrimitive = interruptHostProcessGroup,
+): LiveProcessInfo {
   const processModule = new URL('./process.ts', import.meta.url).href;
   const configModule = new URL('./config.ts', import.meta.url).href;
   const script = `
 const { loadStateConfig, loadCredentialConfig } = await import(${JSON.stringify(configModule)});
-const { runWorker } = await import(${JSON.stringify(processModule)});
+const { dispatchDetachedWorker } = await import(${JSON.stringify(processModule)});
 const jobId = Bun.env.EVALS_APPLIANCE_JOB_ID;
 if (jobId === undefined) {
   throw new Error('EVALS_APPLIANCE_JOB_ID is required');
@@ -1141,15 +1202,110 @@ if (jobId === undefined) {
 // worker needs: a resumed job stages its own credential generation.
 loadStateConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
 const loaded = loadCredentialConfig(Bun.env.EVALS_APPLIANCE_CONFIG);
-await runWorker(loaded, jobId);
+await dispatchDetachedWorker(loaded, jobId);
 `;
-  const child = spawn(process.execPath, ['--eval', script], {
-    cwd: loaded.config.evals.path,
-    detached: true,
-    env: detachedWorkerEnv(loaded, jobId),
-    stdio: 'ignore',
-  });
-  child.unref();
+  const job = readJob(loaded, jobId);
+  let stdoutFd: number | null = null;
+  let stderrFd: number | null = null;
+  try {
+    stdoutFd = openSync(job.artifacts.stdout_log, 'a', 0o600);
+    stderrFd = openSync(job.artifacts.stderr_log, 'a', 0o600);
+    const child = spawnPrimitive(process.execPath, ['--eval', script], {
+      cwd: loaded.config.evals.path,
+      detached: true,
+      env: detachedWorkerEnv(loaded, jobId),
+      stdio: ['ignore', stdoutFd, stderrFd],
+    });
+    child.once('error', () => {
+      markFailed(
+        loaded,
+        jobId,
+        new ApplianceError(
+          'config_invalid',
+          'spawn',
+          DETACHED_SPAWN_FAILURE_MESSAGE,
+        ),
+      );
+    });
+    const pid = child.pid;
+    if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 1) {
+      try {
+        terminatePrimitive(child);
+      } catch {}
+      throw new ApplianceError(
+        'config_invalid',
+        'spawn',
+        DETACHED_UNSAFE_PID_MESSAGE,
+      );
+    }
+    const processInfo: DetachedProcessInfo = {
+      host_pid: pid,
+      host_pgid: pid,
+    };
+    try {
+      const acknowledgment = onSpawn?.(processInfo);
+      if (onSpawn !== undefined && acknowledgment !== DETACHED_SPAWN_ACK) {
+        throw new ApplianceError(
+          'config_invalid',
+          'spawn',
+          DETACHED_SPAWN_FAILURE_MESSAGE,
+        );
+      }
+    } catch (error) {
+      try {
+        terminatePrimitive(child);
+      } catch {}
+      throw error;
+    }
+    child.unref();
+    return processInfo;
+  } catch (error) {
+    if (
+      error instanceof ApplianceError &&
+      error.code === 'config_invalid' &&
+      error.step === 'spawn' &&
+      error.message === DETACHED_UNSAFE_PID_MESSAGE
+    ) {
+      throw error;
+    }
+    throw new ApplianceError(
+      'config_invalid',
+      'spawn',
+      DETACHED_SPAWN_FAILURE_MESSAGE,
+    );
+  } finally {
+    if (stdoutFd !== null) closeSync(stdoutFd);
+    if (stderrFd !== null) closeSync(stderrFd);
+  }
+}
+
+export interface DetachedWorkerDispatchDeps {
+  readonly runWorker?: (
+    loaded: LoadedApplianceConfig,
+    jobId: string,
+  ) => Promise<void>;
+  readonly runCampaignWorker?: (
+    loaded: LoadedApplianceConfig,
+    jobId: string,
+  ) => Promise<void>;
+}
+
+/** Selects exactly one worker implementation from the persisted job kind. */
+export async function dispatchDetachedWorker(
+  loaded: LoadedApplianceConfig,
+  jobId: string,
+  deps: DetachedWorkerDispatchDeps = {},
+): Promise<void> {
+  const job = readJob(loaded, jobId);
+  if (job.kind === 'campaign-run') {
+    const worker =
+      deps.runCampaignWorker ??
+      (await import('./campaign-run.ts')).runCampaignWorker;
+    await worker(loaded, jobId);
+    return;
+  }
+  const worker = deps.runWorker ?? runWorker;
+  await worker(loaded, jobId);
 }
 
 export function detachedWorkerEnv(
@@ -1162,7 +1318,12 @@ export function detachedWorkerEnv(
     EVALS_APPLIANCE_JOB_ID: jobId,
     PATH: DEFAULT_TRUSTED_PATH,
     HOME: loaded.config.root,
+    GAUNTLET_ROOT: loaded.config.gauntlet.path,
+    SUPERPOWERS_ROOT: loaded.config.superpowers.path,
   };
+  if (loaded.config.live_spend_lock !== undefined) {
+    env['QUORUM_LIVE_SPEND_LOCK'] = loaded.config.live_spend_lock;
+  }
   return env;
 }
 
@@ -1343,7 +1504,9 @@ export async function cancelJob(
   let signalAccepted = job.status === 'stopping';
   if (job.status === 'running') {
     let interrupted = false;
-    if (containerPgid !== null) {
+    if (job.kind === 'campaign-run' && hostPgid !== null) {
+      interrupted = signalHostProcessGroup(hostPgid, options.processKill);
+    } else if (containerPgid !== null) {
       // Identity-verified cancellation: the SIGINT goes only through the
       // fixed recorded-container seam. A replacement container (or a job
       // with no verifiable recorded identity) receives no signal at all.
@@ -1366,10 +1529,13 @@ export async function cancelJob(
         }
       }
     } else if (hostPgid !== null) {
-      interrupted = signalHostProcessGroup(hostPgid);
+      interrupted = signalHostProcessGroup(hostPgid, options.processKill);
     }
 
-    if (!interrupted && jobProcessGroupAlive(loaded, job, runner)) {
+    if (
+      !interrupted &&
+      jobProcessGroupAlive(loaded, job, runner, options.processKill)
+    ) {
       const message = 'cancel signal failed while process group is still alive';
       updateJob(loaded, jobId, (current) => ({
         ...current,
@@ -1396,6 +1562,54 @@ export async function cancelJob(
           summary: 'process group disappeared before cancel signal completed',
         },
   }));
+
+  if (job.kind === 'campaign-run') {
+    const controllerPgid = hostPgid ?? containerPgid;
+    const deadline = Date.now() + (options.graceMs ?? CANCEL_GRACE_MS);
+    while (controllerPgid !== null) {
+      const state =
+        hostPgid !== null
+          ? hostProcessGroupState(controllerPgid, options.processKill)
+          : jobProcessGroupAlive(
+                loaded,
+                readJob(loaded, jobId),
+                runner,
+                options.processKill,
+              )
+            ? 'alive'
+            : 'absent';
+      if (state === 'absent') {
+        return updateJob(loaded, jobId, (current) => ({
+          ...current,
+          status: 'cancelled',
+          finished_at: new Date().toISOString(),
+          result: {
+            exit_code: null,
+            summary:
+              'controller signalled and verified dead; campaign journal is the outcome authority',
+          },
+          error: null,
+        }));
+      }
+      if (Date.now() >= deadline) {
+        return updateJob(loaded, jobId, (current) => ({
+          ...current,
+          status: 'stopping',
+          result: {
+            exit_code: null,
+            summary: 'cancel signal sent; controller still live past the grace',
+          },
+          error: null,
+        }));
+      }
+      await sleep(
+        Math.min(
+          options.pollIntervalMs ?? CANCEL_POLL_INTERVAL_MS,
+          Math.max(0, deadline - Date.now()),
+        ),
+      );
+    }
+  }
 
   const sawTerminalArtifact = await waitForTerminalArtifact(
     loaded,

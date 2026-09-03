@@ -18,8 +18,10 @@ import {
 import { ApplianceError, toErrorJson } from '../src/appliance/errors.ts';
 import { atomicWriteJson } from '../src/appliance/fs.ts';
 import {
+  ApplianceConfigSchema,
   CredentialScopeSchema,
   CredentialSelectionSchema,
+  JobCampaignSchema,
   type JobContainerEvidence,
   JobRecordSchema,
   LockRecordSchema,
@@ -562,7 +564,51 @@ describe('persisted credential request', () => {
       expect(parsed.credential_selection).toBe(null);
       expect(parsed.credential_scope).toBe(null);
       expect(parsed.credential_scope_source_evals_sha).toBe(null);
+      expect(parsed.campaign).toBe(null);
     }
+  });
+
+  test('campaign schema rejects malformed frozen hashes', () => {
+    const campaign = {
+      campaign_id: 'campaign-20260903',
+      campaign_dir: '/var/lib/quorum/campaigns/campaign-20260903',
+      evals_sha: 'a'.repeat(40),
+      helper_sha: 'b'.repeat(40),
+      image_ref: 'quorum:campaign',
+      image_digest: `sha256:${'c'.repeat(64)}`,
+    };
+
+    expect(
+      JobCampaignSchema.safeParse({ ...campaign, evals_sha: 'xyz' }).success,
+    ).toBe(false);
+    expect(
+      JobCampaignSchema.safeParse({
+        ...campaign,
+        helper_sha: 'B'.repeat(40),
+      }).success,
+    ).toBe(false);
+    expect(
+      JobCampaignSchema.safeParse({
+        ...campaign,
+        image_digest: `sha256:${'d'.repeat(63)}`,
+      }).success,
+    ).toBe(false);
+  });
+
+  test('config schema accepts an optional live spend lock path', () => {
+    const { configPath } = fixture();
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(
+      ApplianceConfigSchema.parse({
+        ...config,
+        live_spend_lock: '/var/lib/quorum/live-spend.lock.d',
+      }).live_spend_lock,
+    ).toBe('/var/lib/quorum/live-spend.lock.d');
+    expect(ApplianceConfigSchema.parse(config).live_spend_lock).toBeUndefined();
   });
 
   test('a live job record round-trips its selection, scope, and source sha', () => {

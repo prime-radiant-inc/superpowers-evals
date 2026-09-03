@@ -55,8 +55,15 @@ import {
   type Clock,
   RealClock,
 } from '../scheduler/clock.ts';
+import { removeAttemptStage } from './attempt-projection.ts';
+import { AttemptPublishError, publishAttempt } from './attempt-publish.ts';
 import { loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
+import {
+  AttemptContainerSpawnError,
+  buildAttemptMounts,
+  type ContainerAttemptSpawner,
+} from './container-spawner.ts';
 import {
   type BlockInterval,
   type BreachWindow,
@@ -1025,10 +1032,16 @@ export function runCostFromArtifacts(runDir: string): number | null {
 export interface DispatchRunArgs {
   readonly campaignDir: string;
   readonly spawner?: ChildSpawner;
+  /** Called exactly once after signal handlers are installed and before any
+   * sampler, reconciliation, or admission work begins. */
+  readonly onReady?: () => void;
   readonly clock?: Clock;
   readonly identity?: ProcessIdentityProbe;
   readonly credentials: Readonly<Record<string, Credential>>;
   readonly resultsRoot?: string;
+  /** Publication seam for focused durability tests; production uses the
+   *  verified publisher directly. */
+  readonly publishAttempt?: typeof publishAttempt;
   readonly snapshot?: SnapshotHandle;
   /** CommandRunner for verify/repair; defaults to defaultCommandRunner. */
   readonly runner?: CommandRunner;
@@ -1107,6 +1120,10 @@ interface LiveSampleState {
   child?: SpawnedCampaignChild;
   childBirthTsMs: number | null;
   runId?: string;
+  attemptDir?: string;
+  stageCleanupEligible: boolean;
+  /** True only after the run_allocated binding landed in the journal. */
+  allocationJournaled: boolean;
   serviceEnded: boolean;
   /** Force-killed (drift/signal/storage): later child callbacks are stale
    *  and never journal against the superseded block (C10). */
@@ -1134,6 +1151,9 @@ export async function runCampaignDispatch(
     write: (s: string) => void process.stdout.write(s),
   };
   const spawner = args.spawner ?? new DetachedChildSpawner();
+  const isContainerSpawner = (s: ChildSpawner): s is ContainerAttemptSpawner =>
+    s.kind === 'container';
+  const containerSpawner = isContainerSpawner(spawner) ? spawner : null;
   // Production default is the REAL probe — a stub here would let a lease
   // reclamation misjudge a live holder (mandated behavior never rides a
   // fake default; tests inject their own probe).
@@ -1160,6 +1180,7 @@ export async function runCampaignDispatch(
   // reads and the child's --out-root must name the same directory, and they
   // do not share a working directory (the child's cwd is the evals worktree).
   const resultsRoot = resolveCampaignResultsRoot(args.resultsRoot);
+  const publish = args.publishAttempt ?? publishAttempt;
   /** Run-dir path for a protocol-line run id (the runner's allocation names
    *  the run dir after the run id under outRoot — Decision D-8 correlation;
    *  the identity file task 6c persists lives in the same dir). */
@@ -1675,6 +1696,58 @@ export async function runCampaignDispatch(
       exposureSampleIds: [...exposureSet],
     });
 
+    const stopChildVerified = async (
+      child: SpawnedCampaignChild,
+      graceSeconds: number,
+      birthTsMs: number | null,
+    ): Promise<'dead' | 'alive' | 'unknown'> => {
+      if (child.handle.kind === 'container') {
+        if (containerSpawner === null) return 'unknown';
+        return (await containerSpawner.stopContainer(
+          child.handle.containerId,
+          graceSeconds,
+        )) === 'dead'
+          ? 'dead'
+          : 'alive';
+      }
+      const outcome = await killGroupVerified({
+        pgid: child.handle.pgid,
+        birthTsMs,
+        identity,
+        signal: signalGroup,
+        clock,
+        stream,
+        graceSeconds,
+      });
+      return outcome === 'dead' || outcome === 'stale'
+        ? 'dead'
+        : outcome === 'alive'
+          ? 'alive'
+          : 'unknown';
+    };
+    const markStageCleanupEligible = (sample: LiveSampleState): void => {
+      if (sample.attemptDir !== undefined) {
+        sample.stageCleanupEligible = true;
+      }
+    };
+    const cleanupEligibleStages = (
+      samples: readonly LiveSampleState[],
+    ): void => {
+      for (const sample of samples) {
+        if (!sample.stageCleanupEligible || sample.attemptDir === undefined) {
+          continue;
+        }
+        try {
+          removeAttemptStage(sample.attemptDir);
+          sample.stageCleanupEligible = false;
+        } catch (error) {
+          stream.write(
+            `attempt stage removal failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)}\n`,
+          );
+        }
+      }
+    };
+
     // --- Verified kill over the live child handles (C10) --------------------
     /** C10 HARD precondition: journaling/release/mint happen ONLY after a
      *  group is verified dead through the one identity-guarded primitive
@@ -1702,19 +1775,17 @@ export async function runCampaignDispatch(
           released += 1;
           continue;
         }
-        const result = await killGroupVerified({
-          pgid: sample.child.pid,
-          birthTsMs: sample.childBirthTsMs,
-          identity,
-          signal: signalGroup,
-          clock,
-          stream,
-          graceSeconds: killGrace,
-        });
+        const result = await stopChildVerified(
+          sample.child,
+          killGrace,
+          sample.childBirthTsMs,
+        );
         if (result === 'alive' || result === 'unknown') {
-          failures.push(
-            `pgid ${sample.child.pid} (${sample.attemptId}: ${result})`,
-          );
+          const childLabel =
+            sample.child.handle.kind === 'container'
+              ? `container ${sample.child.handle.containerId}`
+              : `pgid ${sample.child.handle.pgid}`;
+          failures.push(`${childLabel} (${sample.attemptId}: ${result})`);
           continue;
         }
         // Verified dead ('dead', or 'stale' — the pid was reused, so the
@@ -1722,7 +1793,11 @@ export async function runCampaignDispatch(
         // callbacks, then reach the subject the group never held. Only an
         // allocated run can host one (gauntlet starts after allocation).
         sample.abandoned = true;
-        if (sample.runId !== undefined) {
+        markStageCleanupEligible(sample);
+        if (
+          sample.runId !== undefined &&
+          sample.child.handle.kind === 'process'
+        ) {
           const host = await killSubjectHostVerified({
             runDir: runDirOf(sample.runId),
             host: subjectHost,
@@ -2035,8 +2110,8 @@ export async function runCampaignDispatch(
       sample: LiveSampleState,
       child: SpawnedCampaignChild,
       runId: string,
-    ): Promise<void> => {
-      if (sample.runId !== undefined) return;
+    ): Promise<boolean> => {
+      if (sample.runId !== undefined) return sample.allocationJournaled;
       sample.runId = runId;
       const state = mirrorStateOf(sample.sampleId);
       if (state !== 'admitted') {
@@ -2051,23 +2126,39 @@ export async function runCampaignDispatch(
           `invariant violated: allocation for ${sample.attemptId} (run ${runId}) arrived in state ${state} — a spawned sample is dispositioned only after its allocation is journaled or its child is verified dead (R-JRN-8)`,
         );
       }
-      if (signalGroup(child.pid, 0) === 'esrch') {
+      if (
+        child.handle.kind === 'process' &&
+        signalGroup(child.handle.pgid, 0) === 'esrch'
+      ) {
         stream.write(
-          `run_allocated for ${sample.attemptId} but process group ${child.pid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
+          `run_allocated for ${sample.attemptId} but process group ${child.handle.pgid} is gone — not journaling a dead pgid (R-SPN-2)\n`,
         );
-        return;
+        return false;
       }
-      await appendCritical([
+      const appended = await appendCritical([
         {
           type: 'run_allocated',
-          payload: {
-            attempt_id: sample.attemptId,
-            run_id: runId,
-            pgid: child.pid,
-            ...keyGrantsPayload(sample.grants),
-          },
+          payload:
+            child.handle.kind === 'container'
+              ? {
+                  attempt_id: sample.attemptId,
+                  run_id: runId,
+                  container_name: child.handle.containerName,
+                  container_id: child.handle.containerId,
+                  image_digest: child.handle.imageDigest,
+                  ...keyGrantsPayload(sample.grants),
+                }
+              : {
+                  attempt_id: sample.attemptId,
+                  run_id: runId,
+                  pgid: child.handle.pgid,
+                  ...keyGrantsPayload(sample.grants),
+                },
         },
       ]);
+      if (appended === null || storagePaused) return false;
+      sample.allocationJournaled = true;
+      return true;
     };
     /** Out-of-section allocation waits: the control section is never held
      *  while a child is slow to allocate (ENOSPC and signals must not queue
@@ -2209,20 +2300,21 @@ export async function runCampaignDispatch(
         stream.write(
           `allocation wait for ${sample.attemptId} expired (${ALLOCATION_WAIT_BUDGET_SECONDS}s budget, no run_allocated line) — killing the unallocated child before its disposition (R-JRN-8: no allocation can follow a terminal)\n`,
         );
-        const result = await killGroupVerified({
-          pgid: child.pid,
-          birthTsMs: sample.childBirthTsMs,
-          identity,
-          signal: signalGroup,
-          clock,
-          stream,
-          graceSeconds: killGrace,
-        });
+        const result = await stopChildVerified(
+          child,
+          killGrace,
+          sample.childBirthTsMs,
+        );
         if (result === 'alive' || result === 'unknown') {
-          failures.push(`pgid ${child.pid} (${sample.attemptId}: ${result})`);
+          const childLabel =
+            child.handle.kind === 'container'
+              ? `container ${child.handle.containerId}`
+              : `pgid ${child.handle.pgid}`;
+          failures.push(`${childLabel} (${sample.attemptId}: ${result})`);
           continue;
         }
         sample.abandoned = true;
+        markStageCleanupEligible(sample);
         releaseSample(sample);
         released += 1;
         if (child.stdoutLines.some((l) => parseRunAllocatedLine(l) !== null)) {
@@ -2307,7 +2399,8 @@ export async function runCampaignDispatch(
         assertInstanceGraph({ campaign, mints: [...mintRecords, res.record] });
       }
       const appended = await appendCritical(res.events);
-      if (appended === null) return;
+      if (appended === null || storagePaused) return;
+      cleanupEligibleStages(failedBlock.samples);
       resolvedObligations.add(blockId);
       const cellKey = cellKeyOfBlockId(blockId);
       if (res.outcome === 'suppressed') {
@@ -2380,6 +2473,7 @@ export async function runCampaignDispatch(
       // possibly-live child. The membership change appends the superseding
       // snapshot in the same critical section (E7.7).
       const aborts: EventInput[] = [];
+      const abortedBlocks: LiveBlockState[] = [];
       const killFailures: string[] = [];
       let released = 0;
       for (const blockId of affected) {
@@ -2395,6 +2489,7 @@ export async function runCampaignDispatch(
         }
         if (hadLive) {
           aborts.push({ type: 'aborted', payload: { block_id: blockId } });
+          abortedBlocks.push(lb);
         }
       }
       // E7.7: every verified death changed the exposure membership — the
@@ -2414,6 +2509,7 @@ export async function runCampaignDispatch(
           wakeLoop();
           return;
         }
+        cleanupEligibleStages(abortedBlocks.flatMap((block) => block.samples));
         estimateUsd = currentEstimateTotal();
       }
       if (killFailures.length > 0) {
@@ -2753,9 +2849,65 @@ export async function runCampaignDispatch(
       child.onExit((info) => {
         void runExclusive(async () => {
           if (sample.abandoned) return;
+          // A container's stdout allocation is only a candidate run identity
+          // until the private attempt manifest is validated and atomically
+          // published. Process children retain their existing allocation
+          // identity path; container evidence/cost reads use this separately
+          // authorized identity so a failed publication cannot expose stale
+          // results under a previously observed run id.
+          let authorizedRunId: string | undefined =
+            child.handle.kind === 'process' ? sample.runId : undefined;
+          let publicationFailed = false;
+          if (
+            child.handle.kind === 'container' &&
+            sample.attemptDir !== undefined
+          ) {
+            try {
+              if (sample.runId !== undefined && !sample.allocationJournaled) {
+                throw new AttemptPublishError(
+                  `journaled allocation for ${sample.runId} did not land durably`,
+                );
+              }
+              const published = publish({
+                attemptDir: sample.attemptDir,
+                resultsRoot,
+                expectedAttemptId: sample.attemptId,
+                ...(sample.runId !== undefined
+                  ? { expectedRunId: sample.runId }
+                  : {}),
+              });
+              if (sample.runId === undefined) {
+                const allocationJournaled = await recordAllocation(
+                  sample,
+                  child,
+                  published.runId,
+                );
+                if (!allocationJournaled) {
+                  throw new AttemptPublishError(
+                    `published run ${published.runId} has no durable allocation binding`,
+                  );
+                }
+              } else if (sample.runId !== published.runId) {
+                throw new AttemptPublishError(
+                  `published run ${published.runId} disagrees with the journaled allocation ${sample.runId}`,
+                );
+              } else if (!sample.allocationJournaled) {
+                throw new AttemptPublishError(
+                  `journaled allocation for ${sample.runId} did not land durably`,
+                );
+              }
+              authorizedRunId = published.runId;
+            } catch (error) {
+              publicationFailed = true;
+              authorizedRunId = undefined;
+              stream.write(
+                `publication failed for ${sample.attemptId}: ${error instanceof Error ? error.message : String(error)} — classifying instrument_failure with logs retained\n`,
+              );
+            }
+          }
           releaseSample(sample);
           const runDir =
-            sample.runId !== undefined ? runDirOf(sample.runId) : null;
+            authorizedRunId !== undefined ? runDirOf(authorizedRunId) : null;
           // Terminal evidence sweep (R-SNS-1: verdict reason, gauntlet
           // result, event stream — ALWAYS read at terminal): every source is
           // evaluated and the classifier-rank arbitration lets the
@@ -2782,18 +2934,22 @@ export async function runCampaignDispatch(
           const outcome = verdict?.outcome ?? 'indeterminate';
           const cleanExitCode =
             verdict !== null ? EXIT_CODE_BY_FINAL[verdict.outcome] : 0;
-          const classification = classifyFailure({
-            outcome,
-            ...(verdict?.stage !== undefined ? { stage: verdict.stage } : {}),
-            exitClass:
-              info.signal !== null
-                ? 'signal'
-                : info.code === cleanExitCode
-                  ? 'clean'
-                  : 'crash',
-            role: sensed?.role ?? 'subject',
-            sensorEvidence: sensed?.evidence ?? 'none',
-          });
+          const classification = publicationFailed
+            ? { class: 'instrument' as const, cause: 'capture_failed' as const }
+            : classifyFailure({
+                outcome,
+                ...(verdict?.stage !== undefined
+                  ? { stage: verdict.stage }
+                  : {}),
+                exitClass:
+                  info.signal !== null
+                    ? 'signal'
+                    : info.code === cleanExitCode
+                      ? 'clean'
+                      : 'crash',
+                role: sensed?.role ?? 'subject',
+                sensorEvidence: sensed?.evidence ?? 'none',
+              });
           if (classification.class === 'instrument') {
             block.instrumentFailed = true;
           }
@@ -2919,7 +3075,7 @@ export async function runCampaignDispatch(
                   disposition: SPEND_RECOVERED,
                   rationale: attemptScopedRationale(
                     sample.attemptId,
-                    `actual cost of run ${sample.runId ?? '<unallocated>'} at terminal`,
+                    `actual cost of run ${authorizedRunId ?? '<unallocated>'} at terminal`,
                   ),
                 },
               },
@@ -2942,7 +3098,7 @@ export async function runCampaignDispatch(
                 disposition: UNPRICED_TERMINAL,
                 rationale: attemptScopedRationale(
                   sample.attemptId,
-                  `run ${sample.runId ?? '<unallocated>'} terminaled with no readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
+                  `run ${authorizedRunId ?? '<unallocated>'} terminaled with no authorized run directory or readable actual cost in its run artifacts; R-JRN-12 forbids journaling an estimate as spend`,
                 ),
               },
             });
@@ -2959,13 +3115,28 @@ export async function runCampaignDispatch(
             );
             return;
           }
+          if (
+            sample.attemptDir !== undefined &&
+            terminalEvents.some(
+              (event) =>
+                event.type === 'run_completed' ||
+                event.type === 'instrument_failure',
+            )
+          ) {
+            markStageCleanupEligible(sample);
+            cleanupEligibleStages([sample]);
+          }
           if (spendAmount === null) {
-            const runName = sample.runId ?? '<unallocated>';
+            const runName = authorizedRunId ?? '<unallocated>';
             halt(
               `accounting gap: attempt ${sample.attemptId} terminaled with no readable actual cost (run ${runName})`,
             );
+            const runLocation =
+              authorizedRunId === undefined
+                ? '<no-authorized-run-dir>'
+                : runDirOf(authorizedRunId);
             stream.write(
-              `operator action: the budget position cannot account for run ${runName}. Restore its verdict economics at ${runDirOf(runName)}, then re-run \`quorum campaign run\` — the resume re-reads that run dir, journals the restored actual spend, and continues. While it stays unpriced every resume refuses; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
+              `operator action: the budget position cannot account for run ${runName}. Restore its verdict economics at ${runLocation}, then re-run \`quorum campaign run\` — the resume re-reads that run dir, journals the restored actual spend, and continues. While it stays unpriced every resume refuses; if the cost is unrecoverable the campaign's accounting must be adjudicated at seal. Nothing further is admitted and no replacement is resolved for this terminal.\n`,
             );
             return;
           }
@@ -3031,6 +3202,86 @@ export async function runCampaignDispatch(
         const evalsRoot =
           currentSnapshot?.evalsRoot ?? join(args.campaignDir, 'evals');
         const superpowersSha = campaign.refs.superpowers_by_arm[sample.arm];
+        const superpowersTree =
+          superpowersSha !== null && superpowersSha !== undefined
+            ? join(args.campaignDir, `superpowers-${superpowersSha}`)
+            : null;
+        if (containerSpawner !== null) {
+          const prepared = containerSpawner.prepareAttempt({
+            attemptId: sample.attemptId,
+            agent: surfaceOfArm(sample.arm).agent,
+            credentialName: subjectName,
+            evalsRoot,
+            superpowersTree,
+          });
+          sample.attemptDir = prepared.attemptDir;
+          const argv = buildCampaignChildArgv({
+            evalsRoot,
+            scenarioDir: join(
+              evalsRoot,
+              'scenarios',
+              scenarioOfSample(sample.sampleId),
+            ),
+            codingAgent: surfaceOfArm(sample.arm).agent,
+            codingAgentsDir: join(evalsRoot, 'coding-agents'),
+            outRoot: prepared.stagingDir,
+            os: 'linux',
+            credentialName: subjectName,
+            credentialsFile: join(evalsRoot, 'credentials.yaml'),
+            gauntletBin:
+              currentSnapshot?.gauntletBin ??
+              join(args.campaignDir, 'bin', 'gauntlet'),
+            graderModel: campaign.grader.model,
+            superpowers:
+              superpowersTree !== null
+                ? { mode: 'root', root: superpowersTree }
+                : { mode: 'none' },
+            identity: {
+              campaign_id: campaign.campaign_id,
+              comparison_id: live.block.comparison_id,
+              block_id: live.block.block_id,
+              sample_id: sample.sampleId,
+              execution_attempt_id: sample.attemptId,
+            },
+          });
+          const child = spawner.spawn({
+            command: 'bun',
+            args: argv,
+            cwd: evalsRoot,
+            // Credentials are delivered through the private, mode-0400 stage
+            // files mounted by the container, never through its spec.
+            env: { PATH: getEnv('PATH') },
+            attempt: {
+              attemptId: sample.attemptId,
+              attemptDir: prepared.attemptDir,
+              stdoutLog: prepared.stdoutLog,
+              stderrLog: prepared.stderrLog,
+              homeDir: prepared.homeDir,
+              entrypoint: join(evalsRoot, 'container', 'attempt-entrypoint.sh'),
+              mounts: buildAttemptMounts({
+                evalsRoot,
+                gauntletRoot: join(args.campaignDir, 'gauntlet'),
+                binRoot: join(args.campaignDir, 'bin'),
+                superpowersTree,
+                attemptDir: prepared.attemptDir,
+                subjectEnvFile: prepared.subjectEnvFile,
+                graderEnvFile: prepared.graderEnvFile,
+                passwdFile: prepared.passwdFile,
+                groupFile: prepared.groupFile,
+              }),
+            },
+          });
+          sample.childBirthTsMs = null;
+          if (grants.subjectEnv !== undefined) {
+            incrementInFlight(subjectName, grants.subjectEnv);
+          }
+          if (grants.graderEnv !== undefined) {
+            incrementInFlight(campaign.grader.credential, grants.graderEnv);
+          }
+          superviseSample(sample, child, live);
+          spawnFailuresByPool.set(sample.subjectPool, 0);
+          return 'spawned';
+        }
         const argv = buildCampaignChildArgv({
           evalsRoot,
           scenarioDir: join(
@@ -3090,7 +3341,10 @@ export async function runCampaignDispatch(
           },
         };
         const child = spawner.spawn(spec);
-        sample.childBirthTsMs = identity.startTimeMs(child.pid);
+        sample.childBirthTsMs =
+          child.handle.kind === 'process'
+            ? identity.startTimeMs(child.handle.pgid)
+            : null;
         if (grants.subjectEnv !== undefined) {
           incrementInFlight(subjectName, grants.subjectEnv);
         }
@@ -3101,6 +3355,33 @@ export async function runCampaignDispatch(
         spawnFailuresByPool.set(sample.subjectPool, 0);
         return 'spawned';
       } catch (err) {
+        if (
+          err instanceof AttemptContainerSpawnError &&
+          err.cleanup === 'unverified'
+        ) {
+          if (containerSpawner === null) {
+            throw new DispatcherError(
+              `container spawn for ${sample.attemptId} left container ${err.containerId} with unknown cleanup certainty and no exact-ID stopper is available`,
+            );
+          }
+          let verifiedDead = false;
+          try {
+            verifiedDead =
+              (await containerSpawner.stopContainer(
+                err.containerId,
+                killGrace,
+              )) === 'dead';
+          } catch (verificationError) {
+            throw new DispatcherError(
+              `container spawn for ${sample.attemptId} left container ${err.containerId} with unknown cleanup certainty; exact-ID verification threw: ${verificationError instanceof Error ? verificationError.message : String(verificationError)}`,
+            );
+          }
+          if (!verifiedDead) {
+            throw new DispatcherError(
+              `container spawn for ${sample.attemptId} left container ${err.containerId} alive or unverified after exact-ID cleanup; retaining stage and refusing release or replacement`,
+            );
+          }
+        }
         // Spawn-failure pool halt (REV fable I-14): N consecutive failures
         // attributed to one pool halt admission for that pool.
         const failures = (spawnFailuresByPool.get(sample.subjectPool) ?? 0) + 1;
@@ -3120,6 +3401,7 @@ export async function runCampaignDispatch(
         // has NO instrument_failure edge from 'admitted' (never allocated),
         // so the typed record is classifier row 6 as the MINT reason and the
         // sample resolves via the E7.1 roster disposition from 'admitted'.
+        markStageCleanupEligible(sample);
         releaseSample(sample);
         const snapshot = await appendCritical([snapshotEstimateInput()]);
         if (snapshot === null || storagePaused) {
@@ -3131,6 +3413,15 @@ export async function runCampaignDispatch(
           return 'fail-stop';
         }
         estimateUsd = currentEstimateTotal();
+        // A sibling may already have superseded this block before this
+        // prepare-then-spawn failure. The durable snapshot above confirms
+        // the failed sample's release; no worker can consume its stage now.
+        if (
+          supersededBlockIds.has(live.block.block_id) ||
+          resolvedObligations.has(live.block.block_id)
+        ) {
+          cleanupEligibleStages([sample]);
+        }
         const spawnClass = classifyFailure({
           outcome: 'indeterminate',
           exitClass: 'spawn-failed',
@@ -3262,6 +3553,8 @@ export async function runCampaignDispatch(
           subjectPool: poolOfArm(armOf(a.sampleId)),
           grants: {},
           childBirthTsMs: null,
+          stageCleanupEligible: false,
+          allocationJournaled: false,
           serviceEnded: false,
           abandoned: false,
         })),
@@ -3531,6 +3824,8 @@ export async function runCampaignDispatch(
         // and recovery re-derives the batch (Important 3).
         return;
       }
+      if (storagePaused) return;
+      cleanupEligibleStages(invalid.flatMap((block) => block.samples));
       for (const { reserve, record } of result.activated) {
         const reserveBlock = reserveBlocks.find((b) => b.block_id === reserve);
         if (reserveBlock === undefined) continue;
@@ -3573,6 +3868,7 @@ export async function runCampaignDispatch(
           // block, no campaign_cancelled, a named operator action, and a
           // resumable exit.
           const aborts: EventInput[] = [];
+          const abortedBlocks: LiveBlockState[] = [];
           const killFailures: string[] = [];
           let released = 0;
           for (const lb of liveBlocks.values()) {
@@ -3589,6 +3885,7 @@ export async function runCampaignDispatch(
                 type: 'aborted',
                 payload: { block_id: lb.block.block_id },
               });
+              abortedBlocks.push(lb);
             }
           }
           // 3. Journal aborted per VERIFIED in-flight block; every verified
@@ -3606,7 +3903,14 @@ export async function runCampaignDispatch(
             stream.write(
               `signal kill FAILED for ${killFailures.join(', ')} — operator action: verify and kill these process groups manually${cancelPending ? ', then re-run `quorum campaign cancel` (cancel incomplete: campaign_cancelled NOT journaled)' : ''}; exit stays resumable\n`,
             );
-            if (bundle.length > 0) await appendCritical(bundle);
+            if (bundle.length > 0) {
+              const appended = await appendCritical(bundle);
+              if (appended !== null && !storagePaused) {
+                cleanupEligibleStages(
+                  abortedBlocks.flatMap((block) => block.samples),
+                );
+              }
+            }
             wakeLoop();
             return;
           }
@@ -3630,12 +3934,20 @@ export async function runCampaignDispatch(
               payload: reason !== '' ? { reason } : {},
             });
           }
-          if (bundle.length > 0) await appendCritical(bundle);
+          if (bundle.length > 0) {
+            const appended = await appendCritical(bundle);
+            if (appended !== null && !storagePaused) {
+              cleanupEligibleStages(
+                abortedBlocks.flatMap((block) => block.samples),
+              );
+            }
+          }
           // 5. Exit — resumable on a plain signal, terminal on cancel.
           wakeLoop();
         });
       },
     );
+    args.onReady?.();
 
     // --- Sampler start (Decision D-3: sensors lead; the dispatcher consumes
     //     breach entry -> admission-only halt, closed windows -> resolution

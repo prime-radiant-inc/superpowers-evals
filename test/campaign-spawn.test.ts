@@ -29,9 +29,13 @@ test('detached spawn: pid == pgid (setsid), protocol line observed, group exists
     cwd: dir,
     env: { PATH: getEnv('PATH') ?? '' },
   });
-  expect(child.pid).toBeGreaterThan(0);
+  expect(child.handle.kind).toBe('process');
+  if (child.handle.kind !== 'process')
+    throw new Error('expected process child');
+  expect(child.handle.pgid).toBeGreaterThan(0);
+  const pgid = child.handle.pgid;
   // Detached setsid: the child IS its process-group leader (R-SPN-1/2).
-  expect(() => assertProcessGroupExists(child.pid)).not.toThrow();
+  expect(() => assertProcessGroupExists(pgid)).not.toThrow();
   const lines: string[] = [];
   child.onStdoutLine((line) => lines.push(line));
   const exit = await new Promise<{ code: number | null }>((resolve) => {
@@ -45,6 +49,25 @@ test('detached spawn: pid == pgid (setsid), protocol line observed, group exists
 
 test('assertProcessGroupExists throws SpawnError for a nonexistent group', () => {
   expect(() => assertProcessGroupExists(999999999)).toThrow(SpawnError);
+});
+
+test('detached spawner kind is process and the handle carries the pgid', async () => {
+  const spawner = new DetachedChildSpawner();
+  expect(spawner.kind).toBe('process');
+  const dir = mkdtempSync(join(tmpdir(), 'spawn-kind-'));
+  const script = join(dir, 'child.ts');
+  writeFileSync(script, "console.log('run_allocated: run-k1');\n");
+  const child = spawner.spawn({
+    command: 'bun',
+    args: [script],
+    cwd: dir,
+    env: { PATH: getEnv('PATH') ?? '' },
+  });
+  expect(child.handle.kind).toBe('process');
+  if (child.handle.kind === 'process') {
+    expect(child.handle.pgid).toBeGreaterThan(1);
+  }
+  await new Promise<void>((resolve) => child.onExit(() => resolve()));
 });
 
 test('parseRunAllocatedLine: exact protocol, nothing else', () => {

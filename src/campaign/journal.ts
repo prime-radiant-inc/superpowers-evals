@@ -592,7 +592,7 @@ export class JournalWriter {
            WHERE attempt_id = ?`,
         ).run(
           event.payload.run_id,
-          event.payload.pgid,
+          'pgid' in event.payload ? event.payload.pgid : null,
           JSON.stringify(readRunAllocatedGrants(event.payload)),
           spawnGap,
           event.payload.attempt_id,

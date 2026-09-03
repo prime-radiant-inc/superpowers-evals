@@ -28,7 +28,11 @@ import {
   runScenario,
   runWasStopped,
 } from '../runner/index.ts';
-import { writeStoppedVerdict } from '../runner/stopped.ts';
+import { writeAttemptManifest } from '../runner/manifest.ts';
+import {
+  type StoppedIdentity,
+  writeStoppedVerdict,
+} from '../runner/stopped.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import { render } from './render.ts';
 import { resolveScenarioDir, scenarioName } from './scenario.ts';
@@ -82,6 +86,50 @@ export type RunCredentialsOrigin =
   | 'canonical-snapshot'
   | undefined;
 
+export interface RunStopState {
+  stopExitCode: number | null;
+}
+
+export interface RunStopSignalSource {
+  once(signal: NodeJS.Signals, handler: () => void): void;
+  off(signal: NodeJS.Signals, handler: () => void): void;
+}
+
+const processStopSignalSource: RunStopSignalSource = {
+  once: (signal, handler) => process.once(signal, handler),
+  off: (signal, handler) => process.off(signal, handler),
+};
+
+/** Install the one idempotent stop path shared by interactive SIGINT and the
+ * SIGTERM delivered by an attempt container's init during docker stop. */
+export function installRunStopHandlers(
+  state: RunStopState,
+  killGauntletChild: (signal: NodeJS.Signals) => void,
+  signalSource: RunStopSignalSource = processStopSignalSource,
+): () => void {
+  const onStop = (): void => {
+    if (state.stopExitCode !== null) return;
+    killGauntletChild('SIGINT');
+    state.stopExitCode = 2;
+  };
+  signalSource.once('SIGINT', onStop);
+  signalSource.once('SIGTERM', onStop);
+  return () => {
+    signalSource.off('SIGINT', onStop);
+    signalSource.off('SIGTERM', onStop);
+  };
+}
+
+function writeStoppedArtifacts(
+  runDir: string,
+  identity: StoppedIdentity,
+): void {
+  writeStoppedVerdict(runDir, identity);
+  if (identity.campaign !== undefined) {
+    writeAttemptManifest(runDir, identity.campaign);
+  }
+}
+
 function runId(path: string): string {
   const last = path.split('/').at(-1);
   return last !== undefined && last !== '' ? last : path;
@@ -95,6 +143,10 @@ export function runAllocatedLine(runDir: string): string {
   return `run_allocated: ${runId(runDir)}\n`;
 }
 
+export interface RunCommandDependencies {
+  readonly signalSource?: RunStopSignalSource;
+}
+
 // Shared by the public `quorum run` command and run-all's narrow internal child
 // entrypoint. The caller fixes credential origin; no user input selects it.
 // Returns the process exit code (never process.exit inside — C8: an exit
@@ -104,6 +156,7 @@ export async function executeRunCommand(
   scenario: string,
   opts: RunCommandOptions,
   credentialsOrigin: RunCredentialsOrigin,
+  dependencies: RunCommandDependencies = {},
 ): Promise<number> {
   const scn = resolveScenarioDir(scenario, opts.scenariosRoot);
   if (scn === undefined) {
@@ -133,7 +186,8 @@ export async function executeRunCommand(
   // caller): the listener kills the gauntlet child so the awaited run
   // settles, and the resolved code — with the stopped verdict written and
   // the lock released below — reaches the CLI entrypoint, which exits.
-  let stopExitCode: number | null = null;
+  const stopState: RunStopState = { stopExitCode: null };
+  let campaignIdentity: CampaignIdentity | undefined;
   const stoppedIdentity = () => ({
     scenario: scenarioId,
     codingAgent: opts.codingAgent,
@@ -142,43 +196,46 @@ export async function executeRunCommand(
     ...(labelsForStop !== undefined ? { labels: labelsForStop } : {}),
     ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
   });
-  const onSigint = (): void => {
-    currentGauntletChild()?.kill('SIGINT');
-    stopExitCode = 2;
-  };
-  process.once('SIGINT', onSigint);
-  // Explicit superpowers mode from the CLI projection. Resolved paths only —
-  // materialization/verification belongs to the spawning campaign.
-  const superpowers: SuperpowersSpec | undefined =
-    opts.superpowersRoot !== undefined
-      ? { mode: 'root', root: resolve(opts.superpowersRoot) }
-      : opts.noSuperpowers === true
-        ? { mode: 'none' }
-        : undefined;
-  if (superpowers?.mode === 'root' && !existsSync(superpowers.root)) {
-    throw new RunnerError(
-      `--superpowers-root does not exist: ${superpowers.root}`,
-      'setup',
-    );
-  }
-  // R-SPN-4 (Decision D-8): parse the identity at the CLI boundary — a
-  // malformed block fails loud here, before any run dir or provider token.
-  const campaignIdentity: CampaignIdentity | undefined =
-    opts.campaignIdentityJson === undefined
-      ? undefined
-      : CampaignIdentitySchema.parse(JSON.parse(opts.campaignIdentityJson));
-  // Children never acquire (R-LCK-2 explicit channel): a process marked
-  // covered — by the campaign spawner (src/campaign/spawn.ts) or run-all's
-  // invokeChild — rides its holder's accounting and bypasses acquisition
-  // entirely (C4: the marker means never acquire, not acquire-and-fail).
-  // Only an uncovered process is a top-level spender.
-  if (getEnv(COVERED_BY_LOCK_ENV) === undefined) {
-    spendLock = acquireLiveSpendLock({
-      clock,
-      identity: realProcessIdentityProbe,
-    });
-  }
+  let uninstallStopHandlers: (() => void) | null = null;
   try {
+    uninstallStopHandlers = installRunStopHandlers(
+      stopState,
+      (signal) => {
+        currentGauntletChild()?.kill(signal);
+      },
+      dependencies.signalSource,
+    );
+    // Explicit superpowers mode from the CLI projection. Resolved paths only —
+    // materialization/verification belongs to the spawning campaign.
+    const superpowers: SuperpowersSpec | undefined =
+      opts.superpowersRoot !== undefined
+        ? { mode: 'root', root: resolve(opts.superpowersRoot) }
+        : opts.noSuperpowers === true
+          ? { mode: 'none' }
+          : undefined;
+    if (superpowers?.mode === 'root' && !existsSync(superpowers.root)) {
+      throw new RunnerError(
+        `--superpowers-root does not exist: ${superpowers.root}`,
+        'setup',
+      );
+    }
+    // R-SPN-4 (Decision D-8): parse the identity at the CLI boundary — a
+    // malformed block fails loud here, before any run dir or provider token.
+    campaignIdentity =
+      opts.campaignIdentityJson === undefined
+        ? undefined
+        : CampaignIdentitySchema.parse(JSON.parse(opts.campaignIdentityJson));
+    // Children never acquire (R-LCK-2 explicit channel): a process marked
+    // covered — by the campaign spawner (src/campaign/spawn.ts) or run-all's
+    // invokeChild — rides its holder's accounting and bypasses acquisition
+    // entirely (C4: the marker means never acquire, not acquire-and-fail).
+    // Only an uncovered process is a top-level spender.
+    if (getEnv(COVERED_BY_LOCK_ENV) === undefined) {
+      spendLock = acquireLiveSpendLock({
+        clock,
+        identity: realProcessIdentityProbe,
+      });
+    }
     // R-LCK-2 floors preflight — unconditional (no platform bypass): the
     // injectable probe resolves through the fixture seam; production gets the
     // real Linux probe whose non-Linux refusal IS the designated-host
@@ -191,54 +248,74 @@ export async function executeRunCommand(
         DEFAULT_RESOURCE_FLOORS,
       );
     }
-    const { runDir, verdict } = await runScenario({
-      scenarioDir: resolve(scn),
-      codingAgent: opts.codingAgent,
-      os: opts.os,
-      codingAgentsDir: resolve(opts.codingAgentsDir),
-      outRoot: resolve(opts.outRoot),
-      startedAt,
-      credential: opts.credential,
-      ...(opts.credentialsFile !== undefined
-        ? {
-            credentialsPath: resolve(opts.credentialsFile),
-            ...(credentialsOrigin !== undefined ? { credentialsOrigin } : {}),
-          }
-        : {}),
-      graderModel: opts.graderModel,
-      ...(opts.gauntletBin !== undefined
-        ? { gauntletBin: resolve(opts.gauntletBin) }
-        : {}),
-      ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
-      ...(superpowers !== undefined ? { superpowers } : {}),
-      onRunDir: (dir) => {
-        runDirForStop = dir;
-        process.stdout.write(runAllocatedLine(dir));
-      },
-      onCredentialLabels: (labels) => {
-        labelsForStop = labels;
-      },
-      // The graceful-stop seam: the recorded stop is honored at every
-      // runner phase boundary — a SIGINT before the gauntlet child exists
-      // still stops the run (no child, no spend, stopped verdict).
-      shouldStop: () => stopExitCode !== null,
-    });
+    let runResult: Awaited<ReturnType<typeof runScenario>>;
+    try {
+      runResult = await runScenario({
+        scenarioDir: resolve(scn),
+        codingAgent: opts.codingAgent,
+        os: opts.os,
+        codingAgentsDir: resolve(opts.codingAgentsDir),
+        outRoot: resolve(opts.outRoot),
+        startedAt,
+        credential: opts.credential,
+        ...(opts.credentialsFile !== undefined
+          ? {
+              credentialsPath: resolve(opts.credentialsFile),
+              ...(credentialsOrigin !== undefined ? { credentialsOrigin } : {}),
+            }
+          : {}),
+        graderModel: opts.graderModel,
+        ...(opts.gauntletBin !== undefined
+          ? { gauntletBin: resolve(opts.gauntletBin) }
+          : {}),
+        ...(campaignIdentity !== undefined
+          ? { campaign: campaignIdentity }
+          : {}),
+        ...(campaignIdentity !== undefined &&
+        getEnv('QUORUM_ATTEMPT_DIR') !== undefined
+          ? { campaignAttemptDir: getEnv('QUORUM_ATTEMPT_DIR') }
+          : {}),
+        ...(superpowers !== undefined ? { superpowers } : {}),
+        onRunDir: (dir) => {
+          runDirForStop = dir;
+          process.stdout.write(runAllocatedLine(dir));
+        },
+        onCredentialLabels: (labels) => {
+          labelsForStop = labels;
+        },
+        // The graceful-stop seam: the recorded stop is honored at every
+        // runner phase boundary — a SIGINT before the gauntlet child exists
+        // still stops the run (no child, no spend, stopped verdict).
+        shouldStop: () => stopState.stopExitCode !== null,
+      });
+    } catch (err) {
+      if (stopState.stopExitCode !== null && runWasStopped()) {
+        // The run settled by REJECTING after the runner observed the stop:
+        // the stop verdict and its code still win.
+        if (runDirForStop !== null) {
+          writeStoppedArtifacts(runDirForStop, stoppedIdentity());
+        }
+        return stopState.stopExitCode;
+      }
+      throw err;
+    }
+    const { runDir, verdict } = runResult;
     // The run's genuine outcome is authoritative: the stopped verdict is
     // written only when the run ACTUALLY stopped, per the runner's own
     // report (runWasStopped — a phase-boundary stop or a gauntlet child
     // that exited BY SIGINT), never a bare flag read. A stop recorded after
     // genuine completion is late; it is logged and the real verdict stands.
-    if (stopExitCode !== null && runWasStopped()) {
+    if (stopState.stopExitCode !== null && runWasStopped()) {
       // The stop is terminal and LAST: the runner may have written its own
       // error verdict while settling — the stopped verdict overwrites it.
       if (runDirForStop !== null) {
-        writeStoppedVerdict(runDirForStop, stoppedIdentity());
+        writeStoppedArtifacts(runDirForStop, stoppedIdentity());
       }
-      return stopExitCode;
+      return stopState.stopExitCode;
     }
-    if (stopExitCode !== null) {
+    if (stopState.stopExitCode !== null) {
       process.stderr.write(
-        "late SIGINT after run completion — the run's verdict stands\n",
+        "late stop signal after run completion — the run's verdict stands\n",
       );
     }
     process.stdout.write(`run-id: ${runId(runDir)}\n`);
@@ -249,18 +326,8 @@ export async function executeRunCommand(
       }),
     );
     return EXIT_CODE_BY_FINAL[verdict.final];
-  } catch (err) {
-    if (stopExitCode !== null && runWasStopped()) {
-      // The run settled by REJECTING after the runner observed the stop:
-      // the stop verdict and its code still win.
-      if (runDirForStop !== null) {
-        writeStoppedVerdict(runDirForStop, stoppedIdentity());
-      }
-      return stopExitCode;
-    }
-    throw err;
   } finally {
-    process.off('SIGINT', onSigint);
+    uninstallStopHandlers?.();
     spendLock?.release();
   }
 }

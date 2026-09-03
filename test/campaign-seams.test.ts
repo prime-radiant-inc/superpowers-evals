@@ -53,7 +53,7 @@ test('ChildSpawner is injectable: fake children carry scripted protocol lines', 
       // A full, typed SpawnedCampaignChild plus the test's emitExit driver —
       // an intersection type, no cast.
       const handle: SpawnedCampaignChild & { emitExit(code: number): void } = {
-        pid: 4242,
+        handle: { kind: 'process', pgid: 4242 },
         stdoutLines: ['run_allocated: run-x'],
         stderrLines: [],
         onExit(cb) {
@@ -69,6 +69,7 @@ test('ChildSpawner is injectable: fake children carry scripted protocol lines', 
       };
       return handle;
     },
+    kind: 'process',
   };
   const child = spawner.spawn({
     command: 'bun',
@@ -77,5 +78,6 @@ test('ChildSpawner is injectable: fake children carry scripted protocol lines', 
     env: {},
   });
   expect(spawned).toHaveLength(1);
-  expect(child.pid).toBe(4242);
+  expect(child.handle.kind).toBe('process');
+  if (child.handle.kind === 'process') expect(child.handle.pgid).toBe(4242);
 });
