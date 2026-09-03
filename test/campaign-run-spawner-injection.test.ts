@@ -292,9 +292,17 @@ test('campaignRun forwards the container stopper through cancel-request preceden
       );
     },
   };
+  let readerCalls = 0;
 
   const { code, said } = await captureOutput(() =>
-    campaignRun(fx.dir, { spawner, containerStop }),
+    campaignRun(fx.dir, {
+      spawner,
+      containerStop,
+      credentialEnvReader: () => {
+        readerCalls += 1;
+        return new Map();
+      },
+    }),
   );
 
   expect(code).toBe(0);
@@ -302,10 +310,57 @@ test('campaignRun forwards the container stopper through cancel-request preceden
     'cancel-request present — completing cancellation instead of resuming',
   );
   expect(stopped).toEqual(['a'.repeat(64)]);
+  expect(readerCalls).toBe(0);
   const types = journaledTypes(fx.dir, 2);
   expect(types).toContain('aborted');
   expect(types.at(-1)).toBe('campaign_cancelled');
 }, 60_000);
+
+test('campaignRun uses one injected batch credential reader without process env values', async () => {
+  const fixture = pendingCampaignFixture();
+  ownDir(fixture.dir);
+  const fakeSpawner = new FakeSpawner(fixture.campaign);
+  const priorKeyA = getEnv('KEY_A');
+  const priorKeyG = getEnv('KEY_G');
+  deleteProcessEnv('KEY_A');
+  deleteProcessEnv('KEY_G');
+  const calls: string[][] = [];
+  const readiness: string[] = [];
+  try {
+    const { code } = await captureOutput(() =>
+      campaignRun(fixture.dir, {
+        spawner: fakeSpawner,
+        credentialEnvReader: (names) => {
+          calls.push([...names]);
+          return new Map([
+            ['KEY_A', 'reader-only-subject-secret'],
+            ['KEY_G', 'reader-only-grader-secret'],
+          ]);
+        },
+        onReady: () => {
+          readiness.push('ready');
+          expect(fakeSpawner.spawned).toHaveLength(0);
+        },
+      }),
+    );
+    expect(code).toBe(0);
+    expect(calls).toEqual([['KEY_A', 'KEY_G']]);
+    expect(readiness).toEqual(['ready']);
+    expect(fakeSpawner.spawned).toHaveLength(1);
+  } finally {
+    if (priorKeyA === undefined) deleteProcessEnv('KEY_A');
+    else setProcessEnv('KEY_A', priorKeyA);
+    if (priorKeyG === undefined) deleteProcessEnv('KEY_G');
+    else setProcessEnv('KEY_G', priorKeyG);
+    for (const { runId } of fakeSpawner.spawned) {
+      rmSync(join(RESULTS_ROOT, runId), { recursive: true, force: true });
+    }
+    rmSync(join(RESULTS_ROOT, fixture.journaledRunId), {
+      recursive: true,
+      force: true,
+    });
+  }
+}, 180_000);
 
 // ── no options: the raw verb path is unchanged ───────────────────────────────
 

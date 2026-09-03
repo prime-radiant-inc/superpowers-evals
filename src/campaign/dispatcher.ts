@@ -1032,6 +1032,9 @@ export function runCostFromArtifacts(runDir: string): number | null {
 export interface DispatchRunArgs {
   readonly campaignDir: string;
   readonly spawner?: ChildSpawner;
+  /** Called exactly once after signal handlers are installed and before any
+   * sampler, reconciliation, or admission work begins. */
+  readonly onReady?: () => void;
   readonly clock?: Clock;
   readonly identity?: ProcessIdentityProbe;
   readonly credentials: Readonly<Record<string, Credential>>;
@@ -3944,6 +3947,7 @@ export async function runCampaignDispatch(
         });
       },
     );
+    args.onReady?.();
 
     // --- Sampler start (Decision D-3: sensors lead; the dispatcher consumes
     //     breach entry -> admission-only halt, closed windows -> resolution

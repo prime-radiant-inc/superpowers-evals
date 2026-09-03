@@ -71,6 +71,56 @@ export const realAttemptDocker: AttemptDocker = defaultCommandRunner;
 
 export type DockerWait = (containerId: string) => Promise<number>;
 
+export interface DockerWaitProcess {
+  readonly stdout: ReadableStream<Uint8Array> | null;
+  readonly stderr: ReadableStream<Uint8Array> | null;
+  readonly exited: Promise<number>;
+}
+
+export type DockerWaitLauncher = (containerId: string) => DockerWaitProcess;
+
+const launchDockerWait: DockerWaitLauncher = (containerId) =>
+  Bun.spawn(['docker', 'wait', containerId], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+/** Wait for a container without blocking the controller's event loop. */
+export async function realDockerWait(
+  containerId: string,
+  launch: DockerWaitLauncher = launchDockerWait,
+): Promise<number> {
+  if (!CONTAINER_ID_RE.test(containerId)) {
+    throw new AttemptContainerError(
+      'docker wait requires a canonical full container id',
+    );
+  }
+  const proc = launch(containerId);
+  const exitCode = await proc.exited;
+  const stderr =
+    proc.stderr === null ? '' : await new Response(proc.stderr).text();
+  if (exitCode !== 0) {
+    throw new AttemptContainerError(
+      `docker wait failed for ${containerId}: ${stderr.trim()}`,
+    );
+  }
+  const stdout =
+    proc.stdout === null ? '' : await new Response(proc.stdout).text();
+  const value = stdout.trim();
+  if (!/^\d+$/.test(value)) {
+    throw new AttemptContainerError(
+      `docker wait returned malformed exit code for ${containerId}`,
+    );
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new AttemptContainerError(
+      `docker wait returned malformed exit code for ${containerId}`,
+    );
+  }
+  return parsed;
+}
+
 export interface ContainerStopper {
   stop(containerId: string, graceSeconds: number): Promise<'dead' | 'alive'>;
 }
@@ -194,6 +244,7 @@ type StopInspectResult =
 export class ContainerAttemptSpawner implements ChildSpawner, ContainerStopper {
   readonly kind = 'container' as const;
   private readonly args: ContainerAttemptSpawnerArgs;
+  private readonly dockerWait: DockerWait;
 
   constructor(args: ContainerAttemptSpawnerArgs) {
     if (!IMAGE_DIGEST_RE.test(args.imageDigest)) {
@@ -202,6 +253,7 @@ export class ContainerAttemptSpawner implements ChildSpawner, ContainerStopper {
       );
     }
     this.args = args;
+    this.dockerWait = args.dockerWait ?? realDockerWait;
   }
 
   prepareAttempt(args: {
@@ -705,9 +757,7 @@ export class ContainerAttemptSpawner implements ChildSpawner, ContainerStopper {
       let waitCode: number | null = null;
       let waitValid = false;
       const waitPromise = Promise.resolve().then(() =>
-        this.args.dockerWait
-          ? this.args.dockerWait(containerId)
-          : Promise.reject(new Error('docker wait seam is not configured')),
+        this.dockerWait(containerId),
       );
       void waitPromise.then(
         (code: unknown) => {

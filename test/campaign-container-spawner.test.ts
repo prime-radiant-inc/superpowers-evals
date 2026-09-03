@@ -19,6 +19,8 @@ import {
   buildAttemptMounts,
   ContainerAttemptSpawner,
   containerNameForAttempt,
+  type DockerWaitProcess,
+  realDockerWait,
 } from '../src/campaign/container-spawner.ts';
 import type {
   CampaignChildSpec,
@@ -30,6 +32,35 @@ const campaignId = 'c'.repeat(64);
 const evalsSha = 'd'.repeat(40);
 const imageDigest = `sha256:${'b'.repeat(64)}`;
 const containerId = 'f'.repeat(64);
+
+function fakeDockerWaitProcess(
+  stdout: string,
+  exited: number,
+  stderr = '',
+): DockerWaitProcess {
+  return {
+    stdout: new Response(stdout).body,
+    stderr: new Response(stderr).body,
+    exited: Promise.resolve(exited),
+  };
+}
+
+test('realDockerWait asynchronously validates docker wait results', async () => {
+  const id = '1'.repeat(64);
+  const launch = (stdout: string, exited: number, stderr = '') =>
+    realDockerWait(id, () => fakeDockerWaitProcess(stdout, exited, stderr));
+
+  await expect(launch('17\n', 0)).resolves.toBe(17);
+  await expect(launch('17\n', 2, 'docker unavailable')).rejects.toThrow(
+    /docker wait failed/,
+  );
+  await expect(launch('not-a-code\n', 0)).rejects.toThrow(
+    /docker wait returned malformed exit code/,
+  );
+  await expect(launch('-1\n', 0)).rejects.toThrow(
+    /docker wait returned malformed exit code/,
+  );
+});
 
 class FakeDocker implements CommandRunner {
   readonly calls: { command: string; args: readonly string[] }[] = [];
