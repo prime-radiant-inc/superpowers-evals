@@ -15,6 +15,7 @@
 // regular-file read and a private destination write — never a recursive copy
 // of a bundle directory — and staged material is 0700 dirs / 0600 files.
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   closeSync,
   fchmodSync,
@@ -624,6 +625,9 @@ export function pinChildDir(
       }
     } catch (error) {
       if (error instanceof ApplianceError) throw error;
+      throw scopeError(
+        `${label} could not be inspected (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}): ${name}`,
+      );
     }
   }
   return child;
@@ -756,12 +760,43 @@ export function removePinnedDirectory(
       if (current === undefined || !sameIdentity(current, target)) {
         continue;
       }
+      const quarantineName = `.removing-${randomUUID()}`;
+      const candidatePath = pinnedChildPath(parent, name);
+      const quarantinePath = pinnedChildPath(parent, quarantineName);
       try {
-        rmSync(pinnedChildPath(parent, name), {
-          recursive: true,
-          force: true,
+        // Move the identified generation away from its attacker-visible
+        // fixed name before recursive removal. A fixed-name replacement can
+        // therefore never be the object passed to rmSync.
+        renameSync(candidatePath, quarantinePath);
+      } catch {
+        return false;
+      }
+      let moved: ReturnType<typeof lstatSync>;
+      try {
+        moved = lstatSync(quarantinePath, {
+          bigint: true,
+          throwIfNoEntry: false,
         });
-      } catch {}
+      } catch {
+        return false;
+      }
+      if (moved === undefined || !sameIdentity(moved, target)) {
+        try {
+          const replacement = lstatSync(candidatePath, {
+            bigint: true,
+            throwIfNoEntry: false,
+          });
+          if (replacement === undefined) {
+            renameSync(quarantinePath, candidatePath);
+          }
+        } catch {}
+        return false;
+      }
+      try {
+        rmSync(quarantinePath, { recursive: true, force: true });
+      } catch {
+        return false;
+      }
       let remaining: string[];
       try {
         remaining = readdirSync(parent.viaPath);
