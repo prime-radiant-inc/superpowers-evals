@@ -288,6 +288,11 @@ test('creates with pinned digest and immutable identity, verifies, then starts',
   expect(createArgs).toContain(`quorum.evals_sha=${evalsSha}`);
   expect(createArgs).toContain(`quorum.image_digest=${imageDigest}`);
   expect(createArgs).toContain('QUORUM_COVERED_BY_LIVE_SPEND_LOCK=1');
+  expect(createArgs).toContain(
+    `QUORUM_ATTEMPT_DIR=${fx.spec.attempt!.attemptDir}`,
+  );
+  expect(createArgs).toContain('QUORUM_SUBJECT_FILE=/run/quorum/subject.env');
+  expect(createArgs).toContain('QUORUM_GRADER_FILE=/run/quorum/grader.env');
   expect(createArgs).not.toContain('sk-ant-secret');
   expect(createArgs).not.toContain('grader-secret');
   expect(createArgs).not.toContain('/camp/credential-bundle-secret-path');
