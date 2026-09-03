@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, setDefaultTimeout, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,13 @@ const nodeRequire = createRequire(import.meta.url);
 const ANTHROPIC_VERSION = '2023-06-01';
 const GRADER_API_KEY = 'fake-grader-api-key';
 const MODEL = 'claude-fake-grader-0';
+const PROVIDER_CONNECT_ATTEMPTS = 8;
+const PROVIDER_CONNECT_RETRY_DELAY_MS = 25;
+
+// The full repository suite can leave a freshly-created Bun server waiting
+// for its first accept window. Keep the retry bounded and give it room to
+// finish inside the test timeout.
+setDefaultTimeout(10_000);
 
 interface Message {
   readonly role: 'user' | 'assistant';
@@ -176,6 +183,48 @@ function isMissingAnthropicSdk(error: unknown): boolean {
   );
 }
 
+function isTransientProviderConnectionError(error: unknown): boolean {
+  const candidates: unknown[] = [error];
+  if (isRecord(error)) candidates.push(error['cause']);
+  return candidates.some((candidate) => {
+    if (!isRecord(candidate)) return false;
+    return ['code', 'errno'].some((key) => {
+      const value = candidate[key];
+      return (
+        typeof value === 'string' &&
+        ['ConnectionRefused', 'FailedToOpenSocket', 'ECONNREFUSED'].includes(
+          value,
+        )
+      );
+    });
+  });
+}
+
+async function withProviderConnectionRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  for (
+    let attempt = 1;
+    attempt <= PROVIDER_CONNECT_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (
+        attempt === PROVIDER_CONNECT_ATTEMPTS ||
+        !isTransientProviderConnectionError(error)
+      ) {
+        throw error;
+      }
+      await new Promise<void>((resolvePromise) => {
+        setTimeout(resolvePromise, PROVIDER_CONNECT_RETRY_DELAY_MS);
+      });
+    }
+  }
+  throw new Error('provider connection retry loop did not return');
+}
+
 const defaultSdkRuntime: SdkRuntime = {
   resolve: () => nodeRequire.resolve('@anthropic-ai/sdk'),
   load: (resolvedPath) => nodeRequire(resolvedPath),
@@ -206,6 +255,7 @@ function makeAnthropicClient(
 function makeTransport(
   baseUrl: string,
   sdkRuntime: SdkRuntime = defaultSdkRuntime,
+  fetchImpl: typeof fetch = fetch,
 ): {
   readonly usesSdk: boolean;
   readonly send: (body: MessagesRequest) => Promise<ToolResponse>;
@@ -215,21 +265,25 @@ function makeTransport(
     return {
       usesSdk: true,
       send: async (body) =>
-        parseToolResponse(await client.messages.create(body)),
+        parseToolResponse(
+          await withProviderConnectionRetry(() => client.messages.create(body)),
+        ),
     };
   }
   return {
     usesSdk: false,
     send: async (body) => {
-      const response = await fetch(new URL('/v1/messages', baseUrl), {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': GRADER_API_KEY,
-          'anthropic-version': ANTHROPIC_VERSION,
-        },
-        body: JSON.stringify(body),
-      });
+      const response = await withProviderConnectionRetry(() =>
+        fetchImpl(new URL('/v1/messages', baseUrl), {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': GRADER_API_KEY,
+            'anthropic-version': ANTHROPIC_VERSION,
+          },
+          body: JSON.stringify(body),
+        }),
+      );
       expect(response.status).toBe(200);
       return parseToolResponse(await response.json());
     },
@@ -302,6 +356,65 @@ test('does not hide non-resolution SDK import, export, or request failures', asy
   await expect(
     transport.send(makeRequest('sdk-request-error')),
   ).rejects.toThrow('SDK request failed after construction');
+});
+
+test('retries transient provider connection failures before sending the request', async () => {
+  const missingSdk = Object.assign(
+    new Error("Cannot find module '@anthropic-ai/sdk'"),
+    { code: 'MODULE_NOT_FOUND' },
+  );
+  let attempts = 0;
+  const transport = makeTransportWithSdkRuntime(
+    'http://127.0.0.1:1',
+    {
+      resolve: () => {
+        throw missingSdk;
+      },
+      load: () => {
+        throw new Error('the missing SDK loader must not run');
+      },
+    },
+    async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw Object.assign(new Error('provider is not listening yet'), {
+          code: 'ConnectionRefused',
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_1',
+              name: 'report_result',
+              input: {
+                status: 'pass',
+                summary: 'retry succeeded',
+                observations: [],
+                reasoning: 'the provider became ready',
+              },
+            },
+          ],
+          stop_reason: 'tool_use',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    },
+  );
+
+  expectToolResponse(
+    await transport.send(makeRequest('transient-connect')),
+    'report_result',
+    {
+      status: 'pass',
+      summary: 'retry succeeded',
+      observations: [],
+      reasoning: 'the provider became ready',
+    },
+  );
+  expect(attempts).toBe(3);
 });
 
 function makeRequest(
