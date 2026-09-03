@@ -1,6 +1,6 @@
 # Task 1c report
 
-Status: PENDING_FINAL_GATE
+Status: DONE_WITH_CONCERNS
 
 ## Implementation
 
@@ -63,16 +63,30 @@ The Linux Docker tests were not executed on this macOS host. The required
 appliance HOST-VERIFY step remains external to this checkout; no Docker
 integration environment was enabled during implementation.
 
-The final phase-boundary commands are recorded below once run, with the
-integration environment unset:
+The final phase-boundary commands were run with the integration environment
+unset:
 
-- `bun run check`: pending.
-- `bun run quorum check`: pending.
-- Full-check SIGINT isolation rerun: not applicable unless the full check has
-  exactly the documented `test/cli-run-sigint.test.ts` failures.
+- `env -u QUORUM_DOCKER_INTEGRATION bun run check`: failed after 402.86s with
+  3,664 passed, 6 skipped, and 4 failed. The failures were the four
+  `test/fake-provider.test.ts` cases that could not connect to their
+  per-test provider sockets under the full-suite load. The new Linux suite
+  was among the six skipped tests. The documented SIGINT failure condition
+  did not occur, so no SIGINT isolation rerun was performed.
+- `env -u QUORUM_DOCKER_INTEGRATION bun test test/fake-provider.test.ts`:
+  6 passed, 0 failed in isolation. This confirms the full-gate failures are
+  load-sensitive in the earlier Task 1b fixture tests, which this task did
+  not modify.
+- `env -u QUORUM_DOCKER_INTEGRATION bun run quorum check`: pass; all listed
+  scenarios, credentials, and arms/suites validated.
+
+The material concern is that the Docker suite remains structurally verified
+and cleanly skipped on macOS, not runtime-verified here. It still requires
+the Linux appliance HOST-VERIFY gate. The full repository gate also has the
+four full-suite-only fake-provider socket failures described above.
 
 ## Commits
 
 - `4a899ae7` — test: add task 1c synthetic fixture machinery
 - `13e86530` — test: add Docker campaign attempt integration suite
-- report update commit: pending
+- `2e01c72b` — docs: record task 1c implementation and ruling
+- This report is finalized in the commit that contains this file.
