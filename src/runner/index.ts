@@ -1788,15 +1788,21 @@ async function runInnerBody(
   }
   if (family === 'fake' && !isRemote) {
     const fakeEnvFile = join(runHomeDir, '.fake-env');
-    const subjectKey = getEnv('FAKE_SUBJECT_KEY');
+    const subjectEnvName = resolvedCredential?.api_key_env;
+    if (subjectEnvName === undefined) {
+      throw new ProvisionError(
+        'fake subject credential must declare api_key_env',
+      );
+    }
+    const subjectKey = getEnv(subjectEnvName);
     if (subjectKey === undefined || subjectKey === '') {
       throw new ProvisionError(
-        'fake subject env var FAKE_SUBJECT_KEY is unset/empty',
+        `fake subject env var ${subjectEnvName} is unset/empty`,
       );
     }
     writePrivateFileNoFollow(
       fakeEnvFile,
-      `FAKE_SUBJECT_KEY=${shellSingleQuote(subjectKey)}\n`,
+      `${subjectEnvName}=${shellSingleQuote(subjectKey)}\n`,
     );
     substitutions['$QUORUM_SUBJECT_FILE'] = fakeEnvFile;
     substitutions['$QUORUM_SUBJECT_FILE_SH'] = shellSingleQuote(fakeEnvFile);
