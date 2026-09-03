@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+agent_home=${QUORUM_AGENT_HOME:-${HOME:?}}
+attempt_dir=${QUORUM_ATTEMPT_DIR:-$(dirname "$agent_home")}
+evidence_dir=$attempt_dir/subject-evidence
+mkdir -p "$evidence_dir" "$agent_home/.claude/projects/fake"
+
+env | LC_ALL=C sort >> "$evidence_dir/env.txt"
+
+if [ -r /proc/sys/kernel/random/uuid ]; then
+  session_id=$(cat /proc/sys/kernel/random/uuid)
+elif command -v uuidgen >/dev/null 2>&1; then
+  session_id=$(uuidgen)
+else
+  session_id="fake-$$-$(date +%s)"
+fi
+timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+cat > "$agent_home/.claude/projects/fake/$session_id.jsonl" <<EOF
+{"type":"assistant","uuid":"$session_id","timestamp":"$timestamp","message":{"id":"msg_$session_id","type":"message","role":"assistant","model":"fake-subject-model","content":[{"type":"tool_use","id":"toolu_fake_read","name":"read","input":{"path":"HOWTO.md"}}],"usage":{"input_tokens":1,"output_tokens":1}}}
+EOF
+
+daemonize=0
+hold=0
+config_file=$(dirname "$0")/fake-agent.conf
+if [ -r "$config_file" ]; then
+  while IFS='=' read -r name value; do
+    case "$name" in
+      FAKE_AGENT_DAEMONIZE) daemonize=$value ;;
+      FAKE_AGENT_HOLD) hold=$value ;;
+    esac
+  done < "$config_file"
+fi
+
+if [ "$daemonize" = 1 ]; then
+  (while :; do sleep 60; done) &
+  printf '%s\n' "$!" > "$evidence_dir/daemon.pid"
+fi
+
+printf '%s\n' 'fake-coding-agent ready'
+printf '%s' '> '
+if [ "$hold" = 1 ]; then
+  while :; do sleep 1; done
+fi
+while IFS= read -r line; do
+  printf 'fake-coding-agent reply: %s\n' "$line"
+  printf '%s' '> '
+done
