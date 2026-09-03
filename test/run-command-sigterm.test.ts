@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
+  executeRunCommand,
   installRunStopHandlers,
   type RunStopState,
 } from '../src/cli/run-command.ts';
@@ -35,6 +36,28 @@ const IDENTITY = {
   sample_id: 'c1:scn-a:arm_a:r1',
   execution_attempt_id: 'c1:scn-a:arm_a:r1:a1',
 };
+
+class FakeSignalSource {
+  private readonly handlers = new Map<NodeJS.Signals, () => void>();
+
+  once(signal: NodeJS.Signals, handler: () => void): void {
+    this.handlers.set(signal, handler);
+  }
+
+  off(signal: NodeJS.Signals, handler: () => void): void {
+    if (this.handlers.get(signal) === handler) this.handlers.delete(signal);
+  }
+
+  emit(signal: NodeJS.Signals): void {
+    const handler = this.handlers.get(signal);
+    this.handlers.delete(signal);
+    handler?.();
+  }
+
+  listenerCount(): number {
+    return this.handlers.size;
+  }
+}
 
 function scenario(): string {
   const scn = mkdtempSync(join(tmpdir(), 'scn-sigterm-'));
@@ -125,20 +148,53 @@ async function runStopped(campaign: boolean): Promise<string> {
 test('SIGTERM and SIGINT share one idempotent stop path', () => {
   const state: RunStopState = { stopExitCode: null };
   const killed: NodeJS.Signals[] = [];
-  const uninstall = installRunStopHandlers(state, (signal) => {
-    killed.push(signal);
-  });
+  const source = new FakeSignalSource();
+  const uninstall = installRunStopHandlers(
+    state,
+    (signal) => {
+      killed.push(signal);
+    },
+    source,
+  );
 
   try {
-    process.emit('SIGTERM', 'SIGTERM');
-    process.emit('SIGINT', 'SIGINT');
-    process.emit('SIGTERM', 'SIGTERM');
+    source.emit('SIGTERM');
+    source.emit('SIGINT');
+    source.emit('SIGTERM');
 
     expect(state.stopExitCode).toBe(2);
     expect(killed).toEqual(['SIGINT']);
   } finally {
     uninstall();
   }
+});
+
+test('run stop listeners are removed when setup validation throws', async () => {
+  const source = new FakeSignalSource();
+  const missingRoot = join(
+    mkdtempSync(join(tmpdir(), 'missing-root-')),
+    'none',
+  );
+  const sigintListeners = process.listenerCount('SIGINT');
+  const sigtermListeners = process.listenerCount('SIGTERM');
+  await expect(
+    executeRunCommand(
+      scenario(),
+      {
+        codingAgent: 'claude',
+        os: 'linux',
+        codingAgentsDir: REAL_CODING_AGENTS,
+        outRoot: mkdtempSync(join(tmpdir(), 'out-stop-cleanup-')),
+        scenariosRoot: 'scenarios',
+        superpowersRoot: missingRoot,
+      },
+      undefined,
+      { signalSource: source },
+    ),
+  ).rejects.toThrow(`--superpowers-root does not exist: ${missingRoot}`);
+  expect(source.listenerCount()).toBe(0);
+  expect(process.listenerCount('SIGINT')).toBe(sigintListeners);
+  expect(process.listenerCount('SIGTERM')).toBe(sigtermListeners);
 });
 
 test('campaign SIGTERM stop rewrites the manifest after overwriting the verdict', async () => {
