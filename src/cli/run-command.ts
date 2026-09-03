@@ -28,7 +28,11 @@ import {
   runScenario,
   runWasStopped,
 } from '../runner/index.ts';
-import { writeStoppedVerdict } from '../runner/stopped.ts';
+import { writeAttemptManifest } from '../runner/manifest.ts';
+import {
+  type StoppedIdentity,
+  writeStoppedVerdict,
+} from '../runner/stopped.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import { render } from './render.ts';
 import { resolveScenarioDir, scenarioName } from './scenario.ts';
@@ -82,6 +86,39 @@ export type RunCredentialsOrigin =
   | 'canonical-snapshot'
   | undefined;
 
+export interface RunStopState {
+  stopExitCode: number | null;
+}
+
+/** Install the one idempotent stop path shared by interactive SIGINT and the
+ * SIGTERM delivered by an attempt container's init during docker stop. */
+export function installRunStopHandlers(
+  state: RunStopState,
+  killGauntletChild: (signal: NodeJS.Signals) => void,
+): () => void {
+  const onStop = (): void => {
+    if (state.stopExitCode !== null) return;
+    killGauntletChild('SIGINT');
+    state.stopExitCode = 2;
+  };
+  process.once('SIGINT', onStop);
+  process.once('SIGTERM', onStop);
+  return () => {
+    process.off('SIGINT', onStop);
+    process.off('SIGTERM', onStop);
+  };
+}
+
+function writeStoppedArtifacts(
+  runDir: string,
+  identity: StoppedIdentity,
+): void {
+  writeStoppedVerdict(runDir, identity);
+  if (identity.campaign !== undefined) {
+    writeAttemptManifest(runDir, identity.campaign);
+  }
+}
+
 function runId(path: string): string {
   const last = path.split('/').at(-1);
   return last !== undefined && last !== '' ? last : path;
@@ -133,7 +170,7 @@ export async function executeRunCommand(
   // caller): the listener kills the gauntlet child so the awaited run
   // settles, and the resolved code — with the stopped verdict written and
   // the lock released below — reaches the CLI entrypoint, which exits.
-  let stopExitCode: number | null = null;
+  const stopState: RunStopState = { stopExitCode: null };
   const stoppedIdentity = () => ({
     scenario: scenarioId,
     codingAgent: opts.codingAgent,
@@ -142,11 +179,9 @@ export async function executeRunCommand(
     ...(labelsForStop !== undefined ? { labels: labelsForStop } : {}),
     ...(campaignIdentity !== undefined ? { campaign: campaignIdentity } : {}),
   });
-  const onSigint = (): void => {
-    currentGauntletChild()?.kill('SIGINT');
-    stopExitCode = 2;
-  };
-  process.once('SIGINT', onSigint);
+  const uninstallStopHandlers = installRunStopHandlers(stopState, (signal) => {
+    currentGauntletChild()?.kill(signal);
+  });
   // Explicit superpowers mode from the CLI projection. Resolved paths only —
   // materialization/verification belongs to the spawning campaign.
   const superpowers: SuperpowersSpec | undefined =
@@ -221,22 +256,22 @@ export async function executeRunCommand(
       // The graceful-stop seam: the recorded stop is honored at every
       // runner phase boundary — a SIGINT before the gauntlet child exists
       // still stops the run (no child, no spend, stopped verdict).
-      shouldStop: () => stopExitCode !== null,
+      shouldStop: () => stopState.stopExitCode !== null,
     });
     // The run's genuine outcome is authoritative: the stopped verdict is
     // written only when the run ACTUALLY stopped, per the runner's own
     // report (runWasStopped — a phase-boundary stop or a gauntlet child
     // that exited BY SIGINT), never a bare flag read. A stop recorded after
     // genuine completion is late; it is logged and the real verdict stands.
-    if (stopExitCode !== null && runWasStopped()) {
+    if (stopState.stopExitCode !== null && runWasStopped()) {
       // The stop is terminal and LAST: the runner may have written its own
       // error verdict while settling — the stopped verdict overwrites it.
       if (runDirForStop !== null) {
-        writeStoppedVerdict(runDirForStop, stoppedIdentity());
+        writeStoppedArtifacts(runDirForStop, stoppedIdentity());
       }
-      return stopExitCode;
+      return stopState.stopExitCode;
     }
-    if (stopExitCode !== null) {
+    if (stopState.stopExitCode !== null) {
       process.stderr.write(
         "late SIGINT after run completion — the run's verdict stands\n",
       );
@@ -250,17 +285,17 @@ export async function executeRunCommand(
     );
     return EXIT_CODE_BY_FINAL[verdict.final];
   } catch (err) {
-    if (stopExitCode !== null && runWasStopped()) {
+    if (stopState.stopExitCode !== null && runWasStopped()) {
       // The run settled by REJECTING after the runner observed the stop:
       // the stop verdict and its code still win.
       if (runDirForStop !== null) {
-        writeStoppedVerdict(runDirForStop, stoppedIdentity());
+        writeStoppedArtifacts(runDirForStop, stoppedIdentity());
       }
-      return stopExitCode;
+      return stopState.stopExitCode;
     }
     throw err;
   } finally {
-    process.off('SIGINT', onSigint);
+    uninstallStopHandlers();
     spendLock?.release();
   }
 }
