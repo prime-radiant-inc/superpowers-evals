@@ -757,6 +757,9 @@ test('container publication collision refuses stale same-run evidence and cost',
   expect(journal.some((event) => event.type === 'instrument_failure')).toBe(
     true,
   );
+  expect(journal.some((event) => event.type === 'exposure_started')).toBe(
+    false,
+  );
   expect(
     journal.some(
       (event) =>
@@ -821,6 +824,7 @@ test('dispatcher refuses all evidence and spend after post-rename fsync ambiguit
   expect(journal.some((event) => event.type === 'instrument_failure')).toBe(
     true,
   );
+  expect(journal.some((event) => event.type === 'run_completed')).toBe(false);
   expect(journal.some((event) => event.type === 'exposure_started')).toBe(
     false,
   );
@@ -858,9 +862,13 @@ test('container spawn failure cleans a prepared stage after its disposition land
 
 test('spawn replacement retains stage when ENOSPC pauses after a successful resolution retry', async () => {
   const h = harness({ pauseOnBlockReplacement: true });
+  const written: string[] = [];
   h.spawner.failSpawns = true;
   h.spawner.spawnFailureCleanup = 'verified-absent';
-  const run = runCampaignDispatch(h.args);
+  const run = runCampaignDispatch({
+    ...h.args,
+    stream: { write: (text: string) => written.push(text) },
+  });
   (h.args.clock as FakeClock).advance(1);
   const outcome = await run;
   expect(outcome.status).toBe('storage_paused');
@@ -879,6 +887,17 @@ test('spawn replacement retains stage when ENOSPC pauses after a successful reso
       );
     }),
   ).toBe(true);
+  expect(
+    written.some(
+      (text) =>
+        text.includes('replacement minted') ||
+        text.includes('reserve exhausted') ||
+        text.includes('replacement suppressed'),
+    ),
+  ).toBe(false);
+  expect(written.some((text) => text.includes('admission resumed'))).toBe(
+    false,
+  );
 });
 
 test('ambiguous container spawn failure verifies the exact id before refusing release', async () => {
