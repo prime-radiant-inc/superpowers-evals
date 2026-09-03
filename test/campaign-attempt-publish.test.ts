@@ -2,10 +2,12 @@ import { expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -151,6 +153,60 @@ test('publish rejects run-id and expected attempt-id mismatches', () => {
     ).toBe(true);
   } finally {
     clean(attemptPaths);
+  }
+});
+
+test('publish rejects an unexpected allocated run before moving staging', () => {
+  const paths = staged('run-pub-correlated');
+  try {
+    expect(() =>
+      publishAttempt({
+        ...paths,
+        expectedAttemptId: expectedAttemptId(),
+        expectedRunId: 'run-pub-observed',
+      }),
+    ).toThrow(/disagrees with the journaled allocation/);
+    expect(
+      existsSync(join(paths.attemptDir, 'staging', 'run-pub-correlated')),
+    ).toBe(true);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-correlated'))).toBe(
+      false,
+    );
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish does not retry or overwrite after the post-rename fsync cut', () => {
+  const paths = staged('run-pub-fsync-cut');
+  let renameCount = 0;
+  try {
+    expect(() =>
+      publishAttempt({
+        ...paths,
+        expectedAttemptId: expectedAttemptId(),
+        fsOps: {
+          renameSync: (oldPath, newPath) => {
+            renameCount += 1;
+            renameSync(oldPath, newPath);
+          },
+          openSync,
+          fsyncSync: () => {
+            throw new Error('simulated post-rename fsync cut');
+          },
+          closeSync,
+        },
+      }),
+    ).toThrow(/publication directory sync failed/);
+    expect(renameCount).toBe(1);
+    expect(
+      existsSync(join(paths.resultsRoot, 'run-pub-fsync-cut', 'verdict.json')),
+    ).toBe(true);
+    expect(
+      existsSync(join(paths.attemptDir, 'staging', 'run-pub-fsync-cut')),
+    ).toBe(false);
+  } finally {
+    clean(paths);
   }
 });
 
