@@ -350,6 +350,7 @@ function harness(
     publishAttempt?: DispatchRunArgs['publishAttempt'];
     failContentionAppend?: boolean;
     pauseOnBlockReplacement?: boolean;
+    pauseOnContentionResolution?: boolean;
   } = {},
 ): {
   args: DispatchRunArgs;
@@ -379,7 +380,8 @@ function harness(
   if (
     opts.traceJournal !== true &&
     opts.failContentionAppend !== true &&
-    opts.pauseOnBlockReplacement !== true
+    opts.pauseOnBlockReplacement !== true &&
+    opts.pauseOnContentionResolution !== true
   )
     writer.release();
   const spawner = new RecordingContainerSpawner();
@@ -397,6 +399,14 @@ function harness(
       }
       if (
         opts.pauseOnBlockReplacement === true &&
+        !pausedBlockReplacement &&
+        inputs.some((input) => input.type === 'block_replaced')
+      ) {
+        pausedBlockReplacement = true;
+        throw Object.assign(new Error('simulated ENOSPC'), { code: 'ENOSPC' });
+      }
+      if (
+        opts.pauseOnContentionResolution === true &&
         !pausedBlockReplacement &&
         inputs.some((input) => input.type === 'block_replaced')
       ) {
@@ -442,7 +452,8 @@ function harness(
     stream: { write: () => {} },
     ...(opts.traceJournal === true ||
     opts.failContentionAppend === true ||
-    opts.pauseOnBlockReplacement === true
+    opts.pauseOnBlockReplacement === true ||
+    opts.pauseOnContentionResolution === true
       ? { journal }
       : {}),
     installSignals: () => () => {},
@@ -1002,6 +1013,57 @@ test('contention verified container death cleans the stage after durable resolut
   ).toBe(true);
   signal?.('SIGTERM');
   await run;
+});
+
+test('contention resolution retains stage when ENOSPC retry lands while paused', async () => {
+  const h = harness({ pauseOnContentionResolution: true });
+  const written: string[] = [];
+  writeContentionSidecar(h.campaignDir);
+  let hooks: DispatchSamplerHooks | null = null;
+  const run = runCampaignDispatch({
+    ...h.args,
+    stream: { write: (text: string) => written.push(text) },
+    sampler: {
+      start(captured: DispatchSamplerHooks): () => void {
+        hooks = captured;
+        return () => {};
+      },
+    } satisfies DispatchSamplerSeam,
+  });
+  (h.args.clock as FakeClock).advance(1);
+  await settleMicrotasks();
+  hooks!.onBreachEntry(['load1_per_core']);
+  hooks!.onBreachExit({
+    startTsMs: 2020,
+    endTsMs: 2060,
+    metrics: ['load1_per_core'],
+  });
+  await settleMicrotasks();
+  (h.args.clock as FakeClock).advance(301);
+  await settleMicrotasks();
+  const outcome = await run;
+  expect(outcome.status).toBe('storage_paused');
+  expect(
+    events(h.campaignDir).some((event) => event.type === 'storage_paused'),
+  ).toBe(true);
+  expect(
+    events(h.campaignDir).some((event) => event.type === 'block_replaced'),
+  ).toBe(true);
+  const initialAttempts = [...h.spawner.attempts.values()].filter((attempt) =>
+    attempt.attemptDir.includes(':r1'),
+  );
+  expect(initialAttempts).toHaveLength(2);
+  expect(
+    initialAttempts.every((attempt) =>
+      existsSync(join(attempt.attemptDir, '.stage')),
+    ),
+  ).toBe(true);
+  expect(written.some((text) => text.includes('contention resolution:'))).toBe(
+    false,
+  );
+  expect(written.some((text) => text.includes('admission resumed'))).toBe(
+    false,
+  );
 });
 
 test('contention retains stages when the durable resolution append fails', async () => {
