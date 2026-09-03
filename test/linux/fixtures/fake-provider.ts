@@ -17,8 +17,8 @@ interface JsonObject {
 }
 
 interface Message extends JsonObject {
-  readonly role: string;
-  readonly content?: unknown;
+  readonly role: 'user' | 'assistant';
+  readonly content: string | readonly unknown[];
 }
 
 interface ToolUseResponse {
@@ -30,27 +30,87 @@ function isJsonObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function messagesFrom(body: JsonObject): readonly Message[] {
-  const messages = body['messages'];
-  if (!Array.isArray(messages)) {
-    return [];
+function isToolResultContent(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return true;
   }
-  return messages.filter((message): message is Message => {
-    return isJsonObject(message) && typeof message['role'] === 'string';
-  });
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (block) => isJsonObject(block) && typeof block['type'] === 'string',
+    )
+  );
+}
+
+function isContentBlock(value: unknown): value is JsonObject {
+  if (!isJsonObject(value) || typeof value['type'] !== 'string') {
+    return false;
+  }
+  switch (value['type']) {
+    case 'text':
+      return typeof value['text'] === 'string';
+    case 'tool_use':
+      return (
+        typeof value['id'] === 'string' &&
+        typeof value['name'] === 'string' &&
+        isJsonObject(value['input'])
+      );
+    case 'tool_result':
+      return (
+        typeof value['tool_use_id'] === 'string' &&
+        isToolResultContent(value['content'])
+      );
+    default:
+      return true;
+  }
+}
+
+function isMessage(value: unknown): value is Message {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const role = value['role'];
+  const content = value['content'];
+  return (
+    (role === 'user' || role === 'assistant') &&
+    ((typeof content === 'string' && content.length > 0) ||
+      (Array.isArray(content) &&
+        content.length > 0 &&
+        content.every(isContentBlock)))
+  );
+}
+
+function messagesFrom(body: JsonObject): readonly Message[] | undefined {
+  const messages = body['messages'];
+  if (
+    !Array.isArray(messages) ||
+    messages.length === 0 ||
+    !messages.every(isMessage)
+  ) {
+    return undefined;
+  }
+  return messages as Message[];
 }
 
 function toolsFrom(body: JsonObject): readonly string[] | undefined {
   const tools = body['tools'];
-  if (!Array.isArray(tools)) {
+  if (!Array.isArray(tools) || tools.length === 0) {
     return undefined;
   }
-  return tools.flatMap((tool) => {
-    if (!isJsonObject(tool) || typeof tool['name'] !== 'string') {
-      return [];
+  const names: string[] = [];
+  for (const tool of tools) {
+    if (
+      !isJsonObject(tool) ||
+      typeof tool['name'] !== 'string' ||
+      tool['name'].length === 0 ||
+      !isJsonObject(tool['input_schema'])
+    ) {
+      return undefined;
     }
-    return [tool['name']];
-  });
+    names.push(tool['name']);
+  }
+  return names;
 }
 
 function hasToolResultBatch(message: Message): boolean {
@@ -72,6 +132,9 @@ function toolResultBatchCount(messages: readonly Message[]): number {
 
 function inferredTurn(body: JsonObject): number | undefined {
   const messages = messagesFrom(body);
+  if (messages === undefined) {
+    return undefined;
+  }
   const assistantTurns = assistantTurnCount(messages);
   const toolResultBatches = toolResultBatchCount(messages);
   if (assistantTurns !== toolResultBatches) {
@@ -99,7 +162,7 @@ function textFromContent(content: unknown): string {
 }
 
 function toolResultText(body: JsonObject): string {
-  return messagesFrom(body)
+  return (messagesFrom(body) ?? [])
     .flatMap((message) => {
       if (message['role'] !== 'user' || !Array.isArray(message['content'])) {
         return [];
@@ -122,7 +185,7 @@ function launcherPathFrom(body: JsonObject): string | undefined {
 }
 
 function conversationFingerprint(body: JsonObject): string {
-  const messages = messagesFrom(body);
+  const messages = messagesFrom(body) ?? [];
   const firstUserMessage = messages.find(
     (message) => message['role'] === 'user',
   );
@@ -199,11 +262,15 @@ function responseFor(body: JsonObject): Response {
   const messages = messagesFrom(body);
   const turn = inferredTurn(body);
   const toolNames = toolsFrom(body);
-  const inputTokens = 100 + messages.length * 10;
+  const inputTokens = 100 + (messages?.length ?? 0) * 10;
   const outputTokens = 20 + (turn ?? 1);
   const idNumber = Math.max(turn ?? 1, 1);
 
-  if (toolNames?.length === 1 && toolNames[0] === 'report_result') {
+  if (
+    messages !== undefined &&
+    toolNames?.length === 1 &&
+    toolNames[0] === 'report_result'
+  ) {
     return reportResult('pass', inputTokens, outputTokens, idNumber);
   }
   if (turn === 1 && toolNames?.includes('read')) {

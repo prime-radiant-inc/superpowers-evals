@@ -66,6 +66,11 @@ type AnthropicConstructor = new (options: {
   readonly baseURL: string;
 }) => AnthropicClient;
 
+interface SdkRuntime {
+  readonly resolve: () => string;
+  readonly load: (resolvedPath: string) => unknown;
+}
+
 type FakeProvider = ReturnType<typeof startFakeProvider>;
 
 const ALL_TOOLS = [
@@ -157,23 +162,55 @@ function anthropicConstructor(
   return undefined;
 }
 
-function makeAnthropicClient(baseUrl: string): AnthropicClient | undefined {
-  try {
-    const loaded = nodeRequire('@anthropic-ai/sdk') as unknown;
-    const Constructor = anthropicConstructor(loaded);
-    return Constructor === undefined
-      ? undefined
-      : new Constructor({ apiKey: GRADER_API_KEY, baseURL: baseUrl });
-  } catch {
-    return undefined;
+function isMissingAnthropicSdk(error: unknown): boolean {
+  if (!isRecord(error)) {
+    return false;
   }
+  const message = error['message'];
+  const code = error['code'];
+  const name = error['name'];
+  return (
+    typeof message === 'string' &&
+    message.includes("Cannot find module '@anthropic-ai/sdk'") &&
+    (code === 'MODULE_NOT_FOUND' || name === 'ResolveMessage')
+  );
 }
 
-function makeTransport(baseUrl: string): {
+const defaultSdkRuntime: SdkRuntime = {
+  resolve: () => nodeRequire.resolve('@anthropic-ai/sdk'),
+  load: (resolvedPath) => nodeRequire(resolvedPath),
+};
+
+function makeAnthropicClient(
+  baseUrl: string,
+  sdkRuntime: SdkRuntime,
+): AnthropicClient | undefined {
+  let resolvedPath: string;
+  try {
+    resolvedPath = sdkRuntime.resolve();
+  } catch (error) {
+    if (isMissingAnthropicSdk(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+  const Constructor = anthropicConstructor(sdkRuntime.load(resolvedPath));
+  if (Constructor === undefined) {
+    throw new Error(
+      '@anthropic-ai/sdk did not expose an Anthropic constructor',
+    );
+  }
+  return new Constructor({ apiKey: GRADER_API_KEY, baseURL: baseUrl });
+}
+
+function makeTransport(
+  baseUrl: string,
+  sdkRuntime: SdkRuntime = defaultSdkRuntime,
+): {
   readonly usesSdk: boolean;
   readonly send: (body: MessagesRequest) => Promise<ToolResponse>;
 } {
-  const client = makeAnthropicClient(baseUrl);
+  const client = makeAnthropicClient(baseUrl, sdkRuntime);
   if (client !== undefined) {
     return {
       usesSdk: true,
@@ -198,6 +235,74 @@ function makeTransport(baseUrl: string): {
     },
   };
 }
+
+const makeTransportWithSdkRuntime = makeTransport;
+
+test('uses fetch only for a genuinely missing Anthropic SDK module', () => {
+  const missingError = Object.assign(
+    new Error("Cannot find module '@anthropic-ai/sdk'"),
+    { code: 'MODULE_NOT_FOUND' },
+  );
+  const missingSdk = makeTransportWithSdkRuntime('http://127.0.0.1:1', {
+    resolve: () => {
+      throw missingError;
+    },
+    load: () => {
+      throw new Error('the missing SDK loader must not run');
+    },
+  });
+  expect(missingSdk.usesSdk).toBe(false);
+
+  const unrelatedMissingError = Object.assign(
+    new Error("Cannot find module '@other/provider'"),
+    { code: 'MODULE_NOT_FOUND' },
+  );
+  expect(() =>
+    makeTransportWithSdkRuntime('http://127.0.0.1:1', {
+      resolve: () => {
+        throw unrelatedMissingError;
+      },
+      load: () => {
+        throw new Error('the unrelated missing loader must not run');
+      },
+    }),
+  ).toThrow("Cannot find module '@other/provider'");
+});
+
+test('does not hide non-resolution SDK import, export, or request failures', async () => {
+  const importError = new Error('SDK import failed after resolution');
+  expect(() =>
+    makeTransportWithSdkRuntime('http://127.0.0.1:1', {
+      resolve: () => '/fake/anthropic-sdk.js',
+      load: () => {
+        throw importError;
+      },
+    }),
+  ).toThrow('SDK import failed after resolution');
+
+  expect(() =>
+    makeTransportWithSdkRuntime('http://127.0.0.1:1', {
+      resolve: () => '/fake/anthropic-sdk.js',
+      load: () => ({}),
+    }),
+  ).toThrow(/Anthropic constructor/);
+
+  const requestError = new Error('SDK request failed after construction');
+  class BrokenRequestAnthropic {
+    readonly messages = {
+      create: async (): Promise<unknown> => {
+        throw requestError;
+      },
+    };
+  }
+  const transport = makeTransportWithSdkRuntime('http://127.0.0.1:1', {
+    resolve: () => '/fake/anthropic-sdk.js',
+    load: () => ({ default: BrokenRequestAnthropic }),
+  });
+  await expect(
+    transport.send(makeRequest('sdk-request-error')),
+  ).rejects.toThrow('SDK request failed after construction');
+});
 
 function makeRequest(
   label: string,
@@ -431,6 +536,35 @@ test('uses report_result for the grace turn and for unrecognized tool shapes', a
     const records = readRecords(recordPath);
     expect(records).toHaveLength(2);
     expectRecordedHeaders(records);
+  });
+});
+
+test('treats malformed messages and tool entries as unrecognized shapes', async () => {
+  await withProvider(async (provider) => {
+    const transport = makeTransport(provider.url.toString());
+    const malformedMessages = {
+      ...makeRequest('malformed-messages'),
+      messages: [{ role: 'user' }] as unknown as Message[],
+    };
+    const messageFallback = await transport.send(malformedMessages);
+    expectToolResponse(messageFallback, 'report_result', {
+      status: 'investigate',
+      summary: expect.any(String),
+      observations: [],
+      reasoning: expect.any(String),
+    });
+
+    const malformedTools = {
+      ...makeRequest('malformed-tools'),
+      tools: [makeTool('report_result'), {}] as ToolDefinition[],
+    };
+    const toolFallback = await transport.send(malformedTools);
+    expectToolResponse(toolFallback, 'report_result', {
+      status: 'investigate',
+      summary: expect.any(String),
+      observations: [],
+      reasoning: expect.any(String),
+    });
   });
 });
 
