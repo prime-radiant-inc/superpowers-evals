@@ -64,6 +64,9 @@ const LIVE_COMPLETION_POST_EXIT_GRACE_MS = 30_000;
 const CANCEL_GRACE_MS = 120_000;
 const CANCEL_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TRUSTED_PATH = '/usr/local/bin:/usr/bin:/bin';
+const DETACHED_SPAWN_FAILURE_MESSAGE = 'detached worker spawn failed';
+const DETACHED_UNSAFE_PID_MESSAGE =
+  'detached worker did not return a safe host pid';
 
 export interface LiveProcessInfo {
   readonly host_pid: number | null;
@@ -758,7 +761,7 @@ function markFailed(
 ): void {
   try {
     const current = readJob(loaded, jobId);
-    if (isTerminal(current.status)) {
+    if (current.status === 'stopping' || isTerminal(current.status)) {
       return;
     }
     updateJob(loaded, jobId, (job) => ({
@@ -1212,7 +1215,7 @@ await dispatchDetachedWorker(loaded, jobId);
         new ApplianceError(
           'config_invalid',
           'spawn',
-          'detached worker reported an asynchronous spawn failure',
+          DETACHED_SPAWN_FAILURE_MESSAGE,
         ),
       );
     });
@@ -1221,17 +1224,24 @@ await dispatchDetachedWorker(loaded, jobId);
       throw new ApplianceError(
         'config_invalid',
         'spawn',
-        'detached worker did not return a safe host pid',
+        DETACHED_UNSAFE_PID_MESSAGE,
       );
     }
     child.unref();
     return { host_pid: pid, host_pgid: pid };
   } catch (error) {
-    if (error instanceof ApplianceError) throw error;
+    if (
+      error instanceof ApplianceError &&
+      error.code === 'config_invalid' &&
+      error.step === 'spawn' &&
+      error.message === DETACHED_UNSAFE_PID_MESSAGE
+    ) {
+      throw error;
+    }
     throw new ApplianceError(
       'config_invalid',
       'spawn',
-      `detached worker spawn failed: ${error instanceof Error ? error.message : String(error)}`,
+      DETACHED_SPAWN_FAILURE_MESSAGE,
     );
   } finally {
     if (stdoutFd !== null) closeSync(stdoutFd);
