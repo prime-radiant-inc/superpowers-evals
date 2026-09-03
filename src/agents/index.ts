@@ -373,6 +373,7 @@ let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
   // (none). Each further adapter's flip is a platform PR carrying the same
   // two-mode live smoke.
   claude: { ref: true, none: true },
+  fake: { ref: false, none: true },
 };
 
 /** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()

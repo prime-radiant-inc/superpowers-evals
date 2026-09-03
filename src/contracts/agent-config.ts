@@ -16,6 +16,7 @@ const KNOWN_RUNTIME_FAMILIES: ReadonlySet<string> = new Set([
   'claude',
   'codex',
   'copilot',
+  'fake',
   'gemini',
   'hermes',
   'kimi',

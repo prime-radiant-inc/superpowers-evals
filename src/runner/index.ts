@@ -50,6 +50,7 @@ import {
   OpenCodeCaptureError,
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
+import { writePrivateFileNoFollow } from '../agents/private-file.ts';
 import { SERF_API_ENV_FILE_NAME } from '../agents/serf.ts';
 import {
   type SuperpowersSpec,
@@ -1785,6 +1786,21 @@ async function runInnerBody(
     substitutions['$CLAUDE_MODEL'] =
       resolvedCredential?.model ?? cfg.model ?? '';
   }
+  if (family === 'fake' && !isRemote) {
+    const fakeEnvFile = join(runHomeDir, '.fake-env');
+    const subjectKey = getEnv('FAKE_SUBJECT_KEY');
+    if (subjectKey === undefined || subjectKey === '') {
+      throw new ProvisionError(
+        'fake subject env var FAKE_SUBJECT_KEY is unset/empty',
+      );
+    }
+    writePrivateFileNoFollow(
+      fakeEnvFile,
+      `FAKE_SUBJECT_KEY=${shellSingleQuote(subjectKey)}\n`,
+    );
+    substitutions['$QUORUM_SUBJECT_FILE'] = fakeEnvFile;
+    substitutions['$QUORUM_SUBJECT_FILE_SH'] = shellSingleQuote(fakeEnvFile);
+  }
   // Per-agent env-file substitutions the runner derives from configDir as
   // deterministic config-dir-relative paths.
   if (cfg.name === 'gemini') {
@@ -1869,7 +1885,7 @@ async function runInnerBody(
     codingAgent: contextDirName(cfg, os),
     runDir,
     substitutions,
-    required: family === 'claude' || family === 'serf',
+    required: family === 'claude' || family === 'serf' || family === 'fake',
     forbiddenPlaceholders,
   });
 
