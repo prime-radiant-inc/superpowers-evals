@@ -115,6 +115,7 @@ import { readQuorumMaxTime } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import { RunnerError, RunStoppedError } from './errors.ts';
 import { gauntletEnvBase } from './gauntlet-env.ts';
+import { writeAttemptManifest } from './manifest.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
 import { collectProvenance } from './provenance.ts';
 import { buildStoppedVerdict } from './stopped.ts';
@@ -1219,6 +1220,9 @@ export async function runScenario(
     join(runDir, 'verdict.json'),
     `${JSON.stringify(identified, null, 2)}\n`,
   );
+  if (a.campaign !== undefined) {
+    writeAttemptManifest(runDir, a.campaign);
+  }
   return { runDir, verdict: identified };
 }
 
