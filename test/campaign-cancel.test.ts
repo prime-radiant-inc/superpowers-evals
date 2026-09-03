@@ -43,6 +43,7 @@ import {
   lockDir,
   NO_LIVE_CHILD,
   publishedCampaign,
+  publishedContainerCampaign,
   WRITER_IDENTITY,
 } from './campaign-recovery-fixtures.ts';
 
@@ -470,6 +471,46 @@ test('resume REFUSES when a journaled process group survives TERM+KILL (live spe
   ).rejects.toThrow(RecoveryError);
   // Nothing was journaled: no rerun re-entry against a still-spending child.
   expect(journaledTypes(dir, 2)).not.toContain('block_replaced');
+});
+
+test('resume REFUSES before mutation when a nonterminal container is unresolved', async () => {
+  const { dir } = publishedContainerCampaign();
+  const loud: string[] = [];
+  await expect(
+    resumeCampaign({
+      campaignDir: dir,
+      credentials: {},
+      evalsCheckout: dir,
+      gauntletCheckout: dir,
+      superpowersCheckout: dir,
+      clock: new FakeClock(1),
+      identity: NO_LIVE_CHILD,
+      lockPath: lockDir('container-resume.d'),
+      stream: { write: (s) => loud.push(s) },
+    }),
+  ).rejects.toThrow(/container.*verified dead|unresolved container/i);
+  expect(journaledTypes(dir, 2)).not.toContain('block_replaced');
+  expect(journaledTypes(dir, 2)).not.toContain('aborted');
+  expect(loud.join('')).toMatch(/recorded, not verified/);
+});
+
+test('post-crash cancel REFUSES before mutation when a nonterminal container is unresolved', async () => {
+  const { dir } = publishedContainerCampaign();
+  const loud: string[] = [];
+  const result = await cancelCampaign({
+    campaignDir: dir,
+    reason: 'operator test',
+    clock: new FakeClock(1),
+    identity: NO_LIVE_CHILD,
+    lockPath: lockDir('container-cancel.d'),
+    stream: { write: (s) => loud.push(s) },
+  });
+  expect(result.cancelled).toBe(false);
+  const types = journaledTypes(dir, 2);
+  expect(types).not.toContain('aborted');
+  expect(types).not.toContain('campaign_cancelled');
+  expect(loud.join('')).toMatch(/container.*not verified/i);
+  expect(loud.join('')).toMatch(/cancel incomplete/);
 });
 
 test('resume REFUSES on an UNSAFE reclamation — identity unknown is not verified death', async () => {

@@ -5,6 +5,7 @@ import {
 } from '../src/contracts/campaign/journal-events.ts';
 
 const containerId = 'a'.repeat(64);
+const containerName = 'quorum-campaign-c1-attempt-a1';
 const imageDigest = `sha256:${'b'.repeat(64)}`;
 
 test('run_allocated container arm round-trips with container identity and grants', () => {
@@ -15,6 +16,7 @@ test('run_allocated container arm round-trips with container identity and grants
     payload: {
       attempt_id: 'c1:s:arm_a:r1:a1',
       run_id: 'run-1',
+      container_name: containerName,
       container_id: containerId,
       image_digest: imageDigest,
       key_grants: [
@@ -24,6 +26,7 @@ test('run_allocated container arm round-trips with container identity and grants
     },
   });
   expect('pgid' in parsed.payload).toBe(false);
+  expect(parsed.payload).toHaveProperty('container_name', containerName);
   expect(readRunAllocatedGrants(parsed.payload)).toEqual([
     { role: 'subject', env: 'SUBJECT_KEY' },
     { role: 'grader', env: 'QUORUM_GRADER_API_KEY' },
@@ -44,6 +47,19 @@ test('run_allocated container arm rejects malformed identity in every field', ()
         attempt_id: 'a',
         run_id: 'r',
         container_id: 'XYZ',
+        image_digest: imageDigest,
+        key_grants: [],
+      },
+    }),
+  ).toThrow();
+  // container_name is the canonical durable Docker identity and is required
+  expect(() =>
+    RunAllocatedEvent.parse({
+      ...base,
+      payload: {
+        attempt_id: 'a',
+        run_id: 'r',
+        container_id: containerId,
         image_digest: imageDigest,
         key_grants: [],
       },
@@ -88,6 +104,23 @@ test('run_allocated container arm rejects malformed identity in every field', ()
         key_grants: [
           { role: 'subject', env: 'A' },
           { role: 'subject', env: 'B' },
+        ],
+      },
+    }),
+  ).toThrow();
+  // grant names are also unique: two roles cannot share one secret env name
+  expect(() =>
+    RunAllocatedEvent.parse({
+      ...base,
+      payload: {
+        attempt_id: 'a',
+        run_id: 'r',
+        container_name: containerName,
+        container_id: containerId,
+        image_digest: imageDigest,
+        key_grants: [
+          { role: 'subject', env: 'SHARED_KEY' },
+          { role: 'grader', env: 'SHARED_KEY' },
         ],
       },
     }),

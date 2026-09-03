@@ -315,6 +315,9 @@ export interface KillJournaledPgidsReport {
   readonly reclaimedUnsafe: number[];
   /** Signaled but survived TERM+KILL — the caller must refuse to proceed. */
   readonly survived: number[];
+  /** Container allocations whose exact Docker stop/verification seam is not
+   *  available in this recovery path. Callers must refuse to proceed. */
+  readonly unverifiedContainers: UnverifiedContainerRecord[];
   /** Runs whose tmux subject host (gauntlet's private server, which the
    *  group kill never reaches — C10) was killed and VERIFIED gone. */
   readonly subjectHostsKilled: SubjectHostRecord[];
@@ -329,10 +332,27 @@ export interface SubjectHostRecord {
   readonly server: string;
 }
 
+export interface UnverifiedContainerRecord {
+  readonly attempt_id: string;
+  readonly run_id: string;
+  readonly container_name: string;
+  readonly container_id: string;
+  readonly image_digest: string;
+}
+
 /** Every group the report could not prove dead. Both verbs gate on this:
  *  resume refuses to re-admit, cancel refuses to journal a terminal. */
 export function unverifiedGroups(report: KillJournaledPgidsReport): number[] {
   return [...report.survived, ...report.reclaimedUnsafe];
+}
+
+function unverifiedContainerDescriptions(
+  report: KillJournaledPgidsReport,
+): string[] {
+  return report.unverifiedContainers.map(
+    (container) =>
+      `${container.container_name} (id ${container.container_id}, attempt ${container.attempt_id}, run ${container.run_id})`,
+  );
 }
 
 /** Every tmux subject host the report could not prove gone, named for the
@@ -394,6 +414,7 @@ export async function killJournaledPgids(args: {
   const reclaimedBenign: number[] = [];
   const reclaimedUnsafe: number[] = [];
   const survived: number[] = [];
+  const unverifiedContainers: UnverifiedContainerRecord[] = [];
   const subjectHostsKilled: SubjectHostRecord[] = [];
   const subjectHostsSurvived: SubjectHostRecord[] = [];
   /** A reclamation is BENIGN only when no campaign child can still be
@@ -541,6 +562,13 @@ export async function killJournaledPgids(args: {
       stream.write(
         `run_allocated ${event.payload.attempt_id} journaled a container handle (${event.payload.container_id}) — container stop seam not injected; recorded, not verified\n`,
       );
+      unverifiedContainers.push({
+        attempt_id: event.payload.attempt_id,
+        run_id: event.payload.run_id,
+        container_name: event.payload.container_name,
+        container_id: event.payload.container_id,
+        image_digest: event.payload.image_digest,
+      });
       continue;
     }
     await disposeGroup(event.payload.pgid, attemptId);
@@ -576,6 +604,7 @@ export async function killJournaledPgids(args: {
     reclaimedBenign,
     reclaimedUnsafe,
     survived,
+    unverifiedContainers,
     subjectHostsKilled,
     subjectHostsSurvived,
   };
@@ -2113,6 +2142,14 @@ export async function resumeCampaign(
           )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — they may still be spending; identify and kill them by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
         );
       }
+      const unverifiedContainers = unverifiedContainerDescriptions(killReport);
+      if (unverifiedContainers.length > 0) {
+        throw new RecoveryError(
+          `resume refused: container(s) ${unverifiedContainers.join(
+            ', ',
+          )} could not be verified dead — the container stop seam is not injected; they may still be spending; stop and inspect each exact container by hand, then re-run \`quorum campaign run\`; nothing was journaled and nothing was admitted`,
+        );
+      }
       // The same precondition for the subject the group never held (C10):
       // a tmux host that outlived kill-server is still spending.
       const unverifiedHosts = unverifiedSubjectHosts(killReport);
@@ -2712,6 +2749,15 @@ export async function cancelCampaign(args: CancelArgs): Promise<CancelResult> {
         `cancel: process group(s) ${unverified.join(
           ', ',
         )} could not be verified dead (${killReport.survived.length} survived TERM+KILL, ${killReport.reclaimedUnsafe.length} reclaimed without a verifiable identity) — operator action: identify and kill them by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
+      );
+      return { cancelled: false, postCrash: true };
+    }
+    const unverifiedContainers = unverifiedContainerDescriptions(killReport);
+    if (unverifiedContainers.length > 0) {
+      stream.write(
+        `cancel: container(s) ${unverifiedContainers.join(
+          ', ',
+        )} could not be verified dead — the container stop seam is not injected; operator action: stop and inspect each exact container by hand, then re-run \`quorum campaign cancel\`; cancel incomplete (campaign_cancelled NOT journaled), the cancel-request marker stays, and the campaign may still be spending\n`,
       );
       return { cancelled: false, postCrash: true };
     }

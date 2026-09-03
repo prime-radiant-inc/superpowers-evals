@@ -279,6 +279,43 @@ export function publishedCampaign(options: PublishedOptions = {}): {
   return { dir, doc };
 }
 
+/** A published campaign with a nonterminal container allocation. The
+ * container identity is intentionally unresolved so resume/cancel must stop
+ * before journaling a terminal or admitting a replacement. */
+export function publishedContainerCampaign(): {
+  dir: string;
+  doc: Campaign;
+} {
+  const fx = publishedCampaign({ inFlight: false });
+  const w = electWriter({
+    campaignDir: fx.dir,
+    clock: new FakeClock(0),
+    identity: WRITER_IDENTITY,
+    campaign: fx.doc,
+  });
+  w.appendEvent({
+    type: 'block_admitted',
+    payload: { block_id: BLOCK_A, pools: ['p'] },
+  });
+  w.appendEvent({
+    type: 'attempt_created',
+    payload: { sample_id: SAMPLE_A, attempt_id: 'container-a1' },
+  });
+  w.appendEvent({
+    type: 'run_allocated',
+    payload: {
+      attempt_id: 'container-a1',
+      run_id: 'container-run-1',
+      container_name: 'quorum-campaign-c1-attempt-a1',
+      container_id: 'a'.repeat(64),
+      image_digest: `sha256:${'b'.repeat(64)}`,
+      key_grants: [],
+    },
+  });
+  w.release();
+  return fx;
+}
+
 export function journaledTypes(dir: string, atSeconds: number): string[] {
   const r = electWriter({
     campaignDir: dir,
