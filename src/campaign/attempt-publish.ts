@@ -37,6 +37,73 @@ function existingPath(path: string): ReturnType<typeof lstatSync> | undefined {
   }
 }
 
+function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
+  const listedFiles = new Set(listedPaths);
+  const listedDirectories = new Set<string>();
+  for (const listedPath of listedPaths) {
+    const components = listedPath.split('/');
+    components.pop();
+    let directory = '';
+    for (const component of components) {
+      directory =
+        directory.length === 0 ? component : `${directory}/${component}`;
+      listedDirectories.add(directory);
+    }
+  }
+
+  const walk = (directory: string, prefix: string): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(directory);
+    } catch (error: unknown) {
+      throw refusal(
+        `artifact inventory read failed for ${prefix || '.'}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    for (const entry of entries) {
+      const relativePath = prefix.length === 0 ? entry : `${prefix}/${entry}`;
+      const fullPath = join(directory, entry);
+      let stats: ReturnType<typeof lstatSync> | undefined;
+      try {
+        stats = existingPath(fullPath);
+      } catch (error: unknown) {
+        throw refusal(
+          `artifact inventory status unavailable for ${relativePath}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (stats === undefined) {
+        throw refusal(`artifact inventory entry disappeared: ${relativePath}`);
+      }
+      if (relativePath === 'manifest.json') {
+        if (stats.isSymbolicLink() || !stats.isFile()) {
+          throw refusal(`manifest is non-regular or symlinked for run`);
+        }
+        continue;
+      }
+      if (listedFiles.has(relativePath)) {
+        if (stats.isSymbolicLink() || !stats.isFile()) {
+          throw refusal(
+            `manifest lists a non-regular or missing artifact: ${relativePath}`,
+          );
+        }
+        continue;
+      }
+      if (listedDirectories.has(relativePath)) {
+        if (stats.isSymbolicLink() || !stats.isDirectory()) {
+          throw refusal(
+            `artifact directory is non-regular or symlinked: ${relativePath}`,
+          );
+        }
+        walk(fullPath, relativePath);
+        continue;
+      }
+      throw refusal(`unlisted artifact refused: ${relativePath}`);
+    }
+  };
+
+  walk(runDir, '');
+}
+
 /** Verify a worker's private attempt output, then atomically publish its run.
  * The worker has already exited before this host-side operation starts; the
  * manifest is therefore the publication boundary for the verified artifacts. */
@@ -111,19 +178,34 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   }
 
   for (const file of manifest.files) {
-    const fullPath = join(runDir, file.path);
+    const components = file.path.split('/');
+    let fullPath = runDir;
     let stats: ReturnType<typeof lstatSync> | undefined;
-    try {
-      stats = existingPath(fullPath);
-    } catch (error: unknown) {
-      throw refusal(
-        `artifact status unavailable for ${file.path}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (stats === undefined || stats.isSymbolicLink() || !stats.isFile()) {
-      throw refusal(
-        `manifest lists a non-regular or missing artifact: ${file.path}`,
-      );
+    for (const [index, component] of components.entries()) {
+      fullPath = join(fullPath, component);
+      try {
+        stats = existingPath(fullPath);
+      } catch (error: unknown) {
+        throw refusal(
+          `artifact status unavailable for ${file.path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (stats === undefined) {
+        throw refusal(
+          `manifest lists a non-regular or missing artifact: ${file.path}`,
+        );
+      }
+      if (index < components.length - 1) {
+        if (stats.isSymbolicLink() || !stats.isDirectory()) {
+          throw refusal(
+            `artifact directory is non-regular or symlinked: ${components.slice(0, index + 1).join('/')}`,
+          );
+        }
+      } else if (stats.isSymbolicLink() || !stats.isFile()) {
+        throw refusal(
+          `manifest lists a non-regular or missing artifact: ${file.path}`,
+        );
+      }
     }
 
     let bytes: Buffer;
@@ -146,6 +228,11 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
       );
     }
   }
+
+  verifyInventory(
+    runDir,
+    manifest.files.map((file) => file.path),
+  );
 
   const destination = join(args.resultsRoot, runId);
   try {

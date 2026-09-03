@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -219,6 +220,71 @@ test('publish rejects tampering, unsafe paths, symlinks, and special files', () 
   }
 });
 
+test('publish rejects a symlinked intermediate path to an external artifact', () => {
+  const paths = staged('run-pub-12', {
+    files: [{ path: 'nested/result.json', body: '{"final":"pass"}\n' }],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-12');
+  const outside = join(paths.attemptDir, 'outside');
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'result.json'), '{"final":"pass"}\n');
+  rmSync(join(runDir, 'nested'), { recursive: true });
+  symlinkSync(outside, join(runDir, 'nested'));
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(AttemptPublishError);
+    expect(existsSync(runDir)).toBe(true);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-12'))).toBe(false);
+    expect(readFileSync(join(outside, 'result.json'), 'utf8')).toBe(
+      '{"final":"pass"}\n',
+    );
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish rejects a size mismatch without moving staging', () => {
+  const paths = staged('run-pub-13');
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-13');
+  writeFileSync(join(runDir, 'verdict.json'), 'short\n');
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(/size mismatch/);
+    expect(existsSync(runDir)).toBe(true);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-13'))).toBe(false);
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish rejects a listed FIFO as a non-regular artifact', () => {
+  const paths = staged('run-pub-14');
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-14');
+  const fifo = join(runDir, 'pipe');
+  rmSync(join(runDir, 'verdict.json'));
+  execFileSync('mkfifo', [fifo]);
+  writeFileSync(
+    join(runDir, 'manifest.json'),
+    JSON.stringify({
+      schema_version: 1,
+      run_id: 'run-pub-14',
+      campaign: identity,
+      files: [{ path: 'pipe', size: 0, sha256: sha('') }],
+    }),
+  );
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(/non-regular/);
+    expect(existsSync(runDir)).toBe(true);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-14'))).toBe(false);
+  } finally {
+    clean(paths);
+  }
+});
+
 test('publish rejects multiple staging entries and an existing destination', () => {
   const multiplePaths = staged('run-pub-8');
   mkdirSync(join(multiplePaths.attemptDir, 'staging', 'run-pub-8b'));
@@ -266,6 +332,22 @@ test('publish rejects a symlinked manifest without moving staging', () => {
     ).toThrow(AttemptPublishError);
     expect(existsSync(runDir)).toBe(true);
     expect(existsSync(join(paths.resultsRoot, 'run-pub-11'))).toBe(false);
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish rejects every unlisted artifact, including a home marker', () => {
+  const paths = staged('run-pub-15');
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-15');
+  mkdirSync(join(runDir, 'home'), { recursive: true });
+  writeFileSync(join(runDir, 'home', 'marker'), 'must not publish\n');
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(AttemptPublishError);
+    expect(existsSync(runDir)).toBe(true);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-15'))).toBe(false);
   } finally {
     clean(paths);
   }
