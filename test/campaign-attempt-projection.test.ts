@@ -1,10 +1,15 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -17,8 +22,12 @@ import {
   removeAttemptStage,
 } from '../src/campaign/attempt-projection.ts';
 
-const SUBJECT = 'subject-secret-value';
+const SUBJECT = "subject value '$tick' `quoted` ;";
 const GRADER = 'grader-secret-value';
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 function projectionFixture(opts: { sharedSecret?: boolean } = {}) {
   const corpus = realpathSync(
@@ -58,7 +67,7 @@ function projectionFixture(opts: { sharedSecret?: boolean } = {}) {
   const grader = opts.sharedSecret === true ? SUBJECT : GRADER;
   writeFileSync(
     join(bundleDir, 'credentials.env'),
-    `SUBJECT_KEY=${SUBJECT}\nQUORUM_GRADER_ANTHROPIC_API_KEY=${grader}\nQUORUM_GRADER_SOURCE_MODE=appliance-scoped\n`,
+    `SUBJECT_KEY=${shellQuote(SUBJECT)}\nQUORUM_GRADER_ANTHROPIC_API_KEY=${shellQuote(grader)}\nQUORUM_GRADER_SOURCE_MODE=appliance-scoped\n`,
   );
   return { corpus, campaignDir, bundleDir, subject: SUBJECT, grader: GRADER };
 }
@@ -79,15 +88,36 @@ function stage(fx: ReturnType<typeof projectionFixture>, attemptId = 'a') {
 test('projection writes exact private files and synthesized identity files', () => {
   const fx = projectionFixture();
   const prepared = stage(fx, 'c1:s:arm_a:r1:a1');
-  expect(readFileSync(prepared.subjectEnvFile, 'utf8')).toBe(
-    `SUBJECT_KEY=${fx.subject}\n`,
+  const sourced = spawnSync(
+    '/bin/bash',
+    [
+      '--noprofile',
+      '--norc',
+      '-c',
+      'set -a; . "$1"; printf "%s" "$SUBJECT_KEY"',
+      'source',
+      prepared.subjectEnvFile,
+    ],
+    { encoding: 'utf8' },
   );
+  expect(sourced.status).toBe(0);
+  expect(sourced.stdout).toBe(fx.subject);
   const graderBody = readFileSync(prepared.graderEnvFile, 'utf8');
   expect(graderBody).toContain('QUORUM_GRADER_SOURCE_MODE=appliance-scoped');
   expect(graderBody).toContain(`QUORUM_GRADER_ANTHROPIC_API_KEY=${fx.grader}`);
   expect(statSync(prepared.subjectEnvFile).mode & 0o777).toBe(0o400);
   expect(statSync(prepared.graderEnvFile).mode & 0o777).toBe(0o400);
+  expect(statSync(prepared.passwdFile).mode & 0o777).toBe(0o644);
+  expect(statSync(prepared.groupFile).mode & 0o777).toBe(0o644);
   expect(statSync(prepared.stageDir).mode & 0o777).toBe(0o700);
+  for (const file of [
+    prepared.subjectEnvFile,
+    prepared.graderEnvFile,
+    prepared.passwdFile,
+    prepared.groupFile,
+  ]) {
+    expect(lstatSync(file).isFile()).toBe(true);
+  }
   expect(existsSync(join(prepared.attemptDir, 'staging'))).toBe(true);
   expect(existsSync(join(prepared.attemptDir, 'home'))).toBe(true);
   expect(readFileSync(prepared.passwdFile, 'utf8')).toContain(
@@ -163,6 +193,41 @@ test('removeAttemptStage removes exactly the stage directory and verifies remova
   expect(existsSync(join(prepared.attemptDir, 'staging'))).toBe(true);
 });
 
+test('removeAttemptStage refuses a swapped stage and preserves the replacement', () => {
+  const fx = projectionFixture();
+  const prepared = stage(fx, 'remove-swap');
+  const replacement = join(fx.campaignDir, 'replacement');
+  mkdirSync(replacement);
+  rmSync(prepared.stageDir, { recursive: true, force: true });
+  symlinkSync(replacement, prepared.stageDir);
+  expect(() => removeAttemptStage(prepared.attemptDir)).toThrow(
+    AttemptProjectionError,
+  );
+  expect(existsSync(replacement)).toBe(true);
+});
+
+test('removeAttemptStage refuses a planted special file', () => {
+  const fx = projectionFixture();
+  const prepared = stage(fx, 'remove-fifo');
+  rmSync(prepared.stageDir, { recursive: true, force: true });
+  expect(spawnSync('mkfifo', [prepared.stageDir]).status).toBe(0);
+  expect(() => removeAttemptStage(prepared.attemptDir)).toThrow(
+    AttemptProjectionError,
+  );
+  expect(lstatSync(prepared.stageDir).isFIFO()).toBe(true);
+});
+
+test('removeAttemptStage refuses an attempt boundary symlink', () => {
+  const fx = projectionFixture();
+  const outside = join(fx.campaignDir, 'outside-attempt');
+  const attemptDir = join(fx.campaignDir, 'attempts', 'boundary');
+  mkdirSync(outside);
+  mkdirSync(join(fx.campaignDir, 'attempts'));
+  symlinkSync(outside, attemptDir);
+  expect(() => removeAttemptStage(attemptDir)).toThrow(AttemptProjectionError);
+  expect(existsSync(outside)).toBe(true);
+});
+
 test('projection supports a bedrock bearer subject beside the grader aliases', () => {
   const fx = projectionFixture();
   writeFileSync(
@@ -179,7 +244,7 @@ test('projection supports a bedrock bearer subject beside the grader aliases', (
   );
   writeFileSync(
     join(fx.bundleDir, 'credentials.env'),
-    `SUBJECT_BEARER=${fx.subject}\nQUORUM_GRADER_ANTHROPIC_API_KEY=${fx.grader}\n`,
+    `SUBJECT_BEARER=${shellQuote(fx.subject)}\nQUORUM_GRADER_ANTHROPIC_API_KEY=${shellQuote(fx.grader)}\n`,
   );
   const prepared = prepareAttemptStage({
     campaignDir: fx.campaignDir,
@@ -191,9 +256,20 @@ test('projection supports a bedrock bearer subject beside the grader aliases', (
     uid: 1000,
     gid: 1000,
   });
-  expect(readFileSync(prepared.subjectEnvFile, 'utf8')).toBe(
-    `SUBJECT_BEARER=${fx.subject}\n`,
+  const sourced = spawnSync(
+    '/bin/bash',
+    [
+      '--noprofile',
+      '--norc',
+      '-c',
+      'set -a; . "$1"; printf "%s" "$SUBJECT_BEARER"',
+      'source',
+      prepared.subjectEnvFile,
+    ],
+    { encoding: 'utf8' },
   );
+  expect(sourced.status).toBe(0);
+  expect(sourced.stdout).toBe(fx.subject);
 });
 
 test('projection emits every Phase 1 grader alias and applicable routing value', () => {
@@ -201,10 +277,10 @@ test('projection emits every Phase 1 grader alias and applicable routing value',
   writeFileSync(
     join(fx.bundleDir, 'credentials.env'),
     `${[
-      `SUBJECT_KEY=${fx.subject}`,
-      `QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN=${fx.grader}`,
+      `SUBJECT_KEY=${shellQuote(fx.subject)}`,
+      `QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN=${shellQuote(fx.grader)}`,
       'QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN=grader-auth-alias',
-      `QUORUM_GRADER_ANTHROPIC_API_KEY=${fx.grader}-api`,
+      `QUORUM_GRADER_ANTHROPIC_API_KEY=${shellQuote(`${fx.grader}-api`)}`,
       'QUORUM_GRADER_ANTHROPIC_BASE_URL=https://grader.example/v1',
       'HTTPS_PROXY=https://proxy.example',
       'NODE_EXTRA_CA_CERTS=/etc/certs/ca.pem',
@@ -230,7 +306,7 @@ test('projection compares subject material against every alternate grader auth a
   const fx = projectionFixture();
   writeFileSync(
     join(fx.bundleDir, 'credentials.env'),
-    `SUBJECT_KEY=${fx.subject}\nQUORUM_GRADER_ANTHROPIC_AUTH_TOKEN=${fx.subject}\n`,
+    `SUBJECT_KEY=${shellQuote(fx.subject)}\nQUORUM_GRADER_ANTHROPIC_AUTH_TOKEN=${shellQuote(fx.subject)}\n`,
   );
   expect(() => stage(fx, 'alternate-equality')).toThrow(AttemptProjectionError);
   expect(
@@ -278,4 +354,43 @@ test('projection cleans a partial stage after an allowlisted special entry block
   expect(() => stage(fx, 'partial')).toThrow(AttemptProjectionError);
   expect(existsSync(stageDir)).toBe(false);
   expect(readFileSync(target, 'utf8')).toBe('untouched\n');
+});
+
+test('projection refuses an allowlisted FIFO and cleans the pinned stage', () => {
+  const fx = projectionFixture();
+  const attemptDir = join(fx.campaignDir, 'attempts', 'fifo');
+  const stageDir = join(attemptDir, '.stage');
+  mkdirSync(stageDir, { recursive: true });
+  expect(spawnSync('mkfifo', [join(stageDir, 'subject.env')]).status).toBe(0);
+  expect(() => stage(fx, 'fifo')).toThrow(AttemptProjectionError);
+  expect(existsSync(stageDir)).toBe(false);
+});
+
+test('projection refuses a stage displaced during pinned writes', () => {
+  const fx = projectionFixture();
+  const attacker = join(fx.campaignDir, 'attacker-stage');
+  const stolen = join(fx.campaignDir, 'attempts', 'displaced', '.stage-stolen');
+  mkdirSync(attacker);
+  const realOpen = fs.openSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'openSync').mockImplementation(((path, flags, mode) => {
+    if (!swapped && String(path).endsWith('/subject.env')) {
+      swapped = true;
+      const stageDir = join(fx.campaignDir, 'attempts', 'displaced', '.stage');
+      fs.renameSync(stageDir, stolen);
+      fs.symlinkSync(attacker, stageDir);
+    }
+    return realOpen(path, flags, mode);
+  }) as typeof fs.openSync);
+  try {
+    expect(() => stage(fx, 'displaced')).toThrow(AttemptProjectionError);
+  } finally {
+    spy.mockRestore();
+    rmSync(join(fx.campaignDir, 'attempts', 'displaced', '.stage'), {
+      force: true,
+    });
+  }
+  expect(swapped).toBe(true);
+  expect(existsSync(stolen)).toBe(false);
+  expect(readdirSync(attacker)).toEqual([]);
 });

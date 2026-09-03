@@ -60,6 +60,11 @@ export interface LiveCredentialScope {
 
 export type CredentialScope = EmptyCredentialScope | LiveCredentialScope;
 
+export interface ResolvedCredentialSelection {
+  readonly scope: LiveCredentialScope;
+  readonly auth: Credential['auth'];
+}
+
 export const EMPTY_CREDENTIAL_SCOPE: EmptyCredentialScope = {
   schemaVersion: 1,
   kind: 'empty',
@@ -252,10 +257,10 @@ const DELIVERY_BY_FAMILY: Readonly<
  * throws a named credential-scope error; this function never returns an
  * empty or ambiguous scope.
  */
-export function credentialScopeForSelection(
+export function resolveCredentialSelection(
   evalsRoot: string,
   selection: CredentialSelection,
-): LiveCredentialScope {
+): ResolvedCredentialSelection {
   const codingAgentsDir = join(evalsRoot, 'coding-agents');
   const agentCfg = loadAgentOrThrow(codingAgentsDir, selection.agent);
   const family = agentRuntimeFamily(agentCfg);
@@ -290,13 +295,23 @@ export function credentialScopeForSelection(
   }
   const delivery = deliver(credName, credential, family);
   return {
-    schemaVersion: 1,
-    kind: 'live',
-    agent: selection.agent,
-    runtimeFamily: family,
-    credential: credName,
-    agentEnv: delivery.agentEnv,
-    geminiAuthType: delivery.geminiAuthType,
-    oauth: delivery.oauth,
+    auth: credential.auth,
+    scope: {
+      schemaVersion: 1,
+      kind: 'live',
+      agent: selection.agent,
+      runtimeFamily: family,
+      credential: credName,
+      agentEnv: delivery.agentEnv,
+      geminiAuthType: delivery.geminiAuthType,
+      oauth: delivery.oauth,
+    },
   };
+}
+
+export function credentialScopeForSelection(
+  evalsRoot: string,
+  selection: CredentialSelection,
+): LiveCredentialScope {
+  return resolveCredentialSelection(evalsRoot, selection).scope;
 }
