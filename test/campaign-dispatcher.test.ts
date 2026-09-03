@@ -260,7 +260,7 @@ afterAll(() => {
 
 // --- Fake spawner: scripted children --------------------------------------
 class FakeChild {
-  readonly pid: number;
+  readonly handle: { readonly kind: 'process'; readonly pgid: number };
   /** The `--out-root` the dispatcher gave this child. A real campaign child
    *  ALLOCATES its run dir before its first provider token — empty, unpriced
    *  — and only writes the composed verdict, with its economics, at
@@ -287,7 +287,7 @@ class FakeChild {
   private stderrCbs: ((l: string) => void)[] = [];
   private exitCbs: ((i: ChildExitInfo) => void)[] = [];
   constructor(pid: number, outRoot: string | null = null) {
-    this.pid = pid;
+    this.handle = { kind: 'process', pgid: pid };
     this.outRoot = outRoot;
   }
   emitLine(line: string): void {
@@ -328,6 +328,7 @@ class FakeChild {
   }
 }
 class FakeSpawner implements ChildSpawner {
+  readonly kind = 'process' as const;
   readonly spawned: { spec: CampaignChildSpec; child: FakeChild }[] = [];
   failNext = 0; // spawn-failure injection count
   private nextPid = 1000;
@@ -787,7 +788,7 @@ test('admission is atomic per block and capped by the per-sample global cap; rel
   expect(h.spawner.spawned.length).toBe(2); // both samples of b1 spawned
   // Allocate run ids, then hold the children alive: nothing else admits.
   for (const { child } of h.spawner.spawned) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   }
   await tick(h.clock, 1);
   expect(h.spawner.spawned.length).toBe(2); // cap 2 holds the reserve out
@@ -840,7 +841,7 @@ test('a mantle grader credential projects the grader-only alias env into every c
       expect(spec.env['ANTHROPIC_BASE_URL']).toBeUndefined();
     }
     for (const { child } of h.spawner.spawned) {
-      child.emitLine(`run_allocated: run-${child.pid}`);
+      child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     }
     await tick(h.clock, 1);
     for (const { child } of h.spawner.spawned)
@@ -863,7 +864,7 @@ test('every campaign child inherits the dispatcher TMUX_TMPDIR so the subject-ho
       expect(spec.env['TMUX_TMPDIR']).toBe('/fixture/tmux-sockets');
     }
     for (const { child } of h.spawner.spawned) {
-      child.emitLine(`run_allocated: run-${child.pid}`);
+      child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     }
     await tick(h.clock, 1);
     for (const { child } of h.spawner.spawned)
@@ -887,7 +888,7 @@ test('a dispatcher without TMUX_TMPDIR spawns children without one (both fall ba
       expect('TMUX_TMPDIR' in spec.env).toBe(false);
     }
     for (const { child } of h.spawner.spawned) {
-      child.emitLine(`run_allocated: run-${child.pid}`);
+      child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     }
     await tick(h.clock, 1);
     for (const { child } of h.spawner.spawned)
@@ -948,12 +949,12 @@ test('longest-expected-first ordering admits the longer block first when the cap
   const admitted = eventsOf(h.campaignDir, 'block_admitted');
   expect(admitted[0]?.payload.block_id).toBe('c1:scn:b1');
   for (const { child } of h.spawner.spawned) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 1); // b1's slots release -> b2 admits + spawns
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await run;
@@ -965,7 +966,7 @@ test('429 cooldown: classified stderr pools the block, waits the clamped cooldow
   await tick(h.clock, 1);
   const [first] = h.spawner.spawned;
   first!.child.emitStderr('{"type":"rate_limit_error"} retry-after: 30');
-  first!.child.emitLine(`run_allocated: run-${first!.child.pid}`);
+  first!.child.emitLine(`run_allocated: run-${first!.child.handle.pgid}`);
   first!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   // pool_blocked journaled for the subject pool, until = now + 30s.
@@ -973,14 +974,14 @@ test('429 cooldown: classified stderr pools the block, waits the clamped cooldow
   expect(blocked).toBeDefined();
   expect(blocked!.payload.pool_key).toBe('cred_a|anthropic|m'); // poolKey(cred, name): base_url ?? name | api | model
   for (const { child } of h.spawner.spawned.slice(1)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   // The crash-classified first child minted the reserve; its block waits out
   // the pool cooldown, then admits and spawns.
   await tick(h.clock, 31); // past the cooldown
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await run;
@@ -1047,12 +1048,12 @@ test('results root: controller and child resolve ONE absolute path, even when th
   expect(isAbsolute(outRoot!)).toBe(true);
   expect(outRoot).toBe(resolve(relativeResults));
   for (const { child } of h.spawner.spawned) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await run;
@@ -1067,7 +1068,7 @@ test('429 role attribution: an untagged child-stderr 429 cools the SUBJECT pool 
   // anthropic): the text is the subject child's own stderr, so nothing about
   // it is grader evidence.
   first!.child.emitStderr('{"type":"rate_limit_error"} retry-after: 30');
-  first!.child.emitLine(`run_allocated: run-${first!.child.pid}`);
+  first!.child.emitLine(`run_allocated: run-${first!.child.handle.pgid}`);
   first!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   const blocked = eventsOf(h.campaignDir, 'pool_blocked');
@@ -1078,12 +1079,12 @@ test('429 role attribution: an untagged child-stderr 429 cools the SUBJECT pool 
     eventsOf(h.campaignDir, 'instrument_failure').map((e) => e.payload.cause),
   ).toEqual(['subject_rate_limited']);
   for (const { child } of h.spawner.spawned.slice(1)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 31);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await run;
@@ -1094,7 +1095,7 @@ test("429 role attribution: a gauntlet-result 429 is the GRADER's evidence — i
   const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   const [first] = h.spawner.spawned;
-  const runId = `run-${first!.child.pid}`;
+  const runId = `run-${first!.child.handle.pgid}`;
   // The Gauntlet-Agent's own composed result carries the 429 body: grader
   // evidence by provenance, whatever the subject credential looks like.
   const resultDir = join(
@@ -1123,12 +1124,12 @@ test("429 role attribution: a gauntlet-result 429 is the GRADER's evidence — i
   // The clamped retry-after is journaled as the grader pool's cooldown.
   expect(blocked[0]!.payload.until_ts_ms).toBe(blocked[0]!.ts_ms + 30_000);
   for (const { child } of h.spawner.spawned.slice(1)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 31); // past the cooldown: the replacement admits
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -1148,11 +1149,11 @@ test('an allocated child that dies BEFORE composing has no verdict: the exit-cod
   await tick(h.clock, 1);
   const [first] = h.spawner.spawned;
   first!.child.composes = false; // dies before composition
-  first!.child.emitLine(`run_allocated: run-${first!.child.pid}`);
+  first!.child.emitLine(`run_allocated: run-${first!.child.handle.pgid}`);
   first!.child.exit({ code: 137, signal: 'SIGKILL' });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(1)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 1);
@@ -1160,9 +1161,9 @@ test('an allocated child that dies BEFORE composing has no verdict: the exit-cod
   // The run dir exists (it was allocated) but holds no composed verdict, so
   // the cost is unknowable and the campaign fail-stops rather than
   // continuing on a budget position that dropped it.
-  expect(existsSync(join(h.args.resultsRoot!, `run-${first!.child.pid}`))).toBe(
-    true,
-  );
+  expect(
+    existsSync(join(h.args.resultsRoot!, `run-${first!.child.handle.pgid}`)),
+  ).toBe(true);
   expect(outcome.status).toBe('halted');
   expect(outcome.reason).toMatch(/accounting gap/);
   // Classified by the exit-code heuristic, not by a verdict.
@@ -1193,15 +1194,19 @@ async function terminalWithArmA(
   });
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`);
   if (armA.composes === false) {
     childA!.child.composes = false;
   } else if (armA.final !== undefined) {
-    seedCompletedRunDir(h.args.resultsRoot!, `run-${childA!.child.pid}`, {
-      costUsd: 0.25,
-      final: armA.final,
-    });
+    seedCompletedRunDir(
+      h.args.resultsRoot!,
+      `run-${childA!.child.handle.pgid}`,
+      {
+        costUsd: 0.25,
+        final: armA.final,
+      },
+    );
   }
   childA!.child.exit({ code: armA.exitCode, signal: null });
   await tick(h.clock, 1);
@@ -1210,7 +1215,7 @@ async function terminalWithArmA(
   // Any minted reserve admits once slots free; let its children pass so the
   // dispatch settles either way.
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await tick(h.clock, 1);
@@ -1276,8 +1281,8 @@ test('instrument replacement: typed failure mints the reserve (block_replaced FI
   const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`);
   // arm_a fails with a typed instrument cause.
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
@@ -1303,7 +1308,7 @@ test('instrument replacement: typed failure mints the reserve (block_replaced FI
   // The minted reserve admits once slots free; finish its children.
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   await run;
@@ -1385,7 +1390,7 @@ test('budget stop terminalizes the DENIED samples only; a raise admits later blo
   // must leave the artifacts that carry it: 1 + 2 spent, exactly the frozen
   // estimates the budget arithmetic below assumes.
   for (const [i, { child }] of h.spawner.spawned.entries()) {
-    const runId = `run-${child.pid}`;
+    const runId = `run-${child.handle.pgid}`;
     seedCompletedRunDir(h.args.resultsRoot!, runId, {
       costUsd: i === 0 ? 1 : 2,
     });
@@ -1426,7 +1431,7 @@ test('budget stop terminalizes the DENIED samples only; a raise admits later blo
   await tick(clock2, 1);
   expect(spawner2.spawned.length).toBe(2); // b3's pair; nothing for b2
   for (const { child } of spawner2.spawned) {
-    child.emitLine(`run_allocated: s2-run-${child.pid}`);
+    child.emitLine(`run_allocated: s2-run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome2 = await run2;
@@ -1574,7 +1579,7 @@ test('spawn failure: excluded siblings never spawn, one mint + one exhausted adj
   expect(written.join('')).toMatch(/resume: admission resumed/);
   expect(h.spawner.spawned.length).toBe(2); // x1's pair
   for (const { child } of h.spawner.spawned) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -1604,7 +1609,7 @@ test('closed-window contention: breach halts admission, resolution batch mints r
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   expect(hooks).not.toBeNull();
   // The closed window the sampler would hand over (derived from the same
   // sidecar lines above; exit sample already durable).
@@ -1615,7 +1620,7 @@ test('closed-window contention: breach halts admission, resolution batch mints r
   await tick(h.clock, 1); // released slots -> the minted reserve admits + spawns
   expect(h.spawner.spawned.length).toBe(4);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -1647,7 +1652,7 @@ test('signal handling: SIGINT stops admission, kills groups, journals aborted, e
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   expect(signalHandler).not.toBeNull();
   signalHandler!('SIGINT');
   const outcome = await run;
@@ -1669,12 +1674,12 @@ test('exposure journals once at terminal; gating skew breach excludes the block 
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   for (const { child } of h.spawner.spawned)
     child.exit({ code: 0, signal: null });
   await tick(h.clock, 1); // skew decided at block terminal -> the refill admits
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -1717,7 +1722,7 @@ test('operator cancel: the signalled dispatcher journals aborted then campaign_c
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   // `quorum campaign cancel` lands the marker FIRST (O_EXCL, D-12), then
   // signals; the marker's second line carries the operator's reason.
   writeFileSync(
@@ -1768,7 +1773,7 @@ test('snapshot drift at a wave: D-11 in order — halt, kill+abort affected, aut
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   await tick(h.clock, 1); // wave 2: drift -> the full D-11 sequence runs
   expect(repaired).toBe(true);
   const events = journalEvents(h.campaignDir);
@@ -1796,7 +1801,7 @@ test('snapshot drift at a wave: D-11 in order — halt, kill+abort affected, aut
     /resume: admission resumed \(snapshot repaired/,
   );
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -1842,13 +1847,17 @@ test('terminal spend journals the ACTUAL run cost from run artifacts, not the re
   const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`);
   await tick(h.clock, 1);
   // arm_a's run composed a verdict carrying 7.25 in actual economics; arm_b's
   // carries the fixture default. Both spends are ARTIFACT costs — the frozen
   // registration estimates (1 and 2) never reach a spend row.
-  const runDir = join(h.campaignDir, 'results', `run-${childA!.child.pid}`);
+  const runDir = join(
+    h.campaignDir,
+    'results',
+    `run-${childA!.child.handle.pgid}`,
+  );
   mkdirSync(runDir, { recursive: true });
   writeFileSync(
     join(runDir, 'verdict.json'),
@@ -2165,7 +2174,7 @@ test('an unkillable group aborts the cancel sequence: no aborted, no campaign_ca
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   }
   // Operator cancel: marker first, then the signal (D-12).
   writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
@@ -2247,7 +2256,7 @@ test("operator cancel kills each run's tmux subject host after its group and BEF
   });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
     flag: 'wx',
   });
@@ -2256,7 +2265,7 @@ test("operator cancel kills each run's tmux subject host after its group and BEF
   expect(outcome.status).toBe('cancelled');
   expect(host.kills.sort()).toEqual(
     h.spawner.spawned
-      .map(({ child }) => `gauntlet-run-${child.pid}-subject`)
+      .map(({ child }) => `gauntlet-run-${child.handle.pgid}-subject`)
       .sort(),
   );
   const types = journalTypes(h.campaignDir);
@@ -2280,7 +2289,7 @@ test('a tmux subject host that survives kill-server aborts the cancel sequence e
   });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   writeFileSync(join(h.campaignDir, 'cancel-request'), '1000\nstop\n', {
     flag: 'wx',
   });
@@ -2302,24 +2311,24 @@ test('a latched sibling allocation is drained and journaled BEFORE the mint disp
   const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   // childB's allocation line is LATCHED but its callback section has not
   // run (buffered child output): push directly into the latch. The run dir
   // is seeded by hand because that bypass skips the fake child's own
   // allocation — a real child allocates the dir before its first token.
-  seedCompletedRunDir(h.args.resultsRoot!, `run-${childB!.child.pid}`, {
+  seedCompletedRunDir(h.args.resultsRoot!, `run-${childB!.child.handle.pgid}`, {
     costUsd: 0.25,
   });
-  childB!.child.stdout.push(`run_allocated: run-${childB!.child.pid}`);
+  childB!.child.stdout.push(`run_allocated: run-${childB!.child.handle.pgid}`);
   // arm_a fails typed -> the mint must drain childB's allocation first.
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   const allocs = eventsOf(h.campaignDir, 'run_allocated');
   expect(allocs.map((a) => a.payload.run_id)).toContain(
-    `run-${childB!.child.pid}`,
+    `run-${childB!.child.handle.pgid}`,
   );
   const drained = allocs.find(
-    (a) => a.payload.run_id === `run-${childB!.child.pid}`,
+    (a) => a.payload.run_id === `run-${childB!.child.handle.pgid}`,
   );
   const minted = mintRecords(h.campaignDir)[0];
   expect(minted).toBeDefined();
@@ -2335,7 +2344,7 @@ test('a latched sibling allocation is drained and journaled BEFORE the mint disp
   childB!.child.exit({ code: 0, signal: null });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -2362,13 +2371,17 @@ test('evidence arbitration: terminal grader billing exhaustion outranks an earli
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`);
   // Live: an anthropic-shaped 429 -> subject evidence (rank 4), pool block.
   childA!.child.emitStderr('{"type":"rate_limit_error"} retry-after: 30');
   // Terminal: the newest gauntlet result carries OpenAI billing exhaustion
   // (grader context, rank 2) — it must OVERRIDE the live subject match.
-  const runDir = join(h.campaignDir, 'results', `run-${childA!.child.pid}`);
+  const runDir = join(
+    h.campaignDir,
+    'results',
+    `run-${childA!.child.handle.pgid}`,
+  );
   mkdirSync(join(runDir, 'gauntlet-agent', 'results', 'r1'), {
     recursive: true,
   });
@@ -2388,7 +2401,7 @@ test('evidence arbitration: terminal grader billing exhaustion outranks an earli
   childB!.child.exit({ code: 0, signal: null });
   await tick(h.clock, 31);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -2667,7 +2680,7 @@ test('the terminal bundle is atomic: run_completed and its spend + snapshot land
   const run = runCampaignDispatch({ ...h.args, journal });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned) {
-    const runId = `run-${child.pid}`;
+    const runId = `run-${child.handle.pgid}`;
     seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: 0.25 });
     child.emitLine(`run_allocated: ${runId}`);
     child.exit({ code: 0, signal: null });
@@ -2716,7 +2729,7 @@ test('process death inside the terminal bundle leaves a durable PREFIX, not a wh
   const run = runCampaignDispatch({ ...h.args, journal });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned) {
-    const runId = `run-${child.pid}`;
+    const runId = `run-${child.handle.pgid}`;
     seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: 0.25 });
     child.emitLine(`run_allocated: ${runId}`);
     child.exit({ code: 0, signal: null });
@@ -2739,7 +2752,7 @@ test('terminal spend is the ACTUAL cost from the run artifacts, never the regist
   const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned) {
-    const runId = `run-${child.pid}`;
+    const runId = `run-${child.handle.pgid}`;
     // The frozen estimates are 1 and 2 USD; the artifacts say 0.25.
     seedCompletedRunDir(h.args.resultsRoot!, runId, { costUsd: 0.25 });
     child.emitLine(`run_allocated: ${runId}`);
@@ -2762,7 +2775,7 @@ test('an unreadable actual cost FAIL-STOPS: terminal + a durable accounting gap,
   });
   await tick(h.clock, 1);
   const [first] = h.spawner.spawned;
-  const runId = `run-${first!.child.pid}`;
+  const runId = `run-${first!.child.handle.pgid}`;
   // A composed verdict with no priced economics: the terminal is real, the
   // money is not knowable. Fabricating the registration estimate is what
   // R-JRN-12 forbids; continuing on a snapshot that silently drops the cost
@@ -2772,7 +2785,7 @@ test('an unreadable actual cost FAIL-STOPS: terminal + a durable accounting gap,
   first!.child.exit({ code: 0, signal: null });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(1)) {
-    const rid = `run-${child.pid}`;
+    const rid = `run-${child.handle.pgid}`;
     seedCompletedRunDir(h.args.resultsRoot!, rid, { costUsd: 0.25 });
     child.emitLine(`run_allocated: ${rid}`);
     child.exit({ code: 0, signal: null });
@@ -2824,7 +2837,7 @@ test('R-SNS-4 exploratory caveat terminal: an exposure-absent determinate explor
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   for (const { child } of h.spawner.spawned)
     child.exit({ code: 0, signal: null });
   const outcome = await run;
@@ -2878,12 +2891,12 @@ test('R-SNS-4 gating arm untouched: an exposure-absent gating block carries NO c
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   for (const { child } of h.spawner.spawned)
     child.exit({ code: 0, signal: null });
   await tick(h.clock, 1); // block terminal: skew decision -> refill admits
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -2941,7 +2954,7 @@ test('storage pause with an unkillable live child is FATAL: the run rejects nami
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   hooks!.onSampleError(
     Object.assign(new Error('write failed'), { code: 'ENOSPC' }),
   );
@@ -2966,7 +2979,7 @@ test("the delayed-allocation race: a mint waits for a spawned sibling's run_allo
   const run = runCampaignDispatch(h.args);
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   // arm_a fails typed while childB's allocation line has NOT arrived at all
   // (neither latched nor delivered): the mint must not disposition childB
   // from 'admitted' and strand the allocation that is about to arrive.
@@ -2975,11 +2988,11 @@ test("the delayed-allocation race: a mint waits for a spawned sibling's run_allo
   expect(mintRecords(h.campaignDir).length).toBe(0); // the mint is waiting
   expect(eventsOf(h.campaignDir, 'instrument_failure').length).toBe(1);
   // The line lands AFTER the sibling's terminal was processed.
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`);
   await tick(h.clock, 1);
   const allocs = eventsOf(h.campaignDir, 'run_allocated');
   const drained = allocs.filter(
-    (a) => a.payload.run_id === `run-${childB!.child.pid}`,
+    (a) => a.payload.run_id === `run-${childB!.child.handle.pgid}`,
   );
   expect(drained.length).toBe(1); // exactly once
   const minted = mintRecords(h.campaignDir)[0];
@@ -2994,7 +3007,7 @@ test("the delayed-allocation race: a mint waits for a spawned sibling's run_allo
   childB!.child.exit({ code: 0, signal: null });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -3038,14 +3051,14 @@ test('the allocation wait is BOUNDED: a sibling that never allocates within the 
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   expect(mintRecords(h.campaignDir).length).toBe(0); // waiting for childB
   await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1); // budget expires
   for (let i = 0; i < 4; i += 1) await tick(h.clock, 1); // kill escalation
   // The unallocated child was killed (verified) BEFORE its disposition.
-  expect(signals.some((s) => s.pgid === childB!.child.pid)).toBe(true);
+  expect(signals.some((s) => s.pgid === childB!.child.handle.pgid)).toBe(true);
   expect(written.join('')).toMatch(/allocation wait .*expired/);
   expect(written.join('')).toMatch(/verified dead before its disposition/);
   expect(mintRecords(h.campaignDir).length).toBe(1);
@@ -3057,18 +3070,18 @@ test('the allocation wait is BOUNDED: a sibling that never allocates within the 
   // The invariant: a dead child cannot allocate. A synthetic post-death
   // line (impossible in production) is suppressed by the abandoned guard —
   // nothing journaled, nothing fatal, nothing "retained in-memory".
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`);
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`);
   await tick(h.clock, 1);
   expect(
     eventsOf(h.campaignDir, 'run_allocated').some(
-      (a) => a.payload.run_id === `run-${childB!.child.pid}`,
+      (a) => a.payload.run_id === `run-${childB!.child.handle.pgid}`,
     ),
   ).toBe(false);
   expect(written.join('')).not.toMatch(/arrived after its terminal/);
   // The killed child's slot released -> the minted reserve admits.
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -3098,7 +3111,7 @@ test('an UNKILLABLE unallocated sibling refuses the mint loudly and halts admiss
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
@@ -3128,7 +3141,7 @@ test('the allocation wait does NOT hold the control section: a signal during the
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   expect(mintRecords(h.campaignDir).length).toBe(0); // the mint is waiting on childB
@@ -3153,21 +3166,21 @@ test("allocation waits across blocks run concurrently: the second block's line r
   // Both arm_a children allocate and fail typed; both arm_b siblings are
   // still unallocated -> two mints wait, concurrently.
   for (const c of [a1, a2]) {
-    c!.child.emitLine(`run_allocated: run-${c!.child.pid}`);
+    c!.child.emitLine(`run_allocated: run-${c!.child.handle.pgid}`);
     c!.child.exit({ code: 1, signal: null });
   }
   await tick(h.clock, 1);
   expect(mintRecords(h.campaignDir).length).toBe(0);
   // The SECOND block's sibling allocates first: its mint lands while the
   // first block's wait is still open — waits never serialize.
-  b2!.child.emitLine(`run_allocated: run-${b2!.child.pid}`);
+  b2!.child.emitLine(`run_allocated: run-${b2!.child.handle.pgid}`);
   await tick(h.clock, 1);
   const afterB2 = mintRecords(h.campaignDir);
   expect(afterB2.length).toBe(1);
   expect(afterB2[0]!.block_id).toBe('c1:scn:b2');
   // Then the first block's sibling allocates: its obligation resolves too
   // (the cell's only reserve is taken -> reserve_exhausted).
-  b1!.child.emitLine(`run_allocated: run-${b1!.child.pid}`);
+  b1!.child.emitLine(`run_allocated: run-${b1!.child.handle.pgid}`);
   await tick(h.clock, 1);
   expect(
     eventsOf(h.campaignDir, 'adjudication').filter(
@@ -3176,11 +3189,11 @@ test("allocation waits across blocks run concurrently: the second block's line r
   ).toBe(1);
   expect(
     eventsOf(h.campaignDir, 'run_allocated').map((e) => e.payload.run_id),
-  ).toContain(`run-${b1!.child.pid}`);
+  ).toContain(`run-${b1!.child.handle.pgid}`);
   for (const c of [b1, b2]) c!.child.exit({ code: 0, signal: null });
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(4)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -3206,10 +3219,10 @@ test('a deferred re-entry queued behind an operator cancel is dropped AT EXECUTI
   await tick(h.clock, 1);
   const [a1, , a2, b2] = h.spawner.spawned;
   // Two deferred mints, one tick apart: b1's wait expires first.
-  a1!.child.emitLine(`run_allocated: run-${a1!.child.pid}`);
+  a1!.child.emitLine(`run_allocated: run-${a1!.child.handle.pgid}`);
   a1!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
-  a2!.child.emitLine(`run_allocated: run-${a2!.child.pid}`);
+  a2!.child.emitLine(`run_allocated: run-${a2!.child.handle.pgid}`);
   a2!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   expect(mintRecords(h.campaignDir).length).toBe(0);
@@ -3223,7 +3236,7 @@ test('a deferred re-entry queued behind an operator cancel is dropped AT EXECUTI
     flag: 'wx',
   });
   signalHandler!('SIGTERM');
-  b2!.child.emitLine(`run_allocated: run-${b2!.child.pid}`);
+  b2!.child.emitLine(`run_allocated: run-${b2!.child.handle.pgid}`);
   for (let i = 0; i < 10; i += 1) await tick(h.clock, 1);
   const outcome = await run;
   expect(outcome.status).toBe('cancelled');
@@ -3255,7 +3268,7 @@ test('settle-kill releases land in the budget position BEFORE the replacement re
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   await tick(h.clock, ALLOCATION_WAIT_BUDGET_SECONDS + 1);
@@ -3280,7 +3293,7 @@ test('settle-kill releases land in the budget position BEFORE the replacement re
   expect(emptySnapshot!.seq).toBeLessThan(mint!.seq);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -3360,14 +3373,14 @@ test('an older deferred contention resolution never clears a NEWER live breach: 
   });
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`); // childB stays unallocated
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`); // childB stays unallocated
   hooks!.onBreachEntry(['load1_per_core']); // generation 1
   hooks!.onBreachExit(BREACH_WINDOW); // generation 1 closes: deferred on childB
   await tick(h.clock, 1);
   expect(written.join('')).toMatch(/contention resolution deferred/);
   hooks!.onBreachEntry(['load1_per_core']); // a NEWER breach while the old resolution waits
   await tick(h.clock, 1);
-  childB!.child.emitLine(`run_allocated: run-${childB!.child.pid}`); // the old resolution re-enters
+  childB!.child.emitLine(`run_allocated: run-${childB!.child.handle.pgid}`); // the old resolution re-enters
   await tick(h.clock, 1);
   expect(
     mintRecords(h.campaignDir).filter((m) => m.reason === 'contention').length,
@@ -3384,7 +3397,7 @@ test('an older deferred contention resolution never clears a NEWER live breach: 
   expect(written.join('')).toMatch(/admission resumed/);
   expect(h.spawner.spawned.length).toBe(4);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -3402,7 +3415,7 @@ test('settle-killing the last child of a block reaches the pinned block-terminal
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   expect(mintRecords(h.campaignDir).length).toBe(0);
@@ -3417,7 +3430,7 @@ test('settle-killing the last child of a block reaches the pinned block-terminal
   expect(text.split(receipt).length - 1).toBe(1); // exactly once for the block
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned.slice(2)) {
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
     child.exit({ code: 0, signal: null });
   }
   const outcome = await run;
@@ -3444,7 +3457,7 @@ test('replacement path: a settle snapshot that cannot land after the storage pau
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   const [childA] = h.spawner.spawned;
-  childA!.child.emitLine(`run_allocated: run-${childA!.child.pid}`);
+  childA!.child.emitLine(`run_allocated: run-${childA!.child.handle.pgid}`);
   childA!.child.exit({ code: 1, signal: null });
   await tick(h.clock, 1);
   // The budget expires, the sibling is settle-killed, and the E7.7
@@ -3552,7 +3565,7 @@ test('terminal path: a spend snapshot that cannot land after the storage pause S
   await tick(h.clock, 1);
   const [childA, childB] = h.spawner.spawned;
   for (const c of [childA, childB])
-    c!.child.emitLine(`run_allocated: run-${c!.child.pid}`);
+    c!.child.emitLine(`run_allocated: run-${c!.child.handle.pgid}`);
   // arm_a fails typed: its terminal spend bundle hits ENOSPC -> pause; the
   // handler must not go on to resolve the replacement.
   childA!.child.exit({ code: 1, signal: null });
@@ -3658,7 +3671,7 @@ test('terminal path: after the skew_excluded append enters the storage pause, NO
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   for (const { child } of h.spawner.spawned)
     child.exit({ code: 0, signal: null });
   for (let i = 0; i < 4; i += 1) await tick(h.clock, 1);
@@ -3704,7 +3717,7 @@ test('a partially verified kill journals the superseding exposure snapshot even 
   const run = runCampaignDispatch(args);
   await tick(h.clock, 1);
   for (const { child } of h.spawner.spawned)
-    child.emitLine(`run_allocated: run-${child.pid}`);
+    child.emitLine(`run_allocated: run-${child.handle.pgid}`);
   const lastAllocSeq = Math.max(
     ...eventsOf(h.campaignDir, 'run_allocated').map((e) => e.seq),
   );

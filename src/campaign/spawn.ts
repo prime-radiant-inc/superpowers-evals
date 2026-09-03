@@ -12,12 +12,43 @@ import { COVERED_BY_LOCK_ENV } from './locks.ts';
 // production wraps detached process-group-leader spawn (task 6). Journal FDs
 // never reach children (stdio pinning — the Linux matrix asserts it).
 
+export type CampaignChildHandle =
+  | { readonly kind: 'process'; readonly pgid: number }
+  | {
+      readonly kind: 'container';
+      readonly containerId: string;
+      readonly imageDigest: string;
+    };
+
+/** One bind mount the attempt container receives. The complete ordered list
+ * is verified against `docker inspect` before `docker start` — any extra or
+ * missing mount removes the exact container and fails the attempt. */
+export interface AttemptMount {
+  readonly source: string;
+  readonly target: string;
+  readonly mode: 'ro' | 'rw';
+}
+
+/** Container-path spawn context carried on the spec. DetachedChildSpawner
+ * ignores it; ContainerAttemptSpawner requires it. */
+export interface AttemptSpawnContext {
+  readonly attemptId: string;
+  readonly attemptDir: string;
+  readonly stdoutLog: string;
+  readonly stderrLog: string;
+  readonly homeDir: string;
+  readonly entrypoint: string;
+  readonly mounts: readonly AttemptMount[];
+}
+
 export interface CampaignChildSpec {
   readonly command: string;
   readonly args: readonly string[];
   /** Inside the snapshot (R-SPN-8). */
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** Present exactly on the container path. */
+  readonly attempt?: AttemptSpawnContext;
 }
 
 export interface ChildExitInfo {
@@ -26,9 +57,10 @@ export interface ChildExitInfo {
 }
 
 export interface SpawnedCampaignChild {
-  /** The dispatcher validates pgid == pid before journaling run_allocated
-   *  (R-SPN-2); the production spawner guarantees detached setsid. */
-  readonly pid: number;
+  /** Process-or-container discriminated handle: process-group kills and
+   * identity probes apply to 'process' only; container death is verified
+   * by inspecting the exact container ID. */
+  readonly handle: CampaignChildHandle;
   /** Buffered protocol surface: everything observed so far. */
   readonly stdoutLines: readonly string[];
   readonly stderrLines: readonly string[];
@@ -40,6 +72,7 @@ export interface SpawnedCampaignChild {
 }
 
 export interface ChildSpawner {
+  readonly kind: 'process' | 'container';
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild;
 }
 
@@ -73,6 +106,8 @@ export function assertProcessGroupExists(pgid: number): void {
  *  subscribers that register late (C4): a fast child can never lose its
  *  `run_allocated` line or its exit notification. */
 export class DetachedChildSpawner implements ChildSpawner {
+  readonly kind = 'process' as const;
+
   spawn(spec: CampaignChildSpec): SpawnedCampaignChild {
     const child = spawn(spec.command, [...spec.args], {
       cwd: spec.cwd,
@@ -201,7 +236,7 @@ export class DetachedChildSpawner implements ChildSpawner {
       );
     }
     return {
-      pid: child.pid,
+      handle: { kind: 'process' as const, pgid: child.pid },
       get stdoutLines() {
         return [...stdoutLines];
       },
