@@ -137,7 +137,7 @@ evals-appliance campaign run <campaign-id>        (host, quorum-runner)
    |
    +--> job record kind=campaign-run
    |
-   +--> setsid bun src/cli/index.ts campaign run <dir> --worker-image <ref>
+   +--> detached appliance worker: acquires run.lock, runs the controller in-process
                      |
                      v
           campaign controller (unchanged dispatcher, on the host)
@@ -167,28 +167,45 @@ engine is that a spawned child may be a container.
 
 ## Controller placement
 
-The helper's new verb launches the controller on the host exactly as
-`run-all --detach` launches its supervisor today: a `setsid` process-group
-leader whose pid is recorded in the job record, with stdout and stderr
-redirected to the job's log files. The command is
-`bun <evals-checkout>/src/cli/index.ts campaign run <campaign-dir>
---worker-image <image-ref>`, run from the evals checkout the wrapper already
-verified clean and on the configured ref.
+The helper's new verb reuses the exact shape `run-all --detach` has today. The
+CLI writes the job record, spawns a detached, unreferenced worker process, and
+returns. That worker, not the CLI and not the job record, acquires `run.lock`
+by creating the lock directory and writing `lock.json` with its own pid, and
+releases it in its `finally`. `status` already decides a job is live by
+checking that `lock.json` names the job and its pid is alive, and `cancel`
+already signals the recorded host process group with SIGINT. Both work
+unchanged for a campaign job.
 
-The verb holds `run.lock` for the controller's lifetime through the same
-mechanism `run-all --detach` uses, and passes `QUORUM_LIVE_SPEND_LOCK` from the
-appliance configuration so the controller contends for the shared host-wide
-live-spend lock. The controller's environment is the wrapper's sanitized
-environment plus those two values; it carries no credential material.
+The campaign worker body differs from the `run-all` body in three ways: it
+takes `run.lock` but never `sync.lock`, because a registered campaign's inputs
+are frozen and no repository sync occurs; it does not create or enter the
+long-lived container; and after the lock it calls the campaign run entry point
+in-process, passing a `ContainerAttemptSpawner` and the attempt-mount builder
+through the dispatcher's existing `spawner` parameter. The controller is
+therefore the worker process itself. SIGINT from `cancel` reaches the
+dispatcher's existing cancellation handling directly.
 
-`--worker-image` selects the container spawner. Without it, `quorum campaign
-run` keeps the process spawner for local development and tests. The raw
-process path is never used on the appliance.
+The controller's environment is the wrapper's sanitized environment plus
+`QUORUM_LIVE_SPEND_LOCK` from the appliance configuration, so it contends for
+the shared host-wide live-spend lock. It carries no credential material.
+
+No new `quorum` CLI flag is added. The raw `quorum campaign run` keeps the
+process spawner for local development and tests; the container executor is
+reachable only through the appliance worker and the integration suite, which
+call the same function.
+
+If the worker is SIGKILLed, `run.lock` is orphaned, exactly as a SIGKILLed
+`run-all` worker orphans it today. There is no stale reclamation on the
+acquire path; `doctor` reports the lock stale and clearing it is a manual
+step. Child 2 adds controller-death reconciliation over the containers; the
+parent already requires that reclaim proves container state first, which is
+consistent with refusing to auto-reclaim here.
 
 The image reference is the tag `scripts/evals-container build` produces from
-`container/Dockerfile`. The verb resolves it to a digest with
-`docker image inspect` before launch and records the digest in the job record.
-The controller records the same digest in every `run_allocated` event.
+`container/Dockerfile`. The worker resolves it to a digest with
+`docker image inspect` before taking `run.lock` and records the digest in the
+job record. The controller records the same digest in every `run_allocated`
+event.
 
 ## Container spawner
 
@@ -428,8 +445,9 @@ evals-appliance campaign run <campaign-id> [--json]
   verification, atomic rename into the results root.
 - `src/runner/manifest.ts`: worker-side manifest writer, invoked from the
   runner's terminal path when a campaign identity is present.
-- `src/appliance/campaign-run.ts`: the verb, job record kind, controller
-  launch.
+- `src/appliance/campaign-run.ts`: the verb, the job record kind, and the
+  detached worker body (image digest, `run.lock`, in-process controller,
+  release).
 - `container/attempt-entrypoint.sh`.
 - `test/campaign-container-spawner.test.ts`,
   `test/campaign-attempt-projection.test.ts`,
@@ -446,12 +464,13 @@ evals-appliance campaign run <campaign-id> [--json]
 - `src/contracts/campaign/journal-events.ts`: additive `run_allocated`
   container payload (`attempt_id`, `run_id`, `container_id`, `image_digest`,
   `key_grants`), strict, alongside the two existing payloads.
-- `src/campaign/dispatcher.ts`: select the spawner from the worker-image
-  option, route `--out-root` to the attempt staging directory, pass the
-  attempt mounts, journal the container payload, publish after exit, and
-  dispatch verified death by handle kind.
+- `src/campaign/dispatcher.ts`: route `--out-root` to the attempt staging
+  directory when the injected spawner is a container spawner, pass the attempt
+  mounts, journal the container payload, publish after exit, and dispatch
+  verified death by handle kind.
 - `src/campaign/recovery.ts`: verified death by handle kind.
-- `src/cli/campaign.ts`: `run --worker-image <ref>`.
+- `src/cli/campaign.ts`: expose the run entry point as a function the
+  appliance worker can call with an injected spawner; no new flag.
 - `src/appliance/cli.ts`: register the `campaign` group and `run` verb.
 - `src/appliance/jobs.ts`: job-record kind `campaign-run`.
 - `docs/appliance-runbook.md`: a `campaign run` section.
@@ -524,9 +543,12 @@ On the appliance, through the helper, with a real subject and grader
 credential:
 
 1. `evals-appliance doctor --json` clean.
-2. Raw host-side `quorum campaign register` of a one-cell, one-sample
-   exploratory suite. This is also the first host-side registration; its
-   snapshot `bun install` must succeed as `quorum-runner`.
+2. Host-side `quorum campaign register` of a one-cell, one-sample
+   exploratory suite, as `quorum-runner`, from the evals checkout, with
+   `GAUNTLET_ROOT=/srv/quorum/gauntlet`, `SUPERPOWERS_ROOT=/srv/quorum/superpowers`,
+   and the blessed bundle's `credentials.env` sourced into that shell so the
+   registration's key-presence check passes. This is the first host-side
+   registration; see "Host-side registration" below.
 3. `evals-appliance campaign run <campaign-id> --json` returns a job ID.
 4. `evals-appliance status <job-id>` shows the controller live; `docker ps`
    shows exactly one `quorum-attempt-*` container with the expected labels.
@@ -550,8 +572,8 @@ Tests precede each production change and the tree is green at every commit:
 4. Credential projection to the stage directory and the mount list.
 5. Dispatcher and recovery routing by handle kind, including container stop.
 6. Worker manifest writer and host publication.
-7. `campaign run --worker-image` in the quorum CLI.
-8. `evals-appliance campaign run` verb and job record.
+7. Run entry point exposed as a function with an injected spawner.
+8. `evals-appliance campaign run` verb, job record, and detached worker body.
 9. Linux Docker integration suite.
 10. Runbook section; live proof; experiment-log entry with the observed
     behaviors child 3 must honor.
@@ -595,20 +617,42 @@ harness with its fake executables. It adds the crash cuts, reconciliation,
 marker-first cancellation, and controller-death paths over exactly those
 objects, and must not change the mount list or the delivery model.
 
-## Open questions
+## Host-side registration
 
-- **`run.lock` for a detached controller.** The verb must hold `run.lock` for
-  the controller's lifetime the way `run-all --detach` does. The exact
-  mechanism was not confirmed in this design pass; the implementation plan
-  must read the `run-all --detach` path and reuse it rather than add a second
-  lock holder.
-- **Host-side registration.** Registration has only been exercised inside the
-  long-lived container. The live proof's step 2 is the first host-side run;
-  if snapshot `bun install` fails as `quorum-runner`, that failure is fixed in
-  this child, not worked around.
-- **Docker init sufficiency.** `--init` uses Docker's bundled `docker-init`.
-  If the integration suite shows it lingering on reparented children, this
-  child ships `tini` in the image explicitly. The parent permits either.
+Registration must run on the host in this child, not inside the long-lived
+container as the Opus 5 campaign's was. A snapshot is a linked git worktree
+whose `.git` file points at the source checkout's `.git/worktrees` by absolute
+path, and its `node_modules` are installed at its absolute path. A snapshot
+registered at `/workspace/evals/campaigns/...` inside the container is not the
+same tree as `/srv/quorum/superpowers-evals/campaigns/...` on the host, and
+the worker mounts the host path.
+
+What registration needs, and whether the host has it:
+
+- `GAUNTLET_ROOT` and `SUPERPOWERS_ROOT` exported. Nothing on the appliance
+  sets them; the operator exports them for the register shell. The three
+  checkouts live at `/srv/quorum/{superpowers-evals,gauntlet,superpowers}`.
+- Write access to all three checkouts' `.git` for `git worktree add`, and to
+  the evals checkout's `campaigns/`. All are owned by `quorum-runner`.
+- `git` with `safe.directory` for the three repos. Present, configured by the
+  bootstrap.
+- `bun install --frozen-lockfile` inside the snapshot's `evals/` and
+  `gauntlet/` trees. Bun is on the host and `quorum-runner`'s Bun cache is
+  under its own `HOME`, so the root-owned-cache failure that hit the Opus 5
+  registration inside the container does not apply. A cold cache fetches from
+  the network, which the host has.
+- Every arm credential's and the grader's `api_key_env` non-empty in the
+  register process's environment. Registration checks presence, never values,
+  but it reads process environment, so the operator sources the blessed
+  bundle's `credentials.env` in the register shell. That is the same material
+  `quorum-runner` already reads, and the shell is not the controller. Child 4
+  replaces this check with validation against the generation manifest.
+
+The worker never needs the snapshot's git metadata for correctness. The
+runner's provenance probes are best-effort and null on failure, so a verdict
+produced in the worker records `superpowers_rev: null`; the campaign's frozen
+arm SHA remains authoritative. The plan records this as expected and child 3's
+self-contained snapshots remove it.
 
 ## Resolved questions
 
@@ -619,7 +663,17 @@ objects, and must not change the mount list or the delivery model.
 - **Who consumes the credential files?** The entrypoint, by shell sourcing,
   exactly as the Phase 1 shim does. Non-shell parsing and Quorum-side
   consumption are child 4.
-- **Separate init binary?** Not unless observed necessary.
+- **Separate init binary?** No. Docker's `--init` is tini 0.19.0. Verified
+  on Docker 29.4: a container whose main process exited while a daemonized
+  orphan still ran exited within one second with the main process's status.
+  The orphan did not hold the container open.
+- **How does a detached controller hold `run.lock`?** The same way a detached
+  `run-all` worker does: the detached worker process creates the lock
+  directory with its own pid and releases it in `finally`; the controller runs
+  inside that process.
+- **Register in the container or on the host?** On the host, because the
+  snapshot's absolute path is the mount path. Prerequisites are enumerated
+  above and all exist on the host.
 - **Where do attempts live?** Under the campaign directory, on the same
   filesystem as `results/`. Namespaces move in child 3.
 - **Does child 1 spend?** Yes, one attempt, for the live proof.
