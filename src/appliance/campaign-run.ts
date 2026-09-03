@@ -12,7 +12,7 @@ import { ApplianceError } from './errors.ts';
 import { readJob, updateJob } from './jobs.ts';
 import { acquireLock, type LockHandle } from './locks.ts';
 import { appendLog } from './process.ts';
-import type { LoadedApplianceConfig } from './types.ts';
+import type { JobRecord, LoadedApplianceConfig } from './types.ts';
 
 export const CAMPAIGN_IMAGE_REF = 'superpowers-evals:local';
 const IMAGE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
@@ -45,6 +45,17 @@ export interface RunCampaignWorkerDeps {
   ) => Promise<number>;
 }
 
+function lifecycleAlreadySettled(status: JobRecord['status']): boolean {
+  return (
+    status === 'stopping' ||
+    status === 'done' ||
+    status === 'failed' ||
+    status === 'cancelled' ||
+    status === 'lost' ||
+    status === 'quarantined'
+  );
+}
+
 function failureRecord(error: unknown): {
   readonly code: ApplianceError['code'];
   readonly step: string;
@@ -64,13 +75,7 @@ function markFailed(
 ): void {
   try {
     updateJob(loaded, jobId, (current) => {
-      if (
-        current.status === 'done' ||
-        current.status === 'failed' ||
-        current.status === 'cancelled' ||
-        current.status === 'lost' ||
-        current.status === 'quarantined'
-      ) {
+      if (lifecycleAlreadySettled(current.status)) {
         return current;
       }
       return {
@@ -92,13 +97,7 @@ function markFailed(
 
 function markReady(loaded: LoadedApplianceConfig, jobId: string): void {
   updateJob(loaded, jobId, (current) => {
-    if (
-      current.status === 'done' ||
-      current.status === 'failed' ||
-      current.status === 'cancelled' ||
-      current.status === 'lost' ||
-      current.status === 'quarantined'
-    ) {
+    if (lifecycleAlreadySettled(current.status)) {
       return current;
     }
     return {
@@ -185,23 +184,28 @@ export async function runCampaignWorker(
     };
     const runCampaignFn = deps.runCampaign ?? campaignRun;
     const exitCode = await runCampaignFn(job.campaign.campaign_dir, options);
-    updateJob(loaded, jobId, (current) => ({
-      ...current,
-      status: exitCode === 0 ? 'done' : 'failed',
-      finished_at: new Date().toISOString(),
-      result: {
-        exit_code: exitCode,
-        summary: 'campaign journal is the outcome authority',
-      },
-      error:
-        exitCode === 0
-          ? null
-          : {
-              code: 'config_invalid',
-              step: 'campaign-worker',
-              message: `campaign controller exited ${exitCode}`,
-            },
-    }));
+    updateJob(loaded, jobId, (current) => {
+      if (lifecycleAlreadySettled(current.status)) {
+        return current;
+      }
+      return {
+        ...current,
+        status: exitCode === 0 ? 'done' : 'failed',
+        finished_at: new Date().toISOString(),
+        result: {
+          exit_code: exitCode,
+          summary: 'campaign journal is the outcome authority',
+        },
+        error:
+          exitCode === 0
+            ? null
+            : {
+                code: 'config_invalid',
+                step: 'campaign-worker',
+                message: `campaign controller exited ${exitCode}`,
+              },
+      };
+    });
   } catch (error) {
     markFailed(loaded, jobId, error);
     throw error;

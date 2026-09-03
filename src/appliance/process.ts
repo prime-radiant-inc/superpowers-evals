@@ -1205,6 +1205,17 @@ await dispatchDetachedWorker(loaded, jobId);
       env: detachedWorkerEnv(loaded, jobId),
       stdio: ['ignore', stdoutFd, stderrFd],
     });
+    child.once('error', () => {
+      markFailed(
+        loaded,
+        jobId,
+        new ApplianceError(
+          'config_invalid',
+          'spawn',
+          'detached worker reported an asynchronous spawn failure',
+        ),
+      );
+    });
     const pid = child.pid;
     if (pid === undefined || !Number.isInteger(pid) || pid <= 1) {
       throw new ApplianceError(
