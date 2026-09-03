@@ -1,6 +1,7 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
 import {
   chmodSync,
   existsSync,
@@ -19,8 +20,6 @@ import { basename, join, resolve } from 'node:path';
 import { RunnerError } from '../src/runner/errors.ts';
 import { runScenario } from '../src/runner/index.ts';
 import {
-  ATTEMPT_MANIFEST_FS,
-  type AttemptManifestFsOps,
   parseAttemptManifest,
   writeAttemptManifest,
 } from '../src/runner/manifest.ts';
@@ -35,12 +34,6 @@ const identity = {
 
 function tempRunDir(): string {
   return mkdtempSync(join(tmpdir(), 'manifest-'));
-}
-
-function manifestFs(
-  overrides: Partial<AttemptManifestFsOps>,
-): AttemptManifestFsOps {
-  return { ...ATTEMPT_MANIFEST_FS, ...overrides };
 }
 
 test('manifest lists sorted artifacts with exact digests and derived run id', () => {
@@ -137,29 +130,92 @@ test('pre-publication validation removes a stale final manifest before refusing'
   }
 });
 
+test('initial stale-final invalidation failure is retried and cannot leave a blessing', () => {
+  const runDir = tempRunDir();
+  const manifestPath = join(runDir, 'manifest.json');
+  const outside = join(tmpdir(), `manifest-secret-${process.pid}`);
+  writeFileSync(manifestPath, 'old blessed output\n');
+  writeFileSync(outside, 'secret\n');
+  symlinkSync(outside, join(runDir, 'verdict.json'));
+  const realUnlink = fs.unlinkSync;
+  let firstInvalidation = true;
+  const unlink = spyOn(fs, 'unlinkSync').mockImplementation((path) => {
+    if (path === manifestPath && firstInvalidation) {
+      firstInvalidation = false;
+      throw Object.assign(new Error('transient invalidation failure'), {
+        code: 'EAGAIN',
+      });
+    }
+    return realUnlink(path);
+  });
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
+      'transient invalidation failure',
+    );
+    expect(
+      unlink.mock.calls.filter(([path]) => path === manifestPath),
+    ).toHaveLength(2);
+    expect(existsSync(manifestPath)).toBe(false);
+  } finally {
+    unlink.mockRestore();
+    rmSync(runDir, { recursive: true, force: true });
+    rmSync(outside, { force: true });
+  }
+});
+
+test('failed stale-final retry reports cleanup failure instead of silently blessing old output', () => {
+  const runDir = tempRunDir();
+  const manifestPath = join(runDir, 'manifest.json');
+  writeFileSync(manifestPath, 'old blessed output\n');
+  const realUnlink = fs.unlinkSync;
+  const unlink = spyOn(fs, 'unlinkSync').mockImplementation((path) => {
+    if (path === manifestPath) {
+      throw Object.assign(new Error('invalidation unavailable'), {
+        code: 'EAGAIN',
+      });
+    }
+    return realUnlink(path);
+  });
+
+  try {
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
+      'invalidation unavailable; manifest cleanup failed',
+    );
+    expect(
+      unlink.mock.calls.filter(([path]) => path === manifestPath),
+    ).toHaveLength(2);
+    expect(existsSync(manifestPath)).toBe(true);
+  } finally {
+    unlink.mockRestore();
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
 test('a failure after rename removes the installed final and preserves the original error', () => {
   const runDir = tempRunDir();
   writeFileSync(join(runDir, 'verdict.json'), 'bytes\n');
   const events: string[] = [];
-  const ops = manifestFs({
-    renameSync(oldPath, newPath) {
-      renameSync(oldPath, newPath);
+  const realRename = fs.renameSync;
+  const realUnlink = fs.unlinkSync;
+  const realFsync = fs.fsyncSync;
+  const rename = spyOn(fs, 'renameSync').mockImplementation(
+    (oldPath, newPath) => {
+      realRename(oldPath, newPath);
       throw new Error('rename reported failure after committing');
     },
-    unlinkSync(path) {
-      events.push(`unlink:${basename(path)}`);
-      ATTEMPT_MANIFEST_FS.unlinkSync(path);
-    },
-    fsyncSync(fd) {
-      if (ATTEMPT_MANIFEST_FS.fstatSync(fd).isDirectory()) {
-        events.push('fsync-dir');
-      }
-      ATTEMPT_MANIFEST_FS.fsyncSync(fd);
-    },
+  );
+  const unlink = spyOn(fs, 'unlinkSync').mockImplementation((path) => {
+    events.push(`unlink:${basename(String(path))}`);
+    return realUnlink(path);
+  });
+  const fsync = spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+    if (fs.fstatSync(fd).isDirectory()) events.push('fsync-dir');
+    return realFsync(fd);
   });
 
   try {
-    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow(
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
       'rename reported failure after committing',
     );
     expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
@@ -167,6 +223,9 @@ test('a failure after rename removes the installed final and preserves the origi
     expect(finalCleanupIndex).toBeGreaterThanOrEqual(0);
     expect(events.slice(finalCleanupIndex + 1)).toContain('fsync-dir');
   } finally {
+    rename.mockRestore();
+    unlink.mockRestore();
+    fsync.mockRestore();
     rmSync(runDir, { recursive: true, force: true });
   }
 });
@@ -177,24 +236,24 @@ test('artifact replacement after discovery cannot redirect the pinned digest', (
   const outside = join(tmpdir(), `manifest-secret-${process.pid}`);
   writeFileSync(verdict, 'original bytes\n');
   writeFileSync(outside, 'outside secret\n');
-  const ops = manifestFs({
-    openSync(path, flags, mode) {
-      const fd = ATTEMPT_MANIFEST_FS.openSync(path, flags, mode);
-      if (path.endsWith('/verdict.json')) {
-        rmSync(path);
-        symlinkSync(outside, path);
-      }
-      return fd;
-    },
+  const realOpen = fs.openSync;
+  const open = spyOn(fs, 'openSync').mockImplementation((path, flags, mode) => {
+    const fd = realOpen(path, flags, mode);
+    if (path.toString().endsWith('/verdict.json')) {
+      rmSync(path);
+      symlinkSync(outside, path);
+    }
+    return fd;
   });
 
   try {
-    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow(
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
       'artifact changed while it was being read',
     );
     expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
     expect(readFileSync(outside, 'utf8')).toBe('outside secret\n');
   } finally {
+    open.mockRestore();
     rmSync(runDir, { recursive: true, force: true });
     rmSync(outside, { force: true });
   }
@@ -208,20 +267,20 @@ test('intermediate directory replacement cannot redirect artifact traversal', ()
   mkdirSync(outside);
   writeFileSync(join(nested, 'verdict.json'), 'original\n');
   writeFileSync(join(outside, 'verdict.json'), 'outside\n');
-  const ops = manifestFs({
-    openSync(path, flags, mode) {
-      if (path.endsWith('/nested')) {
-        renameSync(nested, `${nested}.real`);
-        symlinkSync(outside, nested);
-      }
-      return ATTEMPT_MANIFEST_FS.openSync(path, flags, mode);
-    },
+  const realOpen = fs.openSync;
+  const open = spyOn(fs, 'openSync').mockImplementation((path, flags, mode) => {
+    if (path.toString().endsWith('/nested')) {
+      renameSync(nested, `${nested}.real`);
+      symlinkSync(outside, nested);
+    }
+    return realOpen(path, flags, mode);
   });
 
   try {
-    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow();
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow();
     expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
   } finally {
+    open.mockRestore();
     rmSync(runDir, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
   }
@@ -237,18 +296,18 @@ test('nested directory entries are fsynced before manifest publication', () => {
     Number(lstatSync(nested).ino),
   ]);
   const syncedDirectories: number[] = [];
-  const ops = manifestFs({
-    fsyncSync(fd) {
-      const stat = ATTEMPT_MANIFEST_FS.fstatSync(fd);
-      if (stat.isDirectory()) syncedDirectories.push(Number(stat.ino));
-      ATTEMPT_MANIFEST_FS.fsyncSync(fd);
-    },
+  const realFsync = fs.fsyncSync;
+  const fsync = spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+    const stat = fs.fstatSync(fd);
+    if (stat.isDirectory()) syncedDirectories.push(Number(stat.ino));
+    return realFsync(fd);
   });
 
   try {
-    writeAttemptManifest(runDir, identity, ops);
+    writeAttemptManifest(runDir, identity);
     expect(new Set(syncedDirectories)).toEqual(directoryInodes);
   } finally {
+    fsync.mockRestore();
     rmSync(runDir, { recursive: true, force: true });
   }
 });
@@ -257,23 +316,22 @@ test('failed stage cleanup is followed by run-directory fsync', () => {
   const runDir = tempRunDir();
   writeFileSync(join(runDir, 'verdict.json'), 'bytes\n');
   const events: string[] = [];
-  const ops = manifestFs({
-    writeSync() {
-      throw new Error('stage write failed');
-    },
-    unlinkSync(path) {
-      events.push(`unlink:${path}`);
-      ATTEMPT_MANIFEST_FS.unlinkSync(path);
-    },
-    fsyncSync(fd) {
-      if (ATTEMPT_MANIFEST_FS.fstatSync(fd).isDirectory())
-        events.push('fsync-dir');
-      ATTEMPT_MANIFEST_FS.fsyncSync(fd);
-    },
+  const realUnlink = fs.unlinkSync;
+  const realFsync = fs.fsyncSync;
+  const write = spyOn(fs, 'writeSync').mockImplementation(() => {
+    throw new Error('stage write failed');
+  });
+  const unlink = spyOn(fs, 'unlinkSync').mockImplementation((path) => {
+    events.push(`unlink:${path}`);
+    return realUnlink(path);
+  });
+  const fsync = spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+    if (fs.fstatSync(fd).isDirectory()) events.push('fsync-dir');
+    return realFsync(fd);
   });
 
   try {
-    expect(() => writeAttemptManifest(runDir, identity, ops)).toThrow(
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
       'stage write failed',
     );
     const cleanupIndex = events.findIndex((event) =>
@@ -282,6 +340,9 @@ test('failed stage cleanup is followed by run-directory fsync', () => {
     expect(cleanupIndex).toBeGreaterThanOrEqual(0);
     expect(events.slice(cleanupIndex + 1)).toContain('fsync-dir');
   } finally {
+    write.mockRestore();
+    unlink.mockRestore();
+    fsync.mockRestore();
     rmSync(runDir, { recursive: true, force: true });
   }
 });
