@@ -760,21 +760,22 @@ function markFailed(
   error: ApplianceError,
 ): void {
   try {
-    const current = readJob(loaded, jobId);
-    if (current.status === 'stopping' || isTerminal(current.status)) {
-      return;
-    }
-    updateJob(loaded, jobId, (job) => ({
-      ...job,
-      status: 'failed',
-      finished_at: new Date().toISOString(),
-      result: { exit_code: 1, summary: error.message },
-      error: {
-        code: error.code,
-        step: error.step,
-        message: error.message,
-      },
-    }));
+    updateJob(loaded, jobId, (job) => {
+      if (job.status === 'stopping' || isTerminal(job.status)) {
+        return job;
+      }
+      return {
+        ...job,
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        result: { exit_code: 1, summary: error.message },
+        error: {
+          code: error.code,
+          step: error.step,
+          message: error.message,
+        },
+      };
+    });
   } catch {}
 }
 
