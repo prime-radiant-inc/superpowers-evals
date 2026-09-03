@@ -2396,7 +2396,7 @@ export async function runCampaignDispatch(
         assertInstanceGraph({ campaign, mints: [...mintRecords, res.record] });
       }
       const appended = await appendCritical(res.events);
-      if (appended === null) return;
+      if (appended === null || storagePaused) return;
       cleanupEligibleStages(failedBlock.samples);
       resolvedObligations.add(blockId);
       const cellKey = cellKeyOfBlockId(blockId);
