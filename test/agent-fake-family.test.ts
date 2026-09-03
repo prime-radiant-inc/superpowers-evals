@@ -51,7 +51,10 @@ const FAKE_CONFIG: AgentConfig = {
   os_support: ['linux'],
 };
 
-function makeFakeRoot(withContext = true): {
+function makeFakeRoot(
+  withContext = true,
+  subjectEnv = 'FAKE_SUBJECT_KEY',
+): {
   readonly root: string;
   readonly agentsDir: string;
   readonly cleanup: () => void;
@@ -75,7 +78,7 @@ function makeFakeRoot(withContext = true): {
       launcher,
       '#!/bin/sh\n' +
         '. "$QUORUM_SUBJECT_FILE"\n' +
-        'printf \'%s\\n\' "$FAKE_SUBJECT_KEY"\n',
+        `printf '%s\\n' "$${subjectEnv}"\n`,
     );
     chmodSync(launcher, 0o755);
   }
@@ -87,7 +90,11 @@ function makeFakeRoot(withContext = true): {
   };
 }
 
-function writeCredentials(root: string, auth = 'api-key'): string {
+function writeCredentials(
+  root: string,
+  auth = 'api-key',
+  apiKeyEnv = 'FAKE_SUBJECT_KEY',
+): string {
   const path = join(root, 'credentials.yaml');
   writeFileSync(
     path,
@@ -96,7 +103,7 @@ function writeCredentials(root: string, auth = 'api-key'): string {
       '  model: fake-subject-model',
       '  api: anthropic',
       `  auth: ${auth}`,
-      '  api_key_env: FAKE_SUBJECT_KEY',
+      `  api_key_env: ${apiKeyEnv}`,
       '  harnesses: [fake]',
       '  compat: {}',
       '',
@@ -265,19 +272,26 @@ test('fake runner requires its context directory', async () => {
   }
 });
 
-test('fake runner rejects a missing or empty subject key during provisioning', async () => {
-  const previousKey = process.env['FAKE_SUBJECT_KEY'];
+test('fake runner rejects a missing or empty selected subject env', async () => {
+  const subjectEnv = 'ACME_SUBJECT_TOKEN';
+  const previousKey = process.env[subjectEnv];
+  const previousDefaultKey = process.env['FAKE_SUBJECT_KEY'];
   try {
     for (const value of [undefined, '']) {
-      const fixture = makeFakeRoot(false);
+      const fixture = makeFakeRoot(false, subjectEnv);
       const scenarioDir = writeScenario(fixture.root);
-      const credentialsPath = writeCredentials(fixture.root);
+      const credentialsPath = writeCredentials(
+        fixture.root,
+        'api-key',
+        subjectEnv,
+      );
       const outRoot = join(fixture.root, 'results');
       if (value === undefined) {
-        delete process.env['FAKE_SUBJECT_KEY'];
+        delete process.env[subjectEnv];
       } else {
-        process.env['FAKE_SUBJECT_KEY'] = value;
+        process.env[subjectEnv] = value;
       }
+      delete process.env['FAKE_SUBJECT_KEY'];
       try {
         const result = await runScenario({
           scenarioDir,
@@ -289,14 +303,60 @@ test('fake runner rejects a missing or empty subject key during provisioning', a
         expect(result.verdict.final).toBe('indeterminate');
         expect(result.verdict.error?.stage).toBe('setup');
         expect(result.verdict.error?.message).toMatch(
-          /FAKE_SUBJECT_KEY.*unset\/empty/,
+          new RegExp(`${subjectEnv}.*unset/empty`),
         );
       } finally {
         fixture.cleanup();
       }
     }
   } finally {
-    restoreEnv('FAKE_SUBJECT_KEY', previousKey);
+    restoreEnv(subjectEnv, previousKey);
+    restoreEnv('FAKE_SUBJECT_KEY', previousDefaultKey);
+  }
+});
+
+test('fake runner uses the selected api_key_env for subject provisioning', async () => {
+  const subjectEnv = 'ACME_SUBJECT_TOKEN';
+  const fixture = makeFakeRoot(true, subjectEnv);
+  const scenarioDir = writeScenario(fixture.root);
+  const credentialsPath = writeCredentials(fixture.root, 'api-key', subjectEnv);
+  const gauntletBin = writeGauntletStub(fixture.root);
+  const outRoot = join(fixture.root, 'results');
+  const previousKey = process.env[subjectEnv];
+  const previousDefaultKey = process.env['FAKE_SUBJECT_KEY'];
+  delete process.env['FAKE_SUBJECT_KEY'];
+  process.env[subjectEnv] = FAKE_SUBJECT_KEY;
+  try {
+    const result = await runScenario({
+      scenarioDir,
+      codingAgent: 'fake',
+      codingAgentsDir: fixture.agentsDir,
+      outRoot,
+      credentialsPath,
+      gauntletBin,
+    });
+    expect(result.verdict.final).toBe('pass');
+
+    const subjectFile = join(result.runDir, 'home', '.fake-env');
+    expect(readFileSync(subjectFile, 'utf8')).toBe(
+      `${subjectEnv}='${FAKE_SUBJECT_KEY}'\n`,
+    );
+    const launcher = join(
+      result.runDir,
+      'gauntlet-agent',
+      'context',
+      'launch-agent',
+    );
+    const launched = spawnSync(launcher, {
+      encoding: 'utf8',
+      env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
+    });
+    expect(launched.status).toBe(0);
+    expect(launched.stdout).toBe(`${FAKE_SUBJECT_KEY}\n`);
+  } finally {
+    restoreEnv(subjectEnv, previousKey);
+    restoreEnv('FAKE_SUBJECT_KEY', previousDefaultKey);
+    fixture.cleanup();
   }
 });
 
