@@ -51,15 +51,70 @@ test('realDockerWait asynchronously validates docker wait results', async () => 
     realDockerWait(id, () => fakeDockerWaitProcess(stdout, exited, stderr));
 
   await expect(launch('17\n', 0)).resolves.toBe(17);
-  await expect(launch('17\n', 2, 'docker unavailable')).rejects.toThrow(
-    /docker wait failed/,
-  );
+  await expect(launch('17\r\n', 0)).resolves.toBe(17);
+  const failed = launch('17\n', 2, 'secret=must-not-escape');
+  await expect(failed).rejects.toThrow('docker wait failed');
+  await failed.catch((error: unknown) => {
+    expect(String(error)).not.toContain('secret=must-not-escape');
+  });
   await expect(launch('not-a-code\n', 0)).rejects.toThrow(
     /docker wait returned malformed exit code/,
   );
   await expect(launch('-1\n', 0)).rejects.toThrow(
     /docker wait returned malformed exit code/,
   );
+  await expect(launch('17\n\n', 0)).rejects.toThrow(
+    /docker wait returned malformed exit code/,
+  );
+  await expect(launch('17', 0)).rejects.toThrow(
+    /docker wait returned malformed exit code/,
+  );
+});
+
+test('realDockerWait starts both pipe drains before waiting for process exit', async () => {
+  let resolveExited!: (code: number) => void;
+  const exited = new Promise<number>((resolve) => {
+    resolveExited = resolve;
+  });
+  let stdoutPulled = false;
+  let stderrPulled = false;
+  const trackedStream = (
+    markPulled: () => void,
+    contents: string,
+  ): ReadableStream<Uint8Array> =>
+    new ReadableStream(
+      {
+        pull(controller) {
+          markPulled();
+          controller.enqueue(new TextEncoder().encode(contents));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+
+  const result = realDockerWait('2'.repeat(64), () => ({
+    stdout: trackedStream(() => {
+      stdoutPulled = true;
+    }, '17\n'),
+    stderr: trackedStream(() => {
+      stderrPulled = true;
+    }, ''),
+    exited,
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(stdoutPulled).toBe(true);
+  expect(stderrPulled).toBe(true);
+  resolveExited(0);
+  await expect(result).resolves.toBe(17);
+});
+
+test('realDockerWait rejects a process launch failure', async () => {
+  await expect(
+    realDockerWait('3'.repeat(64), () => {
+      throw new Error('launch failed');
+    }),
+  ).rejects.toThrow('docker wait failed');
 });
 
 class FakeDocker implements CommandRunner {

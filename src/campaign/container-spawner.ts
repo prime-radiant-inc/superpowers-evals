@@ -95,19 +95,31 @@ export async function realDockerWait(
       'docker wait requires a canonical full container id',
     );
   }
-  const proc = launch(containerId);
-  const exitCode = await proc.exited;
-  const stderr =
-    proc.stderr === null ? '' : await new Response(proc.stderr).text();
-  if (exitCode !== 0) {
-    throw new AttemptContainerError(
-      `docker wait failed for ${containerId}: ${stderr.trim()}`,
-    );
+  let proc: DockerWaitProcess;
+  try {
+    proc = launch(containerId);
+  } catch {
+    throw new AttemptContainerError('docker wait failed');
   }
   const stdout =
-    proc.stdout === null ? '' : await new Response(proc.stdout).text();
-  const value = stdout.trim();
-  if (!/^\d+$/.test(value)) {
+    proc.stdout === null
+      ? Promise.resolve('')
+      : new Response(proc.stdout).text();
+  const stderr =
+    proc.stderr === null
+      ? Promise.resolve('')
+      : new Response(proc.stderr).text();
+  let exitCode: number;
+  try {
+    [exitCode] = await Promise.all([proc.exited, stdout, stderr]);
+  } catch {
+    throw new AttemptContainerError('docker wait failed');
+  }
+  if (exitCode !== 0) {
+    throw new AttemptContainerError('docker wait failed');
+  }
+  const value = await stdout;
+  if (!/^\d+(?:\n|\r\n)$/.test(value)) {
     throw new AttemptContainerError(
       `docker wait returned malformed exit code for ${containerId}`,
     );

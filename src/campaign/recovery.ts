@@ -1952,7 +1952,8 @@ function readPublishedCampaign(campaignDir: string): Campaign {
 /** R-REG-19 (second occurrence, REV fable I-14): every api-key arm's
  *  registered key env NAMES plus the grader credential's env names must be
  *  present and non-empty at resume, so a key lost between registration and
- *  resume fails BEFORE any spend. Env is read only through src/env.ts. */
+ *  resume fails BEFORE any spend. The production/default reader reads env only
+ *  through src/env.ts; appliance workers inject their own bundle-backed reader. */
 function assertKeyEnvsPresent(
   campaign: Campaign,
   credentials: Readonly<Record<string, Credential>>,

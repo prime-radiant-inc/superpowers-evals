@@ -344,7 +344,9 @@ test('campaignRun uses one injected batch credential reader without process env 
       }),
     );
     expect(code).toBe(0);
-    expect(calls).toEqual([['KEY_A', 'KEY_G']]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(2);
+    expect(new Set(calls[0])).toEqual(new Set(['KEY_A', 'KEY_G']));
     expect(readiness).toEqual(['ready']);
     expect(fakeSpawner.spawned).toHaveLength(1);
   } finally {
