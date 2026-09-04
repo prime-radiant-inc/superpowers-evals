@@ -757,7 +757,13 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
       { cwd: checkout.root, env: registerEnv },
     );
     if (registered.status !== 0) {
-      throw new Error('synthetic campaign registration failed');
+      throw new Error(
+        [
+          `synthetic campaign registration failed (status ${registered.status})`,
+          `stdout:\n${registered.stdout.trim()}`,
+          `stderr:\n${registered.stderr.trim()}`,
+        ].join('\n'),
+      );
     }
     const campaignRoot = join(checkout.root, 'campaigns');
     const campaignEntries = readdirSync(campaignRoot).filter(
