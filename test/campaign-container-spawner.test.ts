@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import {
   appendFileSync,
   chmodSync,
@@ -1442,4 +1442,75 @@ test('V2 create client failure leaves an exact discoverable creation for cancell
   expect(
     await cancellation.stop({ ...f.prepared, container_id: containerId }, 1),
   ).toMatchObject({ kind: 'dead' });
+});
+
+test('V2 monitor isolates throwing subscribers and reports errors without changing latched outcomes', async () => {
+  for (const outcome of ['stopped', 'failure'] as const) {
+    const f = runtimeFixture();
+    const bound = await f.runtime.create(f.prepared);
+    f.commit();
+    const monitor = await f.runtime.start(bound);
+    const delivered: string[] = [];
+    const diagnostics: string[] = [];
+    const stderr = spyOn(process.stderr, 'write').mockImplementation(
+      (chunk) => {
+        diagnostics.push(String(chunk));
+        return true;
+      },
+    );
+    try {
+      const subscribe =
+        outcome === 'stopped'
+          ? (cb: () => void) => monitor.onStopped(cb)
+          : (cb: () => void) => monitor.onMonitorFailure(cb);
+      const unexpected =
+        outcome === 'stopped'
+          ? (cb: () => void) => monitor.onMonitorFailure(cb)
+          : (cb: () => void) => monitor.onStopped(cb);
+      subscribe(() => {
+        throw new Error(`${outcome} subscriber error`);
+      });
+      subscribe(() => {
+        delivered.push('second');
+      });
+      unexpected(() => {
+        delivered.push('contradictory');
+      });
+      if (outcome === 'stopped') {
+        f.observed.State.Running = false;
+        f.observed.State.Status = 'exited';
+        f.observed.State.Pid = 0;
+        f.resolve(0);
+      } else {
+        f.reject(new Error('Docker follower lost'));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(delivered).toEqual(['second']);
+      expect(() =>
+        subscribe(() => {
+          throw { secret: 'subscriber-secret-must-not-escape' };
+        }),
+      ).not.toThrow();
+      subscribe(() => {
+        delivered.push('late');
+      });
+      unexpected(() => {
+        delivered.push('late-contradictory');
+      });
+      expect(delivered).toEqual(['second', 'late']);
+      expect(diagnostics).toHaveLength(2);
+      expect(diagnostics[0]).toContain(
+        `${outcome} notification had 1 throwing subscriber`,
+      );
+      expect(diagnostics[1]).toContain(
+        `${outcome} notification had 1 throwing subscriber`,
+      );
+      expect(diagnostics.join('')).not.toContain(
+        'subscriber-secret-must-not-escape',
+      );
+      expect(diagnostics.join('')).not.toContain(`${outcome} subscriber error`);
+    } finally {
+      stderr.mockRestore();
+    }
+  }
 });

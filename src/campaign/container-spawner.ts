@@ -1292,17 +1292,41 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
     let failure: string | undefined;
     const stops: ((s: VerifiedStopped) => void)[] = [];
     const failures: ((s: string) => void)[] = [];
+    const notify = <T>(
+      kind: 'stopped' | 'failure',
+      callbacks: readonly ((value: T) => void)[],
+      value: T,
+    ): void => {
+      let thrown = 0;
+      // A callback may subscribe during delivery. The latch handles that late
+      // subscriber; the snapshot prevents a second notification in this pass.
+      for (const callback of [...callbacks]) {
+        try {
+          callback(value);
+        } catch {
+          thrown++;
+        }
+      }
+      if (thrown > 0) {
+        // Consumer failures belong to the controller's abort path. This last-
+        // resort diagnostic exposes the failure without leaking thrown values.
+        process.stderr.write(
+          `attempt ${intent.identity.execution_attempt_id}: ${kind} notification had ${thrown} throwing subscriber(s); runtime outcome unchanged\n`,
+        );
+      }
+    };
     const monitor: AttemptMonitor = {
       onStopped(cb) {
-        stops.push(cb);
-        if (stopped) cb(stopped);
+        if (stopped) notify('stopped', [cb], stopped);
+        else stops.push(cb);
       },
       onMonitorFailure(cb) {
-        failures.push(cb);
-        if (failure) cb(failure);
+        if (failure) notify('failure', [cb], failure);
+        else failures.push(cb);
       },
     };
     // Start success is returned separately from this latched follower result.
+    // Only follower/inspection errors select failure; delivery is downstream.
     void Promise.resolve()
       .then(() =>
         (this.options.dockerWait ?? realDockerWait)(bound.container_id),
@@ -1311,13 +1335,19 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
         const observation = this.inspect(intent, bound.container_id);
         if (observation.kind !== 'matching-stopped')
           throw new Error('namespace death not established');
-        stopped = this.death(bound, 'inspected_stopped');
-        for (const cb of stops) cb(stopped);
+        return this.death(bound, 'inspected_stopped');
       })
-      .catch(() => {
-        failure = 'attempt monitor failed; namespace death remains unverified';
-        for (const cb of failures) cb(failure);
-      });
+      .then(
+        (verified) => {
+          stopped = verified;
+          notify('stopped', stops, stopped);
+        },
+        () => {
+          failure =
+            'attempt monitor failed; namespace death remains unverified';
+          notify('failure', failures, failure);
+        },
+      );
     return monitor;
   }
   async inspectOwned(
