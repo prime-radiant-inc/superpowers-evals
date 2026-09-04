@@ -205,6 +205,20 @@ export const ExperimentSchema = z
         return;
       }
       unique(declared.scenarios, 'scenario selector');
+      for (const scenario of declared.scenarios) {
+        const included = experiment.cells.some(
+          (c) =>
+            c.comparison_id === frozen.comparison_id && c.scenario === scenario,
+        );
+        const excluded = experiment.excluded_cells.some(
+          (c) => c.cell === `${frozen.comparison_id}:${scenario}`,
+        );
+        if (included === excluded)
+          issue(
+            'each normalized scenario must be included or explicitly excluded',
+          );
+      }
+
       for (const cell of experiment.cells.filter(
         (c) => c.comparison_id === frozen.comparison_id,
       )) {

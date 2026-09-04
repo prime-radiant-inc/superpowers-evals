@@ -724,3 +724,11 @@ test('fresh transitions cannot move the journal clock backward', () => {
     ),
   ).toThrow();
 });
+
+test('normalized scenarios cannot disappear without an explicit eligibility exclusion', () => {
+  const e = twoArmExperiment();
+  e.suite.comparisons[0]!.scenarios = ['scenario', 'other'];
+  expect(ExperimentSchema.safeParse(e).success).toBe(false);
+  e.excluded_cells.push({ cell: 'comparison:other', reason: 'ineligible' });
+  expect(ExperimentSchema.safeParse(e).success).toBe(true);
+});
