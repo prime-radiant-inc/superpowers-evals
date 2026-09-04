@@ -128,6 +128,7 @@ function loaded(): LoadedApplianceConfig {
     configPath: join(root, 'appliance.json'),
     config: {
       root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
       evals: {
         path: join(root, 'superpowers-evals'),
         remote: 'origin',
@@ -731,6 +732,7 @@ test('detachedWorkerEnv only carries the minimal appliance worker contract', () 
     HOME: cfg.config.root,
     EVALS_APPLIANCE_CONFIG: cfg.configPath,
     EVALS_APPLIANCE_JOB_ID: 'job-7',
+    QUORUM_LIVE_SPEND_LOCK: cfg.config.live_spend_lock!,
     GAUNTLET_ROOT: cfg.config.gauntlet.path,
     SUPERPOWERS_ROOT: cfg.config.superpowers.path,
   });
@@ -748,6 +750,7 @@ test('detachedWorkerEnv falls back to a stable PATH when the caller did not prov
     HOME: cfg.config.root,
     EVALS_APPLIANCE_CONFIG: cfg.configPath,
     EVALS_APPLIANCE_JOB_ID: 'job-8',
+    QUORUM_LIVE_SPEND_LOCK: cfg.config.live_spend_lock!,
     GAUNTLET_ROOT: cfg.config.gauntlet.path,
     SUPERPOWERS_ROOT: cfg.config.superpowers.path,
   });

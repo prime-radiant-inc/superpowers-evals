@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   acquireLock,
   inspectLock,
+  reclaimStoppedRunLock,
   updateLockRefs,
   withMutationLocks,
 } from '../src/appliance/locks.ts';
@@ -28,6 +29,7 @@ function loaded(
     configPath: join(root, 'appliance.json'),
     config: {
       root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
       evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
@@ -223,5 +225,53 @@ test('released handle cannot remove a successor with the same job identity', () 
   const child = acquireLock(args);
   parent.release();
   expect(existsSync(child.path)).toBe(true);
+  updateLockRefs(parent, {
+    superpowers_requested_ref: 'stale',
+    superpowers_resolved_sha: 'a'.repeat(40),
+    evals_ref: 'stale',
+    evals_resolved_sha: 'b'.repeat(40),
+    gauntlet_ref: 'stale',
+    gauntlet_built_sha: 'c'.repeat(40),
+  });
+  expect(
+    JSON.parse(readFileSync(join(child.path, 'lock.json'), 'utf8')).refs,
+  ).toBeNull();
   child.release();
+});
+
+test('cancellation reclaims only a dead matching campaign run lock', () => {
+  const cfg = loaded();
+  const dir = join(cfg.paths.locks, 'run.lock');
+  mkdirSync(dir);
+  const owner = { pid: 99999999, birth: 'old', boot_id: 'old' };
+  const record = {
+    name: 'run.lock',
+    job_id: 'dead',
+    host: 'test',
+    pid: owner.pid,
+    pgid: owner.pid,
+    started_at: '2026-09-04T00:00:00.000Z',
+    command: 'campaign-run',
+    refs: null,
+  };
+  writeFileSync(join(dir, 'lock.json'), JSON.stringify(record));
+  expect(() =>
+    reclaimStoppedRunLock(cfg, [{ ...owner, pid: 88888888 }]),
+  ).toThrow();
+  expect(existsSync(dir)).toBe(true);
+  reclaimStoppedRunLock(cfg, [owner]);
+  expect(existsSync(dir)).toBe(false);
+});
+
+test('current run lock fence refuses a displaced handle before admission', () => {
+  const cfg = loaded();
+  const lock = acquireLock({
+    loaded: cfg,
+    name: 'run.lock',
+    jobId: 'parent',
+    command: 'campaign-run',
+  });
+  expect(() => lock.assertCurrentOwner()).not.toThrow();
+  lock.release();
+  expect(() => lock.assertCurrentOwner()).toThrow();
 });

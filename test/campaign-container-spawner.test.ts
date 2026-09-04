@@ -1514,3 +1514,13 @@ test('V2 monitor isolates throwing subscribers and reports errors without changi
     }
   }
 });
+
+test('current runtime termination assertion retains settled-client start uncertainty', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  expect(() => f.runtime.assertNoUnsettledStarts()).not.toThrow();
+  f.commit();
+  f.startTimeout();
+  await expect(f.runtime.start(bound)).rejects.toThrow();
+  expect(() => f.runtime.assertNoUnsettledStarts()).toThrow(/uncertain/);
+});

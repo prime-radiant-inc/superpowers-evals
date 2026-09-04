@@ -1,44 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-root="${1:-/srv/quorum}"
-evals="$root/superpowers-evals"
-bin_dir="$root/bin"
-target="$bin_dir/evals-appliance"
-default_config="$(printf '%q' "$root/config/appliance.json")"
-default_home="$(printf '%q' "$root")"
-
-mkdir -p "$bin_dir"
-tmp="$target.$$"
-cat > "$tmp" <<SH
-#!/bin/bash -p
-set -euo pipefail
-default_config=$default_config
-sanitized_path=/usr/local/bin:/usr/bin:/bin
-sanitized_home=$default_home
-builtin exec /usr/bin/env -i PATH="\$sanitized_path" HOME="\$sanitized_home" EVALS_APPLIANCE_CONFIG="\$default_config" /bin/bash -s -- "\$@" <<'EVALS_APPLIANCE_SANITIZED_SCRIPT'
-set -euo pipefail
-config="\$EVALS_APPLIANCE_CONFIG"
-evals_path="\$(jq -r '.evals.path' "\$config")"
-expected_remote="\$(jq -r '.evals.remote' "\$config")"
-expected_ref="\$(jq -r '.evals.ref' "\$config")"
-
-status="\$(git -C "\$evals_path" status --porcelain)"
-if [[ -n "\$status" ]]; then
-  printf 'evals-appliance: evals checkout is not clean\n%s\n' "\$status" >&2
-  exit 1
-fi
-
-current="\$(git -C "\$evals_path" rev-parse --abbrev-ref HEAD)"
-if [[ "\$current" != "\$expected_ref" ]]; then
-  printf 'evals-appliance: evals checkout on %s, expected %s\n' "\$current" "\$expected_ref" >&2
-  exit 1
-fi
-
-cd "\$evals_path"
-exec bun run src/appliance/cli.ts "\$@"
-EVALS_APPLIANCE_SANITIZED_SCRIPT
-SH
-chmod 0755 "$tmp"
-mv "$tmp" "$target"
-printf '%s\n' "$target"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec bun "$script_dir/../src/appliance/install.ts" "${1:-/srv/quorum}"

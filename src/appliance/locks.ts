@@ -1,12 +1,21 @@
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
+import {
+  acquireLiveSpendLock,
+  type LiveSpendLock,
+  realProcessIdentityProbe,
+} from '../campaign/locks.ts';
+import type { ProcessIdentity } from '../contracts/campaign/execution.ts';
+import { RealClock } from '../scheduler/clock.ts';
 import { ApplianceError } from './errors.ts';
 import { atomicWriteJson } from './fs.ts';
 import { ensurePrivateDirNoFollow } from './safe-fs.ts';
@@ -31,6 +40,7 @@ export interface LockHandle {
   readonly path: string;
   readonly jobId: string;
   readonly record: LockRecord;
+  assertCurrentOwner(): void;
   release(): void;
 }
 
@@ -139,6 +149,20 @@ export function acquireLock(args: AcquireLockArgs): LockHandle {
     path: lockDir,
     jobId: args.jobId,
     record,
+    assertCurrentOwner() {
+      const currentInode = lstatSync(lockDir, { throwIfNoEntry: false });
+      const current = readLockRecord(lockDir);
+      if (
+        released ||
+        !currentInode ||
+        currentInode.dev !== inode.dev ||
+        currentInode.ino !== inode.ino ||
+        current?.job_id !== record.job_id ||
+        current.pid !== record.pid ||
+        current.started_at !== record.started_at
+      )
+        throw new Error('appliance lock ownership lost');
+    },
     release() {
       if (released) return;
       released = true;
@@ -159,6 +183,11 @@ export function acquireLock(args: AcquireLockArgs): LockHandle {
 }
 
 export function updateLockRefs(handle: LockHandle, refs: RefSnapshot): void {
+  try {
+    handle.assertCurrentOwner();
+  } catch {
+    return;
+  }
   const current = readLockRecord(handle.path);
   if (current?.job_id !== handle.jobId) {
     return;
@@ -174,11 +203,58 @@ export async function withMutationLocks<T>(
 ): Promise<T> {
   const run = acquireLock({ loaded, name: 'run.lock', jobId, command });
   let sync: LockHandle | null = null;
+  let host: LiveSpendLock | undefined;
   try {
+    host = acquireMutationLease(loaded);
     sync = acquireLock({ loaded, name: 'sync.lock', jobId, command });
     return await fn();
   } finally {
     sync?.release();
+    host?.release();
     run.release();
   }
+}
+
+/** Cancellation-only reclamation after authenticated process-role settlement. */
+export function reclaimStoppedRunLock(
+  loaded: LoadedApplianceStateConfig,
+  owners: readonly ProcessIdentity[],
+): void {
+  const path = join(loaded.paths.locks, 'run.lock');
+  const before = lstatSync(path, { throwIfNoEntry: false });
+  if (!before) return;
+  const record = readLockRecord(path);
+  if (
+    !before.isDirectory() ||
+    !record ||
+    record.command !== 'campaign-run' ||
+    !owners.some((owner) => owner.pid === record.pid) ||
+    realProcessIdentityProbe.exists(record.pid) !== 'esrch'
+  )
+    throw new Error('campaign run lock death unresolved');
+  const trash = `${path}.stopped.${randomUUID()}`;
+  renameSync(path, trash);
+  const moved = lstatSync(trash);
+  if (
+    moved.dev !== before.dev ||
+    moved.ino !== before.ino ||
+    JSON.stringify(readLockRecord(trash)) !== JSON.stringify(record)
+  ) {
+    if (!lstatSync(path, { throwIfNoEntry: false })) renameSync(trash, path);
+    throw new Error('campaign run lock changed during reclamation');
+  }
+  rmSync(trash, { recursive: true });
+}
+
+/** All supported source, helper, and credential mutation callers hold this lease. */
+export function acquireMutationLease(
+  loaded: LoadedApplianceStateConfig,
+): LiveSpendLock {
+  if (!loaded.config.live_spend_lock)
+    throw new Error('helper mutation requires configured live-spend lock');
+  return acquireLiveSpendLock({
+    lockPath: loaded.config.live_spend_lock,
+    clock: new RealClock(),
+    identity: realProcessIdentityProbe,
+  });
 }

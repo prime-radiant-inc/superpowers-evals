@@ -29,6 +29,7 @@ import {
 } from '../src/appliance/config.ts';
 import { buildLiveCredentialRequest } from '../src/appliance/credential-request.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
+import { installApplianceHelper } from '../src/appliance/install.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
 import { envSnapshot } from '../src/env.ts';
 
@@ -57,6 +58,7 @@ function loadedForCli(evalsPath: string): LoadedApplianceConfig {
     configPath: join(root, 'appliance.json'),
     config: {
       root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
       evals: { path: evalsPath, remote: 'origin', ref: 'main' },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
@@ -607,6 +609,7 @@ test('default dry-run prune creates and chmods no state dirs', () => {
     configPath,
     JSON.stringify({
       root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
       evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
@@ -1440,13 +1443,22 @@ test('run-all validates requested agents against trusted checkout configs', asyn
   ]);
 });
 
-test('install wrapper embeds the requested root and strict checkout checks', () => {
-  const root = mkdtempSync(join(tmpdir(), 'appliance-install-'));
-  const proc = spawnSync('bash', ['scripts/install-evals-appliance', root], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
+test('install wrapper embeds the requested root and strict checkout checks', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'appliance-install-')));
+  const configPath = join(root, 'config/appliance.json');
+  mkdirSync(join(root, 'config'));
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      ...loadedForCli(root).config,
+      root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
+    }),
+  );
+  await installApplianceHelper(root, {
+    configPath,
+    canonicalConfigPath: configPath,
   });
-  expect(proc.status).toBe(0);
 
   const wrapper = readFileSync(join(root, 'bin/evals-appliance'), 'utf8');
   const syntax = spawnSync('bash', ['-n', join(root, 'bin/evals-appliance')], {
@@ -1532,6 +1544,7 @@ function writeRealConfig(): RealConfigFixture {
     configPath,
     JSON.stringify({
       root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
       evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },

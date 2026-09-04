@@ -21,8 +21,8 @@ import {
 import { parseAttemptManifest } from '../runner/manifest.ts';
 
 export class AttemptPublishError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
     this.name = 'AttemptPublishError';
   }
 }
@@ -45,8 +45,8 @@ export interface AttemptPublishFsOps {
   readonly closeSync: (fd: number) => void;
 }
 
-function refusal(message: string): AttemptPublishError {
-  return new AttemptPublishError(message);
+function refusal(message: string, cause?: unknown): AttemptPublishError {
+  return new AttemptPublishError(message, cause);
 }
 
 function existingPath(path: string): ReturnType<typeof lstatSync> | undefined {
@@ -301,6 +301,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   } catch (error: unknown) {
     throw refusal(
       `publication rename failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
     );
   }
 
@@ -315,6 +316,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   } catch (error: unknown) {
     throw refusal(
       `publication directory sync failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
     );
   }
 
@@ -328,6 +330,7 @@ export function publishExecution(args: {
   stopped: VerifiedStopped;
   resultsRoot: string;
   expectedRunId?: string;
+  fsOps?: AttemptPublishFsOps;
 }): { runId: string; artifacts: ArtifactRef[] } {
   const stopped = VerifiedStoppedSchema.parse(args.stopped);
   const intent = args.bound.intent;
@@ -361,6 +364,7 @@ export function publishExecution(args: {
     expectedAttemptId: intent.identity.execution_attempt_id,
     expectedIdentity: intent.identity,
     expectedRunId: args.expectedRunId,
+    fsOps: args.fsOps,
   });
   return {
     ...published,

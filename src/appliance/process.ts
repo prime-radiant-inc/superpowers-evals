@@ -41,7 +41,12 @@ import {
 import { ApplianceError } from './errors.ts';
 import { mkdirPrivate } from './fs.ts';
 import { readJob, updateJob } from './jobs.ts';
-import { acquireLock, type LockHandle, updateLockRefs } from './locks.ts';
+import {
+  acquireLock,
+  acquireMutationLease,
+  type LockHandle,
+  updateLockRefs,
+} from './locks.ts';
 import {
   type LivePreflightResult,
   postflightDirtyCheck,
@@ -1342,6 +1347,7 @@ export async function runWorker(
 ): Promise<void> {
   let runLock: LockHandle | null = null;
   let syncLock: LockHandle | null = null;
+  let mutationLease: import('../campaign/locks.ts').LiveSpendLock | undefined;
   let preflight: LivePreflightResult | null = null;
 
   try {
@@ -1357,6 +1363,7 @@ export async function runWorker(
       command: job.kind,
       refs: job.refs,
     });
+    mutationLease = acquireMutationLease(loaded);
     syncLock = acquireLock({
       loaded,
       name: 'sync.lock',
@@ -1375,6 +1382,8 @@ export async function runWorker(
     updateLockRefs(syncLock, preflight.evidence.refs);
     syncLock.release();
     syncLock = null;
+    mutationLease.release();
+    mutationLease = undefined;
 
     const liveJob = updateJob(loaded, jobId, (current) => ({
       ...current,
@@ -1481,6 +1490,7 @@ export async function runWorker(
     throw stable;
   } finally {
     syncLock?.release();
+    mutationLease?.release();
     runLock?.release();
   }
 }
@@ -1671,4 +1681,43 @@ export async function cancelJob(
           }
         : null,
   }));
+}
+
+/** Only an exact release followed by EOF opens this private inherited pipe. */
+export function waitForControllerGate(
+  pipe: import('node:stream').Readable,
+  startId: string,
+  timeoutMs = 30_000,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      pipe.off('data', data);
+      pipe.off('end', end);
+      pipe.off('error', failed);
+      pipe.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+    const data = (chunk: Buffer | string) => {
+      body += chunk.toString();
+      if (body.length > startId.length + 1)
+        finish(new Error('invalid controller gate'));
+    };
+    const end = () =>
+      finish(
+        body === `${startId}\n`
+          ? undefined
+          : new Error('controller gate closed without release'),
+      );
+    const failed = () => finish(new Error('controller gate pipe failed'));
+    const timer = setTimeout(
+      () => finish(new Error('controller startup gate timeout')),
+      timeoutMs,
+    );
+    pipe.on('data', data);
+    pipe.once('end', end);
+    pipe.once('error', failed);
+  });
 }

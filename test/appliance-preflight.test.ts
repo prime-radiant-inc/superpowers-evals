@@ -253,6 +253,7 @@ function fixture(): Fixture {
     configPath: join(root, 'config/appliance.json'),
     config: {
       root,
+      live_spend_lock: join(root, 'live-spend.lock.d'),
       evals: { path: evalsPath, remote: 'origin', ref: 'main' },
       superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
       gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },

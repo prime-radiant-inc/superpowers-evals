@@ -181,24 +181,32 @@ test('publish rejects an unexpected allocated run before moving staging', () => 
 test('publish does not retry or overwrite after the post-rename fsync cut', () => {
   const paths = staged('run-pub-fsync-cut');
   let renameCount = 0;
+  const diskFull = Object.assign(new Error('full'), { code: 'ENOSPC' });
   try {
-    expect(() =>
-      publishAttempt({
-        ...paths,
-        expectedAttemptId: expectedAttemptId(),
-        fsOps: {
-          renameSync: (oldPath, newPath) => {
-            renameCount += 1;
-            renameSync(oldPath, newPath);
+    let caught: unknown;
+    expect(() => {
+      try {
+        publishAttempt({
+          ...paths,
+          expectedAttemptId: expectedAttemptId(),
+          fsOps: {
+            renameSync: (oldPath, newPath) => {
+              renameCount += 1;
+              renameSync(oldPath, newPath);
+            },
+            openSync,
+            fsyncSync: () => {
+              throw diskFull;
+            },
+            closeSync,
           },
-          openSync,
-          fsyncSync: () => {
-            throw new Error('simulated post-rename fsync cut');
-          },
-          closeSync,
-        },
-      }),
-    ).toThrow(/publication directory sync failed/);
+        });
+      } catch (error) {
+        caught = error;
+        throw error;
+      }
+    }).toThrow(/publication directory sync failed/);
+    expect((caught as Error).cause).toBe(diskFull);
     expect(renameCount).toBe(1);
     expect(
       existsSync(join(paths.resultsRoot, 'run-pub-fsync-cut', 'verdict.json')),

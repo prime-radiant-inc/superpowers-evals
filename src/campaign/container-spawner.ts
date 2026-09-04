@@ -1381,6 +1381,16 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
       observed_at: new Date().toISOString(),
     };
   }
+  /** A finished or rejected client call does not settle the daemon start. */
+  assertNoUnsettledStarts(): void {
+    if (
+      this.uncertainAttempts.size ||
+      [...this.requests.values()].some((state) => state === 'uncertain')
+    )
+      throw new AttemptContainerError(
+        'start operation completion is uncertain',
+      );
+  }
   async stop(
     bound: BoundExecution,
     graceSeconds: number,
