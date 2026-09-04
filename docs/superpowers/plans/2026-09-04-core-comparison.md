@@ -231,7 +231,7 @@ Required exact assertions:
 - Use arithmetic means and mean within-pair treatment-minus-baseline differences. C1 subject cost has one matched pair: 1 vs 2, delta +1. Comparing independently available means (50.5 vs 4) is wrong. C1 grader cost has two matched pairs: .55 vs .30, delta -.25. C1 wall time has two matched pairs: 55 vs 30, delta -25 seconds.
 - All 12 attempts remain in accounting. Subject known subtotal $136 with 9/12 priced; grader known subtotal $5.90 with 11/12 priced; known combined subtotal $141.90, explicitly incomplete. Wall time known subtotal 500 seconds with 10/12 observed, not campaign elapsed time.
 - Superseded attempts cost $7.70 and 70 seconds. Unaccepted orphan accounting contributes another known $.90 with missing coverage. It contributes no behavior. Selected indeterminate work remains visible in all-attempt accounting.
-- Change one artifact digest, role price, or duration independently: only that field becomes invalid/missing; a failed identity/manifest invalidates the artifact as a whole. A cost-only orphan never acquires an accepted outcome.
+- A failed artifact path, digest, or byte check invalidates all values sourced from that artifact; independently authenticated artifacts remain usable. A malformed optional role price or duration invalidates that field. A failed identity or manifest invalidates the bound publication as a whole. A cost-only orphan never acquires an accepted outcome.
 - Cross-arm replacement, reused reserve, mixed predecessor/successor pairs, and a duplicate selected attempt are rejected by the shared fold before reporting.
 
 Report JSON has a versioned deterministic fold, campaign/input identity, journal prefix digest/last sequence, and sorted artifact references/digests. Terminal completed reports may be sealed against that same anchor. Interrupted reports remain explicitly incomplete without requiring a completed seal. Render Markdown from JSON; formatting is not part of the measurement digest. Per-arm available counts and pair-specific counts accompany each quantity. All-attempt duration/cost, excluded cost, role breakdown, missingness, validity caveats and artifact links remain separate from conditional comparison summaries. Read frozen economics/usage from the existing runner artifacts; never reprice them against today's tables.
@@ -360,7 +360,7 @@ const capacity = Math.min(...limits);
 
 **Interfaces:** Implement `AttemptRuntime`, `PreparedExecution`, `BoundExecution`, `OwnedRuntimeObservation`, `AttemptMonitor` from the runtime section. Retain `containerNameForAttempt`, `buildAttemptMounts`, private stage and manifest publication. Existing `CommandOptions` gains optional positive `timeoutMs`; timeout throws a typed client-timeout error and forcibly terminates the client subprocess.
 
-- [ ] Write a fake-Docker behavior test that rejects start without committed binding, and a monitor-failure test where inspect is unknown: no publication or slot release occurs. Exercise partial create followed by cancellation discovery by exact specification.
+- [x] Write a fake-Docker behavior test that rejects start without committed binding, and a monitor-failure test where inspect is unknown: no publication or slot release occurs. Exercise partial create followed by cancellation discovery by exact specification.
 
 ```ts
 test('a failed monitor cannot masquerade as a stopped worker', async () => {
@@ -372,7 +372,7 @@ test('a failed monitor cannot masquerade as a stopped worker', async () => {
 });
 ```
 
-- [ ] Run `bun test test/campaign-container-spawner.test.ts`; expect the combined spawn path to violate the new contract. Split create and start without replacing the surrounding runner. Return immutable ID only after full spec inspection. Before start, recheck journal binding, cancellation, writer fence and credential authority.
+- [x] Run `bun test test/campaign-container-spawner.test.ts`; expect the combined spawn path to violate the new contract. Split create and start without replacing the surrounding runner. Return immutable ID only after full spec inspection. Before start, recheck journal binding, cancellation, writer fence and credential authority.
 
 ```ts
 const bound = await runtime.create(prepared);
@@ -382,8 +382,8 @@ const monitor = await runtime.start(bound);
 ```
 
 `runtimeBoundTransition` creates the exact table row; `assertStartStillAuthorized` consults the current fold, intent, host claim and cancel sidecar. These are controller-local helpers, not exported authority bypasses.
-- [ ] Configure structured Docker args for init/timeout/restart and assert GNU timeout in the built image. Keep strict credential parsing and current hardening. Test actual runner termination behavior with fakes; do not assert a giant rendered shell string.
-- [ ] Add the Linux tests now: normal exit, TERM-handling timeout, forced timeout with `setsid`/TERM-ignoring descendant, killed controller, client timeout, create-before-bind, and delayed daemon start after a stopped snapshot. Run only portable tests at this stage. Commit; label Linux cases unrun until Task 10.
+- [x] Configure structured Docker args for init/timeout/restart and assert GNU timeout in the built image. Keep strict credential parsing and current hardening. Test actual runner termination behavior with fakes; do not assert a giant rendered shell string.
+- [x] Add the Linux tests now: normal exit, TERM-handling timeout, forced timeout with `setsid`/TERM-ignoring descendant, killed controller, client timeout, create-before-bind, and delayed daemon start after a stopped snapshot. Run only portable tests at this stage. Commit; label Linux cases unrun until Task 10.
 
 ## Task 6: Gate controller launch and implement termination-only cancellation
 
@@ -418,7 +418,7 @@ test('a published claim survives loss before child creation', async () => {
 await publishCancelIntent(identity);
 await stopAndVerifyLauncherAndController(identity);
 const writer = electCancellationWriter(identity);
-const stopped = await stopEveryPreparedAttempt(writer.projection);
+const stopped = await stopEveryPreparedAttempt(writer.readProjection());
 await closeAccountingWithoutBehavior(writer, stopped);
 commitTerminationAndClearMatchingClaim(writer, stopped);
 ```
@@ -443,10 +443,10 @@ test('unknown price changes accounting, never admission', async () => {
 });
 ```
 
-- [ ] Run the focused dispatch tests; replace local sample/reentry routing with reads from `writer.projection`. Commit activation before effects; commit closure before release; commit replacement identity/selection/allowance in one transition.
+- [ ] Run the focused dispatch tests; replace local sample/reentry routing with reads from `writer.readProjection()`. Commit activation before effects; commit closure before release; commit replacement identity/selection/allowance in one transition.
 
 ```ts
-const candidate = nextEligibleBlock(writer.projection, frozenPolicy, clock.now());
+const candidate = nextEligibleBlock(writer.readProjection(), frozenPolicy, clock.now());
 if (candidate) {
   writer.commitTransition(activationFor(candidate));
   await executePreparedBlock(candidate);
@@ -546,3 +546,7 @@ This command belongs on the explicitly selected Linux environment with Docker ac
 - [ ] Execute Tasks 1-9 locally with task-scoped review and focused tests; Task 10's environment-dependent proof remains separately identified.
 
 Task 4 checkpoint: finite registration and shared resource policy are complete at `edd5e979`. Independent task review and scoped fix review pass after rejecting non-Linux targets, requiring exact grader/credential model identity through one strict parser, and refusing the reserved global pool identity. The final focused receipt is 245 passing tests, with lint, typecheck and scenario validation passing. Runtime consumers and removal of temporary budgeted source APIs remain Tasks 5–9.
+
+Task 5 checkpoint: runtime creation, binding, start, independent deadline, strict credential projection and immutable publication are complete at `94000530`, with independent spec/quality approval and scoped confirmation of the subscriber-isolation fix. The main focused receipt is 215 passing tests; the fix receipt is 39 passing covering tests. Lint and typecheck pass. Seven Linux runtime cases remain explicitly unrun, and full real entrypoint/runner/authority integration remains an environment-dependent gate.
+
+The reviewed runtime has required create/start authority callbacks and a separate start-settlement callback. A durably unbound intent cannot have issued a permitted start; a bound intent without a durable successful start receipt remains uncertain after controller loss. Image defaults are authenticated by immutable image ID before comparison of the full actual runtime inventory. The spec requires `credential_projection: { path, sha256 }` for the private read-only registry derived from the frozen subject credential and selected key grant; this preserves key-pool selection through existing runner auth. Both attempt credential deliveries use strict literal records, with the shared Phase 1 serializer unchanged. Tasks 6/7 own production callback wiring and controller error handling; Task 9 removes the temporary budgeted spawner.
