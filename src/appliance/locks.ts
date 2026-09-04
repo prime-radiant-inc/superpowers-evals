@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { ApplianceError } from './errors.ts';
@@ -126,12 +132,23 @@ export function acquireLock(args: AcquireLockArgs): LockHandle {
     throw error;
   }
 
+  const inode = lstatSync(lockDir);
+  let released = false;
   return {
     name: args.name,
     path: lockDir,
     jobId: args.jobId,
     record,
     release() {
+      if (released) return;
+      released = true;
+      const currentInode = lstatSync(lockDir, { throwIfNoEntry: false });
+      if (
+        !currentInode ||
+        currentInode.dev !== inode.dev ||
+        currentInode.ino !== inode.ino
+      )
+        return;
       const current = readLockRecord(lockDir);
       if (current?.job_id !== args.jobId) {
         return;

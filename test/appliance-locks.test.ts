@@ -209,3 +209,19 @@ test('acquireLock operates on the structural state config', () => {
   handle.release();
   expect(existsSync(handle.path)).toBe(false);
 });
+
+test('released handle cannot remove a successor with the same job identity', () => {
+  const cfg = loaded();
+  const args = {
+    loaded: cfg,
+    name: 'run.lock' as const,
+    jobId: 'same',
+    command: 'prepare' as const,
+  };
+  const parent = acquireLock(args);
+  parent.release();
+  const child = acquireLock(args);
+  parent.release();
+  expect(existsSync(child.path)).toBe(true);
+  child.release();
+});

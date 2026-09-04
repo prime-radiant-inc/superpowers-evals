@@ -193,3 +193,36 @@ test('the durable transition ID column must agree with its authenticated canonic
   db.close();
   expect(() => readProjection(fx.dir)).toThrow();
 });
+
+test('current writer fence refuses released, poisoned and deposed authority before effects', () => {
+  const live = fixture();
+  expect(() => live.writer.assertCurrentOwner()).not.toThrow();
+  live.writer.release();
+  expect(() => live.writer.assertCurrentOwner()).toThrow(/released/);
+  const poisoned = fixture();
+  expect(() =>
+    poisoned.writer.commitTransition(
+      transition(
+        'registered',
+        {
+          campaign_id: poisoned.experiment.campaign_id,
+          input_digest: poisoned.experiment.input_digest,
+        },
+        9,
+      ),
+    ),
+  ).toThrow();
+  expect(() => poisoned.writer.assertCurrentOwner()).toThrow(/poisoned/);
+  const deposed = fixture();
+  const db = new Database(join(deposed.dir, 'journal.db'));
+  db.exec(
+    "UPDATE execution_meta SET value = '9999' WHERE key = 'writer_generation'",
+  );
+  db.close();
+  let effects = 0;
+  expect(() => {
+    deposed.writer.assertCurrentOwner();
+    effects++;
+  }).toThrow(/deposed/);
+  expect(effects).toBe(0);
+});

@@ -264,6 +264,16 @@ export class ExecutionJournalWriter {
   readProjection(): CampaignProjection {
     return structuredClone(this.projection);
   }
+  assertCurrentOwner(): void {
+    if (this.released || this.poison)
+      throw new Error('execution writer released or poisoned');
+    this.lease.heartbeat();
+    const row = this.db
+      .query("SELECT value FROM execution_meta WHERE key = 'writer_generation'")
+      .get() as { value: string } | null;
+    if (Number(row?.value) !== this.generation)
+      throw new Error('execution writer deposed');
+  }
   commitTransition(input: CampaignTransition): CommittedTransition {
     if (this.released || this.poison)
       throw new Error('execution writer released or poisoned');
@@ -273,14 +283,7 @@ export class ExecutionJournalWriter {
     try {
       this.db.exec('BEGIN IMMEDIATE');
       began = true;
-      this.lease.heartbeat();
-      const row = this.db
-        .query(
-          "SELECT value FROM execution_meta WHERE key = 'writer_generation'",
-        )
-        .get() as { value: string } | null;
-      if (Number(row?.value) !== this.generation)
-        throw new Error('execution writer deposed');
+      this.assertCurrentOwner();
       const next = foldTransition(this.projection, transition);
       const duplicate = this.committed.find(
         (entry) => entry.transition.transition_id === transition.transition_id,
