@@ -58,6 +58,7 @@ import {
 import {
   type Experiment,
   ExperimentSchema,
+  GraderSchema,
 } from '../contracts/campaign/experiment.ts';
 import { experimentDigest } from '../contracts/campaign/experiment-digest.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
@@ -690,15 +691,23 @@ function experimentCellRejection(
   scenario: ScenarioIntake,
   armNames: readonly string[],
 ): string | null {
+  const armTargets: { armName: string; arm: Arm; os: string }[] = [];
+  for (const armName of armNames) {
+    const arm = input.arms[armName];
+    if (arm === undefined) return `arm ${armName} is absent from arms/`;
+    const os = arm.os ?? input.campaignOs;
+    if (os !== input.campaignOs) {
+      return `arm ${armName} targets ${os}, but the campaign targets ${input.campaignOs}`;
+    }
+    armTargets.push({ armName, arm, os });
+  }
   if (
     scenario.requires_superpowers &&
     armNames.some((name) => input.arms[name]?.superpowers === 'none')
   ) {
     return 'scenario requires_superpowers conflicts with a superpowers: none arm';
   }
-  for (const armName of armNames) {
-    const arm = input.arms[armName];
-    if (arm === undefined) return `arm ${armName} is absent from arms/`;
+  for (const { armName, arm, os } of armTargets) {
     const credential = input.credentials[arm.credential];
     if (credential === undefined) {
       return `credential ${arm.credential} for arm ${armName} is absent from credentials.yaml`;
@@ -707,9 +716,6 @@ function experimentCellRejection(
     if (!credential.harnesses.includes(family)) {
       return `credential ${arm.credential} does not support harness ${family}`;
     }
-    if (arm.os === 'windows')
-      return `arm ${armName} targets unsupported windows`;
-    const os = arm.os ?? input.campaignOs;
     const agentOs = input.agentOsSupport(arm.agent);
     if (agentOs !== undefined && !agentOs.includes(os)) {
       return `arm ${armName} os ${os} is unsupported by agent ${arm.agent}`;
@@ -742,7 +748,13 @@ export function prepareRegistration(
   rawInput: RegistrationInput,
 ): PreparedRegistration {
   const suite = ExperimentSuiteSchema.parse(rawInput.suite);
-  const input = { ...rawInput, suite };
+  const grader = GraderSchema.parse(rawInput.grader);
+  const input = { ...rawInput, suite, grader };
+  if (input.campaignOs !== 'linux') {
+    throw new RegistrationError(
+      `campaign target ${input.campaignOs} is unsupported by the Linux-only campaign product`,
+    );
+  }
   if (input.globalCap !== input.contention.global_run_cap) {
     throw new RegistrationError(
       `global capacity ${input.globalCap} differs from contention declaration ${input.contention.global_run_cap}`,
@@ -752,6 +764,11 @@ export function prepareRegistration(
   if (graderCredential === undefined) {
     throw new RegistrationError(
       `grader credential ${input.grader.credential} is absent from credentials.yaml`,
+    );
+  }
+  if (input.grader.model !== graderCredential.model) {
+    throw new RegistrationError(
+      `grader model ${input.grader.model} does not match credential ${input.grader.credential} model ${graderCredential.model}`,
     );
   }
 
@@ -2160,28 +2177,14 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     throw new RegistrationError(`${args.suitePath}: suite must be an object`);
   }
   const record = raw as Record<string, unknown>;
-  const graderRaw = record['grader'];
-  const graderCredential =
-    graderRaw !== null &&
-    typeof graderRaw === 'object' &&
-    !Array.isArray(graderRaw)
-      ? (graderRaw as Record<string, unknown>)['credential']
-      : undefined;
-  const graderModel =
-    graderRaw !== null &&
-    typeof graderRaw === 'object' &&
-    !Array.isArray(graderRaw)
-      ? (graderRaw as Record<string, unknown>)['model']
-      : undefined;
-  if (typeof graderCredential !== 'string' || typeof graderModel !== 'string') {
+  let grader: Experiment['grader'];
+  try {
+    grader = GraderSchema.parse(record['grader']);
+  } catch (error) {
     throw new RegistrationError(
-      `${args.suitePath}: suite must declare grader: { credential, model }`,
+      `${args.suitePath}: invalid grader declaration: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const grader = {
-    credential: graderCredential,
-    model: graderModel,
-  };
   const { grader: _grader, ...suiteFields } = record;
   const suite = ExperimentSuiteSchema.parse(suiteFields);
 

@@ -355,6 +355,40 @@ test('a malformed grader block fails loud', () => {
   expect(result.errors.join('\n')).toMatch(/must declare grader/);
 });
 
+test('a grader block with unsupported fields fails strict validation', () => {
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': SUITE.replace(
+      '  model: claude-opus-5',
+      '  model: claude-opus-5\n  alias: unsupported',
+    ),
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(/grader.*alias/i);
+});
+
+test('grader model must match the selected credential model', () => {
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': SUITE.replace(
+      'model: claude-opus-5',
+      'model: another-model',
+    ),
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(
+    /grader model 'another-model'.*credential 'opus_fx'.*'claude-opus-5'/,
+  );
+});
+
 test('an unknown grader credential fails loud', () => {
   const root = repo({
     'arms/claude_fx.yaml': ARM,

@@ -58,7 +58,7 @@ function experimentInput(
         api_key_env: 'DEFINITELY_UNSET_SECRET_B',
       }),
     },
-    grader: { credential: 'cred_a', model: 'grader-model' },
+    grader: { credential: 'cred_a', model: 'test-model' },
     refs: {
       superpowers_by_arm: { arm_a: null, arm_b: null },
       evals: 'a'.repeat(40),
@@ -106,6 +106,68 @@ test('V2 preparation is price independent and reserve does not expand planned sa
 
 test('V2 configuration validation does not require secret values', () => {
   expect(() => prepareExperimentRegistration(experimentInput())).not.toThrow();
+});
+
+test('V2 grader must name the model owned by its selected credential', () => {
+  expect(() =>
+    prepareExperimentRegistration(
+      experimentInput({
+        grader: { credential: 'cred_a', model: 'test-model' },
+      }),
+    ),
+  ).not.toThrow();
+  expect(() =>
+    prepareExperimentRegistration(
+      experimentInput({
+        grader: { credential: 'cred_a', model: 'different-model' },
+      }),
+    ),
+  ).toThrow(/grader model different-model.*credential cred_a.*test-model/);
+});
+
+test('V2 Linux preparation excludes an explicit Darwin arm before compatibility checks', () => {
+  const base = experimentInput();
+  const prepared = prepareExperimentRegistration(
+    experimentInput({
+      suite: {
+        ...base.suite,
+        comparisons: [
+          { arm: 'arm_a', scenarios: ['darwin-only'], n: 1 },
+          { arm: 'arm_b', scenarios: ['linux-valid'], n: 1 },
+        ],
+      },
+      arms: {
+        arm_a: arm('arm_a', { os: 'darwin' }),
+        arm_b: arm('arm_b', { credential: 'cred_b' }),
+      },
+      grader: { credential: 'cred_a', model: 'test-model' },
+      scenarios: [
+        scenario('darwin-only', { os: ['darwin'] }),
+        scenario('linux-valid', { os: ['linux'] }),
+      ],
+      agentOsSupport: () => ['linux', 'darwin'],
+    }),
+  );
+
+  expect(prepared.cells.map((cell) => cell.scenario)).toEqual(['linux-valid']);
+  expect(prepared.excluded_cells).toEqual([
+    {
+      cell: 'c1:darwin-only',
+      reason: expect.stringMatching(/arm arm_a.*darwin.*campaign.*linux/),
+    },
+  ]);
+});
+
+test('V2 preparation refuses a non-Linux campaign target', () => {
+  expect(() =>
+    prepareExperimentRegistration(
+      experimentInput({
+        campaignOs: 'darwin',
+        grader: { credential: 'cred_a', model: 'test-model' },
+        agentOsSupport: () => ['darwin'],
+      }),
+    ),
+  ).toThrow(/campaign target darwin.*Linux-only/);
 });
 
 test('V2 credential authority is order-independent and rejects public mutation', () => {
@@ -1668,7 +1730,7 @@ const EXPERIMENT_SUITE_RAW = [
   'reserve: 1',
   'max_exposure_skew: 30',
   'attempt_bounds: { max_attempts: 2, max_time_s: 300 }',
-  'grader: { credential: cred_a, model: grader-model }',
+  'grader: { credential: cred_a, model: test-model }',
   'comparisons:',
   '  - baseline: arm_a',
   '    treatment: arm_b',
@@ -1716,6 +1778,24 @@ test('V2 registrations of identical inputs publish distinct IDs with equal input
   expect(projection.registered).toBe(true);
   expect(projection.experiment.campaign_id).toBe(first.experiment.campaign_id);
 }, 60_000);
+
+test('V2 raw registration rejects unsupported grader fields', () => {
+  const args = experimentRegisterArgs({
+    suiteRaw: EXPERIMENT_SUITE_RAW.replace(
+      'grader: { credential: cred_a, model: test-model }',
+      'grader: { credential: cred_a, model: test-model, alias: unsupported }',
+    ),
+  });
+
+  let message = '';
+  try {
+    registerExperimentCampaign(args);
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  expect(message).toContain('invalid grader declaration');
+  expect(message).toContain('alias');
+});
 
 /** Give a fixture repo a dependency-less package.json + lockfile and commit
  *  everything — materializeEvalsSnapshot runs `bun install

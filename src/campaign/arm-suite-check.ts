@@ -13,6 +13,7 @@ import {
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
 import { type Arm, ArmSchema } from '../contracts/campaign/arm.ts';
+import { type Grader, GraderSchema } from '../contracts/campaign/experiment.ts';
 import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
 import {
   type BudgetedSuite,
@@ -135,38 +136,29 @@ export function checkArmSuiteFiles(
       >;
       // Registration's grader intake, mirrored: the grader block is
       // extracted BEFORE the strict SuiteSchema parse and cross-referenced
-      // below (R-REG-20 singular grader). The check accepts exactly what
-      // registration accepts — a suite without grader is unregistrable,
-      // and a suite with grader must not trip the strict unrecognized-key
-      // rule.
-      const graderRaw =
-        raw !== null && typeof raw === 'object'
-          ? (raw['grader'] as
-              | { credential?: unknown; model?: unknown }
-              | undefined)
-          : undefined;
-      if (
-        graderRaw === undefined ||
-        typeof graderRaw !== 'object' ||
-        typeof graderRaw.credential !== 'string' ||
-        typeof graderRaw.model !== 'string'
-      ) {
+      // below (R-REG-20 singular grader). Its own strict schema rejects
+      // unsupported grader fields before the recognized wrapper is stripped
+      // from the otherwise strict suite declaration.
+      const graderResult = GraderSchema.safeParse(raw['grader']);
+      let grader: Grader | undefined;
+      if (!graderResult.success) {
         errors.push(
-          `suites/${file}: suite must declare grader: { credential, model } — the campaign grader is registered singular (R-REG-20)`,
+          `suites/${file}: suite must declare grader: { credential, model } — the campaign grader is strict and singular (R-REG-20): ${graderResult.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
         );
+      } else {
+        grader = graderResult.data;
       }
       const { grader: _stripped, ...suiteFields } = raw ?? {};
       suite = parseCheckedSuite(suiteFields);
-      if (
-        credentials !== undefined &&
-        graderRaw !== undefined &&
-        typeof graderRaw === 'object' &&
-        typeof graderRaw.credential === 'string'
-      ) {
-        const graderCredential = credentials[graderRaw.credential];
+      if (credentials !== undefined && grader !== undefined) {
+        const graderCredential = credentials[grader.credential];
         if (graderCredential === undefined) {
           errors.push(
-            `suites/${file}: grader credential '${graderRaw.credential}' not in credentials.yaml`,
+            `suites/${file}: grader credential '${grader.credential}' not in credentials.yaml`,
+          );
+        } else if (grader.model !== graderCredential.model) {
+          errors.push(
+            `suites/${file}: grader model '${grader.model}' does not match credential '${grader.credential}' model '${graderCredential.model}'`,
           );
         }
         // R-REG-15 (api-key-only gating grader) was rescinded by owner

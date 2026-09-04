@@ -15,6 +15,10 @@ export { SuiteSchema } from './suite.ts';
 export const IdSchema = z.string().min(1);
 export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 export const TimestampSchema = z.string().datetime({ offset: true });
+export const GraderSchema = z
+  .object({ credential: IdSchema, model: IdSchema })
+  .strict();
+export type Grader = z.infer<typeof GraderSchema>;
 const NameSchema = z.string().regex(ID_COMPONENT_RE);
 export const ExperimentIdentitySchema = z
   .object({ campaign_id: IdSchema, input_digest: Sha256Schema })
@@ -81,7 +85,7 @@ export const ExperimentSchema = z
         gauntlet: z.string().regex(/^[0-9a-f]{40}$/),
       })
       .strict(),
-    grader: z.object({ credential: IdSchema, model: IdSchema }).strict(),
+    grader: GraderSchema,
     cells: z.array(ExperimentCellSchema).min(1),
     excluded_cells: z.array(
       z.object({ cell: IdSchema, reason: IdSchema }).strict(),
