@@ -25,11 +25,24 @@ interface CodexTokenUsage {
   output_tokens?: number;
   cached_input_tokens?: number;
   reasoning_output_tokens?: number;
+  total_tokens?: number;
 }
 
 function asTokenUsage(value: unknown): CodexTokenUsage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   return value as CodexTokenUsage;
+}
+
+function sameTokenUsage(a: CodexTokenUsage, b: CodexTokenUsage): boolean {
+  return (
+    typeof a.input_tokens === 'number' &&
+    typeof a.output_tokens === 'number' &&
+    a.input_tokens === b.input_tokens &&
+    a.cached_input_tokens === b.cached_input_tokens &&
+    a.output_tokens === b.output_tokens &&
+    a.reasoning_output_tokens === b.reasoning_output_tokens &&
+    a.total_tokens === b.total_tokens
+  );
 }
 
 // Map the final cumulative codex usage into ATIF final_metrics. cached has no
@@ -547,6 +560,9 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
   // sum to the cumulative but carry real per-request sizes, so obol tiers each
   // turn correctly (see the attachment step below).
   const turnUsages: CodexTokenUsage[] = [];
+  let previousUsageEvent:
+    | { total: CodexTokenUsage; last: CodexTokenUsage }
+    | undefined;
 
   // Session metadata fields.
   let sessionId: string | undefined;
@@ -609,11 +625,20 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
           const total = asTokenUsage(
             (info as { total_token_usage?: unknown }).total_token_usage,
           );
-          if (total) sessionUsage = total;
           const last = asTokenUsage(
             (info as { last_token_usage?: unknown }).last_token_usage,
           );
-          if (last) turnUsages.push(last);
+          // Codex may repeat its usage snapshot without making another request.
+          // Both counters must match; equal request sizes alone are billable.
+          const repeated =
+            total !== undefined &&
+            last !== undefined &&
+            previousUsageEvent !== undefined &&
+            sameTokenUsage(total, previousUsageEvent.total) &&
+            sameTokenUsage(last, previousUsageEvent.last);
+          if (total) sessionUsage = total;
+          if (last && !repeated) turnUsages.push(last);
+          previousUsageEvent = total && last ? { total, last } : undefined;
         }
       }
       continue;
