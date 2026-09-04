@@ -62,9 +62,15 @@ import {
   writeSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
+import { loadStateConfig } from '../appliance/config.ts';
+import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import { clockNowMs } from './host-stats.ts';
+import {
+  assertHostClaimAuthority,
+  type LiveSpendAuthority,
+} from './ownership.ts';
 
 export class LockError extends Error {
   constructor(message: string) {
@@ -964,22 +970,58 @@ function makeHandle(
   return handle;
 }
 
-export function defaultLiveSpendLockPath(): string {
-  const explicit = getEnv('QUORUM_LIVE_SPEND_LOCK');
-  if (explicit !== undefined && explicit !== '') {
-    if (!isAbsolute(explicit)) {
-      throw new LockError(
-        `QUORUM_LIVE_SPEND_LOCK must be an absolute path (got '${explicit}') — a relative host-wide lock would resolve differently per cwd and let two spenders run at once`,
-      );
-    }
-    return explicit;
-  }
-  const home = getEnv('HOME');
-  if (home === undefined || home === '' || !isAbsolute(home)) {
-    throw new LockError(
-      'no absolute live-spend lock path available — set QUORUM_LIVE_SPEND_LOCK or HOME; refusing a cwd-relative default that would let spenders from different cwds hold different locks',
+export interface LockLocationOptions {
+  /** Read-only configuration seam; production always uses the canonical appliance path. */
+  readonly canonicalConfigPath?: string;
+  readonly env?: Record<string, string | undefined>;
+}
+export function defaultLiveSpendLockPath(
+  options: LockLocationOptions = {},
+): string {
+  const env = options.env ?? envSnapshot();
+  const canonicalPath =
+    options.canonicalConfigPath ?? '/srv/quorum/config/appliance.json';
+  const configured = (path: string): string => {
+    // loadStateConfig validates structural directories without reading credentials.
+    // Pin the config file itself too; its JSON reader alone follows symlinks.
+    readPinnedNoFollowFile(
+      dirname(path),
+      [basename(path)],
+      'appliance lock configuration',
+      true,
     );
-  }
+    const value = loadStateConfig(path).config.live_spend_lock;
+    if (!value || !isAbsolute(value))
+      throw new LockError(
+        'appliance configuration requires an absolute live_spend_lock',
+      );
+    return value;
+  };
+  const canonical =
+    lstatSync(canonicalPath, { throwIfNoEntry: false }) === undefined
+      ? undefined
+      : configured(canonicalPath);
+  const selectedPath = env['EVALS_APPLIANCE_CONFIG'];
+  const selected = selectedPath ? configured(selectedPath) : undefined;
+  if (canonical && selected && canonical !== selected)
+    throw new LockError(
+      'explicit appliance config disagrees with canonical live-spend lock',
+    );
+  const appliance = canonical ?? selected;
+  const explicit = env['QUORUM_LIVE_SPEND_LOCK'];
+  if (explicit && !isAbsolute(explicit))
+    throw new LockError('QUORUM_LIVE_SPEND_LOCK must be an absolute path');
+  if (appliance && explicit && appliance !== explicit)
+    throw new LockError(
+      'QUORUM_LIVE_SPEND_LOCK disagrees with canonical appliance lock',
+    );
+  if (appliance) return appliance;
+  if (explicit) return explicit;
+  const home = env['HOME'];
+  if (!home || !isAbsolute(home))
+    throw new LockError(
+      'no absolute live-spend lock path available — set QUORUM_LIVE_SPEND_LOCK or HOME',
+    );
   return join(home, '.quorum', 'live-spend.lock.d');
 }
 
@@ -990,6 +1032,7 @@ export interface LiveSpendLock extends LeaseHandle {
 export function acquireLiveSpendLock(args: {
   readonly lockPath?: string;
   readonly campaignId?: string;
+  readonly authority?: LiveSpendAuthority;
   readonly clock: Clock;
   readonly identity: ProcessIdentityProbe;
   /** Heartbeat driver; forwarded to the lease (tests inject failures or
@@ -1005,6 +1048,12 @@ export function acquireLiveSpendLock(args: {
     label: 'live-spend lock',
     scheduler: args.scheduler,
   });
+  try {
+    assertHostClaimAuthority(lockPath, args.authority);
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
   // NOTE (R-LCK-2 layering): the resource-floor preflight is deliberately
   // NOT here. The spec's recovery ordering (REV sol #8c) pins
   // acquire lock → kill/reconcile → preflight → admit: preflight failure
