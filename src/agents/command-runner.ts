@@ -7,6 +7,8 @@ import { spawnSync } from 'node:child_process';
 // records calls and returns canned results while live runs use the real impl.
 
 export interface CommandOptions {
+  // Finite client deadline; daemon operations remain uncertain after timeout.
+  readonly timeoutMs?: number;
   // Working directory for the child process.
   readonly cwd?: string;
   // Environment for the child. WARNING: omitted (undefined) means spawnSync
@@ -34,6 +36,16 @@ export interface CommandRunner {
   ): CommandResult;
 }
 
+export class CommandClientTimeoutError extends Error {
+  constructor(
+    readonly command: string,
+    readonly timeoutMs: number,
+  ) {
+    super(`${command} client timed out after ${timeoutMs}ms`);
+    this.name = 'CommandClientTimeoutError';
+  }
+}
+
 // Real runner: a thin synchronous spawnSync wrapper. provision() is synchronous
 // (it returns an env map), so the seam is synchronous too.
 export class SpawnCommandRunner implements CommandRunner {
@@ -42,12 +54,26 @@ export class SpawnCommandRunner implements CommandRunner {
     args: readonly string[],
     options?: CommandOptions,
   ): CommandResult {
+    const timeoutMs = options?.timeoutMs;
+    if (
+      timeoutMs !== undefined &&
+      (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+    ) {
+      throw new Error('timeoutMs must be positive and finite');
+    }
     const proc = spawnSync(command, [...args], {
       cwd: options?.cwd,
       env: options?.env === undefined ? undefined : { ...options.env },
       input: options?.input,
       encoding: 'utf8',
+      timeout: timeoutMs,
+      killSignal: 'SIGKILL',
     });
+    if (
+      (proc.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+    ) {
+      throw new CommandClientTimeoutError(command, timeoutMs!);
+    }
     return {
       status: proc.status,
       stdout: proc.stdout ?? '',

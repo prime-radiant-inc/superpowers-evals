@@ -50,3 +50,23 @@ test('FakeCommandRunner uses a responder for canned results', () => {
   expect(fake.run('gemini', ['extensions', 'list']).stdout).toBe('superpowers');
   expect(fake.run('other', []).status).toBe(1);
 });
+
+test('SpawnCommandRunner forcibly terminates a client that ignores TERM', () => {
+  const started = Date.now();
+  expect(() =>
+    new SpawnCommandRunner().run(
+      process.execPath,
+      ['-e', 'process.on("SIGTERM", () => {}); setTimeout(() => {}, 1000);'],
+      { timeoutMs: 50 },
+    ),
+  ).toThrow('client timed out');
+  expect(Date.now() - started).toBeLessThan(900);
+});
+
+test('SpawnCommandRunner refuses invalid timeout before running a client', () => {
+  for (const timeoutMs of [0, -1, NaN, Infinity]) {
+    expect(() =>
+      new SpawnCommandRunner().run('printf', ['ran'], { timeoutMs }),
+    ).toThrow('timeoutMs must be positive');
+  }
+});
