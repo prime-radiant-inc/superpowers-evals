@@ -9,12 +9,13 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { CommandResult, CommandRunner } from '../agents/command-runner.ts';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import {
   closePin,
   pinAbsoluteDir,
+  readPinnedNoFollowFile,
   writePinnedFile,
 } from '../appliance/credential-scope.ts';
 import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
@@ -925,8 +926,10 @@ export interface ContainerAttemptRuntimeArgs {
   readonly runner: CommandRunner;
   readonly assertCreateAuthorized: (prepared: PreparedExecution) => void;
   readonly assertStartAuthorized: (bound: BoundExecution) => void;
-  /** Cancellation uses durable evidence and controller-death proof. Missing
-   * runtime_started alone is uncertain, never evidence of a never-issued start. */
+  /** After controller-death proof, a durably unbound intent is never-issued;
+   * a bound intent without runtime_started is uncertain; a durable successful
+   * runtime_started receipt is settled. Missing runtime_started alone can
+   * never settle a bound attempt. No elapsed-time inference is permitted. */
   readonly startSettlement: (
     bound: BoundExecution,
   ) => 'never-issued' | 'settled' | 'uncertain';
@@ -1027,6 +1030,39 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
       );
     }
     return intent;
+  }
+  private verifyCredentialProjection(intent: AttemptIntent): void {
+    const spec = intent.runtime_spec;
+    const projection = spec.credential_projection;
+    const matches = spec.mounts.filter((m) => m.target === projection.path);
+    const mount = matches[0];
+    const within = (root: string, path: string) =>
+      path === root || path.startsWith(`${root}/`);
+    const index = spec.args.indexOf('--credentials-file');
+    if (
+      matches.length !== 1 ||
+      mount?.mode !== 'ro' ||
+      within(intent.output_root, mount.source) ||
+      spec.mounts.some(
+        (m) => m.mode === 'rw' && within(m.source, mount.source),
+      ) ||
+      index < 0 ||
+      spec.args[index + 1] !== projection.path ||
+      spec.args.lastIndexOf('--credentials-file') !== index
+    )
+      throw new AttemptContainerError(
+        'selected credential projection mount or argv mismatch',
+      );
+    const body = readPinnedNoFollowFile(
+      dirname(mount.source),
+      [basename(mount.source)],
+      'selected credential registry',
+      true,
+    );
+    if (body === null || sha256Hex(body) !== projection.sha256)
+      throw new AttemptContainerError(
+        'selected credential projection digest mismatch',
+      );
   }
   private image(spec: AttemptRuntimeSpec): {
     env: Record<string, string>;
@@ -1183,6 +1219,7 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
   async create(prepared: PreparedExecution): Promise<BoundExecution> {
     const intent = this.intent(prepared);
     this.options.assertCreateAuthorized({ intent });
+    this.verifyCredentialProjection(intent);
     this.image(intent.runtime_spec);
     const spec = intent.runtime_spec;
     const argv = [
@@ -1212,6 +1249,7 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
         `type=bind,source=${m.source},target=${m.target}${m.mode === 'ro' ? ',readonly' : ''}`,
       );
     argv.push(spec.image_digest, ...runtimeCommand(spec));
+    this.verifyCredentialProjection(intent);
     this.options.assertCreateAuthorized({ intent });
     const created = this.docker(argv);
     if (created.status !== 0 || !CONTAINER_ID_RE.test(created.stdout.trim()))
@@ -1241,6 +1279,7 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
       throw new AttemptContainerError(
         'start requires an exact created container',
       );
+    this.verifyCredentialProjection(intent);
     this.options.assertStartAuthorized(bound);
     this.requests.set(bound.container_id, 'uncertain');
     this.uncertainAttempts.add(intent.identity.execution_attempt_id);
@@ -1380,6 +1419,16 @@ export function prepareContainerExecution(
   if (args.identity.execution_attempt_id !== args.attemptId)
     throw new AttemptContainerError('attempt identity mismatch');
   const stage = prepareAttemptStage(args);
+  const credentialsBody = stage.credentialRegistry;
+  if (credentialsBody === undefined)
+    throw new AttemptContainerError('selected credential registry missing');
+  const credentialsRelative = [
+    'control',
+    sha256Hex(args.attemptId),
+    'credentials.yaml',
+  ];
+  const credentialsSource = join(args.campaignDir, ...credentialsRelative);
+  const credentialsTarget = '/run/quorum/credentials.yaml';
   const authorityRelative = [
     'control',
     sha256Hex(args.attemptId),
@@ -1399,7 +1448,16 @@ export function prepareContainerExecution(
     target: ATTEMPT_AUTHORITY_PATH,
     mode: 'ro',
   });
+  mounts.push({
+    source: credentialsSource,
+    target: credentialsTarget,
+    mode: 'ro',
+  });
   const runtimeSpec: AttemptRuntimeSpec = {
+    credential_projection: {
+      path: credentialsTarget,
+      sha256: sha256Hex(credentialsBody),
+    },
     image_digest: args.imageDigest,
     command: join(args.evalsRoot, 'container', 'attempt-entrypoint.sh'),
     entrypoint: ['/usr/bin/timeout'],
@@ -1417,7 +1475,7 @@ export function prepareContainerExecution(
       outRoot: stage.stagingDir,
       os: 'linux',
       credentialName: args.credentialName,
-      credentialsFile: join(args.evalsRoot, 'credentials.yaml'),
+      credentialsFile: credentialsTarget,
       gauntletBin: join(args.binRoot, 'gauntlet'),
       graderModel: args.grader.model,
       superpowers:
@@ -1474,6 +1532,13 @@ export function prepareContainerExecution(
   });
   const campaignPin = pinAbsoluteDir(args.campaignDir, 'campaign directory');
   try {
+    writePinnedFile(
+      campaignPin,
+      credentialsRelative,
+      credentialsBody,
+      'selected credential registry',
+      0o400,
+    );
     writePinnedFile(
       campaignPin,
       authorityRelative,

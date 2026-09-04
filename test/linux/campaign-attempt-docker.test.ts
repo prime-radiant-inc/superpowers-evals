@@ -1477,6 +1477,18 @@ function deadlineFixture(body: string, maxTime = 1) {
     QUORUM_ATTEMPT_DIR: output,
     QUORUM_ATTEMPT_AUTHORITY_FILE: '/run/quorum/attempt-authority.json',
   };
+  const credentials = join(root, 'credentials.yaml');
+  writeFileSync(credentials, '{}\n', { mode: 0o444 });
+  spec.credential_projection = {
+    path: '/run/quorum/credentials.yaml',
+    sha256: sha256Hex('{}\n'),
+  };
+  spec.mounts.push({
+    source: credentials,
+    target: spec.credential_projection.path,
+    mode: 'ro',
+  });
+  spec.args.push('--credentials-file', spec.credential_projection.path);
   spec.max_time_s = maxTime;
   spec.tmpfs_bytes = 1024 * 1024;
   intent.runtime_spec_digest = sha256Hex(jcsCanonicalize(spec));

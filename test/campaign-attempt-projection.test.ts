@@ -21,6 +21,7 @@ import {
   prepareAttemptStage,
   removeAttemptStage,
 } from '../src/campaign/attempt-projection.ts';
+import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 
 const SUBJECT = "subject value '$tick' `quoted` ;";
 const GRADER = 'grader-secret-value';
@@ -451,6 +452,7 @@ import {
 function prepareV2(
   fx: ReturnType<typeof projectionFixture>,
   model = 'claude-grader',
+  grants: { subjectKeyEnv?: string; graderKeyEnv?: string } = {},
 ) {
   return prepareContainerExecution({
     campaignDir: fx.campaignDir,
@@ -462,6 +464,7 @@ function prepareV2(
     uid: 1000,
     gid: 1000,
     grader: { credential: 'grader', model },
+    ...grants,
     identity: {
       ...blockActivation(twoArmExperiment()).attempts[0]!.identity,
       execution_attempt_id: 'attempt',
@@ -539,5 +542,141 @@ test('V2 preparation refuses selected grader model mismatch and unsupported prot
     ),
   );
   expect(() => prepareV2(fx)).toThrow('grader');
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+});
+
+test('V2 preparation delivers only selected two-key pool grants and authenticates derived registry bytes', () => {
+  for (const selection of ['ONE', 'TWO']) {
+    const fx = projectionFixture();
+    addGrader(fx);
+    const file = join(fx.corpus, 'credentials.yaml');
+    writeFileSync(
+      file,
+      readFileSync(file, 'utf8')
+        .replace(
+          'api_key_env: SUBJECT_KEY',
+          'key_pool: [SUBJECT_ONE, SUBJECT_TWO]',
+        )
+        .replace(
+          'api_key_env: SELECTED_GRADER',
+          'key_pool: [GRADER_ONE, GRADER_TWO]',
+        ),
+    );
+    fs.appendFileSync(
+      join(fx.bundleDir, 'credentials.env'),
+      "SUBJECT_ONE='subject-one'\nSUBJECT_TWO='subject-two'\nGRADER_ONE='grader-one'\nGRADER_TWO='grader-two'\n",
+    );
+    const prepared = prepareV2(fx, 'claude-grader', {
+      subjectKeyEnv: `SUBJECT_${selection}`,
+      graderKeyEnv: `GRADER_${selection}`,
+    });
+    const spec = prepared.intent.runtime_spec;
+    const projection = spec.credential_projection;
+    const fileMount = spec.mounts.find((m) => m.target === projection.path)!;
+    const bytes = readFileSync(fileMount.source, 'utf8');
+    expect(sha256Hex(bytes)).toBe(projection.sha256);
+    const registry = (require('yaml') as typeof import('yaml')).parse(bytes);
+    expect(registry.cred_a.api_key_env).toBe(`SUBJECT_${selection}`);
+    expect(registry.cred_a.key_pool).toBeUndefined();
+    expect(registry.grader.key_pool).toEqual(['GRADER_ONE', 'GRADER_TWO']);
+    expect(spec.args[spec.args.indexOf('--credentials-file') + 1]).toBe(
+      projection.path,
+    );
+    const subject = spec.mounts.find(
+      (m) => m.target === '/run/quorum/subject.env',
+    )!;
+    const grader = spec.mounts.find(
+      (m) => m.target === '/run/quorum/grader.env',
+    )!;
+    expect(readFileSync(subject.source, 'utf8')).toBe(
+      `SUBJECT_${selection}=subject-${selection.toLowerCase()}\n`,
+    );
+    expect(readFileSync(grader.source, 'utf8')).toContain(
+      `QUORUM_GRADER_ANTHROPIC_API_KEY=grader-${selection.toLowerCase()}\n`,
+    );
+    expect(fileMount.source.startsWith(`${prepared.intent.output_root}/`)).toBe(
+      false,
+    );
+  }
+});
+
+test('V2 preparation refuses absent nonmember and unset pool grants before private writes', () => {
+  for (const grants of [
+    {},
+    { subjectKeyEnv: 'FOREIGN', graderKeyEnv: 'GRADER_ONE' },
+    { subjectKeyEnv: 'SUBJECT_TWO', graderKeyEnv: 'GRADER_TWO' },
+  ]) {
+    const fx = projectionFixture();
+    addGrader(fx);
+    const file = join(fx.corpus, 'credentials.yaml');
+    writeFileSync(
+      file,
+      readFileSync(file, 'utf8')
+        .replace(
+          'api_key_env: SUBJECT_KEY',
+          'key_pool: [SUBJECT_ONE, SUBJECT_TWO]',
+        )
+        .replace(
+          'api_key_env: SELECTED_GRADER',
+          'key_pool: [GRADER_ONE, GRADER_TWO]',
+        ),
+    );
+    fs.appendFileSync(
+      join(fx.bundleDir, 'credentials.env'),
+      "SUBJECT_ONE='one'\nGRADER_ONE='grader-one'\n",
+    );
+    expect(() => prepareV2(fx, 'claude-grader', grants)).toThrow();
+    expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+  }
+});
+
+test('V2 Codex pool selection reaches the audited resolver without a conventional key fallback', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  fs.copyFileSync(
+    join(fx.corpus, 'coding-agents', 'claude.yaml'),
+    join(fx.corpus, 'coding-agents', 'codex.yaml'),
+  );
+  const config = join(fx.corpus, 'coding-agents', 'codex.yaml');
+  writeFileSync(
+    config,
+    readFileSync(config, 'utf8').replaceAll('claude', 'codex'),
+  );
+  const file = join(fx.corpus, 'credentials.yaml');
+  writeFileSync(
+    file,
+    readFileSync(file, 'utf8')
+      .replace('api_key_env: SUBJECT_KEY', 'key_pool: [CODEX_ONE, CODEX_TWO]')
+      .replace('harnesses: [claude]', 'harnesses: [codex]'),
+  );
+  fs.appendFileSync(
+    join(fx.bundleDir, 'credentials.env'),
+    "CODEX_ONE='one'\nCODEX_TWO='two'\n",
+  );
+  const prepared = prepareAttemptStage({
+    campaignDir: fx.campaignDir,
+    attemptId: 'codex-pool',
+    agent: 'codex',
+    credentialName: 'cred_a',
+    evalsRoot: fx.corpus,
+    bundleDir: fx.bundleDir,
+    uid: 1000,
+    gid: 1000,
+    grader: { credential: 'grader', model: 'claude-grader' },
+    subjectKeyEnv: 'CODEX_TWO',
+    graderKeyEnv: 'SELECTED_GRADER',
+  });
+  expect(readFileSync(prepared.subjectEnvFile, 'utf8')).toBe('CODEX_TWO=two\n');
+  expect(prepared.credentialRegistry).toContain('api_key_env: CODEX_TWO');
+});
+
+test('V2 preparation refuses whitespace-only selected subject material before writes', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  writeFileSync(
+    join(fx.bundleDir, 'credentials.env'),
+    "SUBJECT_KEY='   '\nSELECTED_GRADER='grader-secret'\n",
+  );
+  expect(() => prepareV2(fx)).toThrow('empty');
   expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
 });

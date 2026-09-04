@@ -95,6 +95,9 @@ export const PublicRuntimeEnvSchema = z
 export const AttemptRuntimeSpecSchema = z
   .object({
     image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    credential_projection: z
+      .object({ path: AbsoluteRuntimePathSchema, sha256: Sha256Schema })
+      .strict(),
     command: IdSchema,
     entrypoint: z.array(z.string().min(1)),
     labels: z

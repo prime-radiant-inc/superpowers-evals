@@ -166,6 +166,10 @@ export function blockActivation(
       const root = `/campaign/attempts/${attemptId}`;
       const spec = {
         image_digest: `sha256:${'a'.repeat(64)}`,
+        credential_projection: {
+          path: '/run/quorum/credentials.yaml',
+          sha256: 'd'.repeat(64),
+        },
         command: 'bun',
         args: ['run', 'quorum'],
         cwd: root,

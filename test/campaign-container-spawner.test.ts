@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -1014,6 +1015,21 @@ import {
 function runtimeFixture() {
   const intent = blockActivation(twoArmExperiment()).attempts[0]!;
   const spec = intent.runtime_spec;
+  const projectionRoot = realpathSync(
+    mkdtempSync(join(tmpdir(), 'runtime-credentials-')),
+  );
+  const credentials = join(projectionRoot, 'credentials.yaml');
+  writeFileSync(credentials, '{}\n');
+  spec.credential_projection = {
+    path: '/run/quorum/credentials.yaml',
+    sha256: sha256Hex('{}\n'),
+  };
+  spec.mounts.push({
+    source: credentials,
+    target: spec.credential_projection.path,
+    mode: 'ro',
+  });
+  spec.args.push('--credentials-file', spec.credential_projection.path);
   spec.command = '/snapshot/container/attempt-entrypoint.sh';
   spec.entrypoint = ['/usr/bin/timeout'];
   spec.public_env.QUORUM_ATTEMPT_AUTHORITY_FILE =
@@ -1348,4 +1364,82 @@ test('V2 uncertain start remains unresolved when the daemon reports exact absenc
       : run(command, args, options);
   expect((await f.runtime.inspectOwned(f.prepared)).kind).toBe('unresolved');
   expect((await f.runtime.stop(bound, 1)).kind).toBe('unresolved');
+});
+
+test('V2 runtime refuses changed selected registry bytes before create and again before start', async () => {
+  for (const moment of ['create', 'start']) {
+    const f = runtimeFixture();
+    const spec = f.prepared.intent.runtime_spec;
+    const mount = spec.mounts.find(
+      (m) => m.target === spec.credential_projection.path,
+    )!;
+    const bound =
+      moment === 'start' ? await f.runtime.create(f.prepared) : undefined;
+    f.commit();
+    writeFileSync(mount.source, 'changed: true\n');
+    await expect(
+      bound ? f.runtime.start(bound) : f.runtime.create(f.prepared),
+    ).rejects.toThrow('digest');
+    expect(f.calls.some((c) => c[0] === moment)).toBe(false);
+  }
+});
+
+test('V2 cancellation of a durably unbound creation can establish never-started death', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  const cancellation = new ContainerAttemptRuntime({
+    ...f.options,
+    startSettlement: () => 'never-issued',
+  });
+  expect(await cancellation.stop(bound, 1)).toMatchObject({
+    kind: 'dead',
+    stopped: { container_id: bound.container_id, proof: 'inspected_stopped' },
+  });
+});
+
+test('V2 Docker inputs place timeout directly beneath init and preserve complete structured overrides', async () => {
+  const f = runtimeFixture();
+  await f.runtime.create(f.prepared);
+  const argv = f.calls.find((c) => c[0] === 'create')!;
+  expect(argv).toContain('--init');
+  expect(argv).toContain('--restart=no');
+  expect(argv[argv.indexOf('--entrypoint') + 1]).toBe('/usr/bin/timeout');
+  const command = argv.slice(
+    argv.indexOf(f.prepared.intent.runtime_spec.image_digest) + 1,
+  );
+  expect(command.slice(0, 2)).toEqual(['--signal=TERM', '--kill-after=5s']);
+  expect(command[2]).toBe(`${f.prepared.intent.runtime_spec.max_time_s}s`);
+  expect(command[3]).toBe('/snapshot/container/attempt-entrypoint.sh');
+  const env = argv.flatMap((v, i) => (v === '--env' ? [argv[i + 1]] : []));
+  expect(env).toContain(
+    'QUORUM_ATTEMPT_AUTHORITY_FILE=/run/quorum/attempt-authority.json',
+  );
+  expect(env).toHaveLength(
+    Object.keys(f.prepared.intent.runtime_spec.public_env).length,
+  );
+});
+
+test('V2 create client failure leaves an exact discoverable creation for cancellation', async () => {
+  const f = runtimeFixture();
+  const run = f.runner.run.bind(f.runner);
+  f.runner.run = (command, args, options) => {
+    const result = run(command, args, options);
+    if (args[0] === 'create') throw new Error('create client lost');
+    return result;
+  };
+  await expect(f.runtime.create(f.prepared)).rejects.toThrow(
+    'create client lost',
+  );
+  const cancellation = new ContainerAttemptRuntime({
+    ...f.options,
+    startSettlement: () => 'never-issued',
+  });
+  const observed = await cancellation.inspectOwned(f.prepared);
+  expect(observed).toMatchObject({
+    kind: 'matching-created',
+    container_id: containerId,
+  });
+  expect(
+    await cancellation.stop({ ...f.prepared, container_id: containerId }, 1),
+  ).toMatchObject({ kind: 'dead' });
 });

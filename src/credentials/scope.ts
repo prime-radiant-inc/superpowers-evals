@@ -262,6 +262,19 @@ export function resolveCredentialSelection(
   evalsRoot: string,
   selection: CredentialSelection,
 ): ResolvedCredentialSelection {
+  return resolveCredentialSelectionFromRegistry(
+    evalsRoot,
+    selection,
+    loadCredentialsFile(join(evalsRoot, 'credentials.yaml')).credentials,
+  );
+}
+
+/** Reuse the audited delivery rules for an authenticated attempt key projection. */
+export function resolveCredentialSelectionFromRegistry(
+  evalsRoot: string,
+  selection: CredentialSelection,
+  registry: Record<string, Credential>,
+): ResolvedCredentialSelection {
   const codingAgentsDir = join(evalsRoot, 'coding-agents');
   const agentCfg = loadAgentOrThrow(codingAgentsDir, selection.agent);
   const family = agentRuntimeFamily(agentCfg);
@@ -273,9 +286,6 @@ export function resolveCredentialSelection(
     );
   }
 
-  const registry = loadCredentialsFile(
-    join(evalsRoot, 'credentials.yaml'),
-  ).credentials;
   const credential = lookupCredential(registry, credName);
   if (credential === undefined) {
     throw new Error(

@@ -17,8 +17,16 @@ import {
   writePinnedFile,
 } from '../appliance/credential-scope.ts';
 import { type Grader, GraderSchema } from '../contracts/campaign/experiment.ts';
-import { loadCredentialsFile, mantleBaseUrl } from '../credentials/index.ts';
-import { resolveCredentialSelection } from '../credentials/scope.ts';
+import type { Credential } from '../contracts/credential.ts';
+import {
+  loadCredentialsFile,
+  mantleBaseUrl,
+  serializeCredentials,
+} from '../credentials/index.ts';
+import {
+  resolveCredentialSelection,
+  resolveCredentialSelectionFromRegistry,
+} from '../credentials/scope.ts';
 
 export class AttemptProjectionError extends Error {
   constructor(message: string) {
@@ -39,6 +47,7 @@ export interface PreparedAttemptStage {
   readonly stagingDir: string;
   readonly passwdFile: string;
   readonly groupFile: string;
+  readonly credentialRegistry?: string;
 }
 
 export interface PrepareAttemptStageArgs {
@@ -51,6 +60,8 @@ export interface PrepareAttemptStageArgs {
   readonly uid: number;
   readonly gid: number;
   readonly grader?: Grader;
+  readonly subjectKeyEnv?: string;
+  readonly graderKeyEnv?: string;
 }
 
 const STAGE_ENTRIES = new Set(['subject.env', 'grader.env', 'passwd', 'group']);
@@ -111,12 +122,51 @@ export function prepareAttemptStage(
 ): PreparedAttemptStage {
   assertAttemptId(args.attemptId);
 
+  const registry =
+    args.grader === undefined
+      ? undefined
+      : loadCredentialsFile(join(args.evalsRoot, 'credentials.yaml'))
+          .credentials;
+  const selectGrant = (
+    credential: Credential,
+    supplied: string | undefined,
+    role: string,
+  ): string => {
+    const allowed =
+      credential.key_pool ??
+      (credential.api_key_env === undefined ? [] : [credential.api_key_env]);
+    const selected =
+      supplied ??
+      (credential.key_pool === undefined ? credential.api_key_env : undefined);
+    if (selected === undefined || !allowed.includes(selected))
+      throw refuse(
+        args.attemptId,
+        `${role} requires a member selected key grant`,
+      );
+    return selected;
+  };
+  const projectedRegistry =
+    registry === undefined
+      ? undefined
+      : (() => {
+          const subject = registry[args.credentialName];
+          if (subject === undefined)
+            throw refuse(args.attemptId, 'unknown subject credential');
+          const selected = selectGrant(subject, args.subjectKeyEnv, 'subject');
+          const projected = { ...subject, api_key_env: selected };
+          delete projected.key_pool;
+          return { ...registry, [args.credentialName]: projected };
+        })();
   const resolved = (() => {
     try {
-      return resolveCredentialSelection(args.evalsRoot, {
-        agent: args.agent,
-        credential: args.credentialName,
-      });
+      const selection = { agent: args.agent, credential: args.credentialName };
+      return projectedRegistry === undefined
+        ? resolveCredentialSelection(args.evalsRoot, selection)
+        : resolveCredentialSelectionFromRegistry(
+            args.evalsRoot,
+            selection,
+            projectedRegistry,
+          );
     } catch (error) {
       throw refuse(
         args.attemptId,
@@ -130,9 +180,7 @@ export function prepareAttemptStage(
       ? undefined
       : (() => {
           const grader = GraderSchema.parse(args.grader);
-          const credential = loadCredentialsFile(
-            join(args.evalsRoot, 'credentials.yaml'),
-          ).credentials[grader.credential];
+          const credential = registry?.[grader.credential];
           if (credential === undefined || credential.model !== grader.model)
             throw refuse(
               args.attemptId,
@@ -144,19 +192,16 @@ export function prepareAttemptStage(
                 credential.auth === 'api-key') ||
               (credential.api === 'mantle' &&
                 credential.auth === 'bedrock-bearer')
-            ) ||
-            credential.key_pool !== undefined
+            )
           )
             throw refuse(
               args.attemptId,
               'unsupported grader credential projection',
             );
-          if (credential.api_key_env === undefined)
-            throw refuse(
-              args.attemptId,
-              'grader credential requires exact api_key_env',
-            );
-          return credential;
+          return {
+            ...credential,
+            api_key_env: selectGrant(credential, args.graderKeyEnv, 'grader'),
+          };
         })();
   if (resolved.auth !== 'api-key' && resolved.auth !== 'bedrock-bearer') {
     throw refuse(
@@ -186,12 +231,17 @@ export function prepareAttemptStage(
   try {
     bundleEnv = readBundleEnvForProjection(args.bundleDir, [...names]);
     const agent = selectAgentEnv(scope, bundleEnv);
+    if (
+      projectedRegistry !== undefined &&
+      agent.secrets.some(({ value }) => value.trim() === '')
+    )
+      throw refuse(args.attemptId, 'selected subject secret is empty');
     const supervisor =
       selectedGrader === undefined
         ? buildSupervisorEnv(scope, bundleEnv)
         : (() => {
             const value = bundleEnv.get(selectedGrader.api_key_env ?? '');
-            if (value === undefined || value === '')
+            if (value === undefined || value.trim() === '')
               throw refuse(args.attemptId, 'selected grader secret is missing');
             const lines = [
               'QUORUM_GRADER_SOURCE_MODE=appliance-scoped',
@@ -317,6 +367,9 @@ export function prepareAttemptStage(
     attemptPin = null;
 
     return {
+      ...(projectedRegistry === undefined
+        ? {}
+        : { credentialRegistry: serializeCredentials(projectedRegistry) }),
       attemptId: args.attemptId,
       attemptDir,
       stageDir,
