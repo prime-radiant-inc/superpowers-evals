@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AttemptPublicationStorageError } from '../src/campaign/attempt-publish.ts';
 import {
   runCampaignDispatch,
   type SessionDependencies,
@@ -597,6 +598,29 @@ test('cancellation during a successful start preserves the start receipt and add
   expect(attempts.every((a) => a.observation === null)).toBe(true);
   expect(attempts.every((a) => a.accounting !== null)).toBe(true);
   expect(f.started).toHaveLength(1);
+});
+
+test('opaque publication storage failure stops every worker before emergency evidence', async () => {
+  const f = fixture();
+  f.deps.publish = () => {
+    throw new AttemptPublicationStorageError(
+      'directory sync failed',
+      Error('opaque'),
+    );
+  };
+  f.deps.storageFailure = (stopped, unresolved) => {
+    expect(f.alive.size).toBe(0);
+    expect(stopped).toHaveLength(2);
+    expect(unresolved).toHaveLength(0);
+    f.cuts.push('storage');
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.complete(0);
+  await settle(f, run);
+  expect(f.cuts).toContain('storage');
+  expect(f.started).toHaveLength(2);
+  expect(f.finished).toBe(false);
 });
 
 test('key grants remain per credential beneath aggregate pools', async () => {

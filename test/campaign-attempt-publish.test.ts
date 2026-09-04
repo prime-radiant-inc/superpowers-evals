@@ -19,6 +19,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  AttemptPublicationStorageError,
   AttemptPublishError,
   publishAttempt,
 } from '../src/campaign/attempt-publish.ts';
@@ -181,7 +182,7 @@ test('publish rejects an unexpected allocated run before moving staging', () => 
 test('publish does not retry or overwrite after the post-rename fsync cut', () => {
   const paths = staged('run-pub-fsync-cut');
   let renameCount = 0;
-  const diskFull = Object.assign(new Error('full'), { code: 'ENOSPC' });
+  const diskFull = new Error('opaque storage failure');
   try {
     let caught: unknown;
     expect(() => {
@@ -207,6 +208,7 @@ test('publish does not retry or overwrite after the post-rename fsync cut', () =
       }
     }).toThrow(/publication directory sync failed/);
     expect((caught as Error).cause).toBe(diskFull);
+    expect(caught).toBeInstanceOf(AttemptPublicationStorageError);
     expect(renameCount).toBe(1);
     expect(
       existsSync(join(paths.resultsRoot, 'run-pub-fsync-cut', 'verdict.json')),

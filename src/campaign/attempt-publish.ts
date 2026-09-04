@@ -27,6 +27,14 @@ export class AttemptPublishError extends Error {
   }
 }
 
+/** The publication mutation ran but its storage operation did not complete. */
+export class AttemptPublicationStorageError extends AttemptPublishError {
+  constructor(message: string, cause: unknown) {
+    super(message, cause);
+    this.name = 'AttemptPublicationStorageError';
+  }
+}
+
 export interface PublishAttemptArgs {
   readonly attemptDir: string;
   readonly resultsRoot: string;
@@ -299,7 +307,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   try {
     fsOps.renameSync(runDir, destination);
   } catch (error: unknown) {
-    throw refusal(
+    throw new AttemptPublicationStorageError(
       `publication rename failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
       error,
     );
@@ -314,7 +322,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
       fsOps.closeSync(resultsFd);
     }
   } catch (error: unknown) {
-    throw refusal(
+    throw new AttemptPublicationStorageError(
       `publication directory sync failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`,
       error,
     );

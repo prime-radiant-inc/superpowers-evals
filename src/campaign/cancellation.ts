@@ -21,6 +21,7 @@ import {
 } from '../contracts/campaign/execution.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import {
+  AttemptPublicationStorageError,
   type AttemptPublishFsOps,
   publishExecution,
 } from './attempt-publish.ts';
@@ -283,12 +284,13 @@ function evidence(
     bytes: Buffer.byteLength(body),
   };
 }
-function diskFull(error: unknown): boolean {
+function publicationStorageFailed(error: unknown): boolean {
   for (
     let depth = 0;
     depth < 8 && typeof error === 'object' && error !== null;
     depth++
   ) {
+    if (error instanceof AttemptPublicationStorageError) return true;
     if ('code' in error && error.code === 'ENOSPC') return true;
     error = 'cause' in error ? error.cause : undefined;
   }
@@ -497,7 +499,7 @@ export async function cancelCampaign(
                 ...(deps.publicationFs ? { fsOps: deps.publicationFs } : {}),
               }).artifacts;
             } catch (error) {
-              if (diskFull(error)) {
+              if (publicationStorageFailed(error)) {
                 storageFailed = true;
                 continue;
               }

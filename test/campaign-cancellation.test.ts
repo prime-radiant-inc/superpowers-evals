@@ -493,8 +493,8 @@ test('supported source and bundle mutations refuse unresolved ownership before e
   expect(effects).toBe(0);
 });
 
-for (const diskFull of [false, true])
-  test(`stopped orphan publication records accounting with disk full ${diskFull}`, async () => {
+for (const storageFailure of [false, true])
+  test(`stopped orphan publication records accounting with storage failure ${storageFailure}`, async () => {
     const f = fixture();
     started(f, true);
     const w = f.elect();
@@ -532,14 +532,14 @@ for (const diskFull of [false, true])
     w.release();
     const result = await cancelCampaign(f, {
       processes: dead,
-      ...(diskFull
+      ...(storageFailure
         ? {
             publicationFs: {
               renameSync,
               openSync,
               closeSync,
               fsyncSync: () => {
-                throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+                throw new Error('opaque directory sync failure');
               },
             },
           }
@@ -565,7 +565,7 @@ for (const diskFull of [false, true])
         }),
       }),
     });
-    if (diskFull) {
+    if (storageFailure) {
       expect(result.kind).toBe('unresolved');
       expect(
         readHostClaim({ lockPath: f.loaded.config.live_spend_lock! }),

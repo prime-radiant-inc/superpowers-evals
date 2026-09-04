@@ -29,7 +29,11 @@ import { FinalVerdictSchema } from '../contracts/verdict.ts';
 import { loadCredentialsFile } from '../credentials/index.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
 import { blockPrioritySeconds, compareAdmissionOrder } from './admission.ts';
-import { publishExecution, readPublishedArtifact } from './attempt-publish.ts';
+import {
+  AttemptPublicationStorageError,
+  publishExecution,
+  readPublishedArtifact,
+} from './attempt-publish.ts';
 import { completeControllerTermination } from './cancellation.ts';
 import { classifyFailure } from './classifier.ts';
 import {
@@ -1174,6 +1178,7 @@ export async function runCampaignDispatch(
 function isStorageFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
+    error instanceof AttemptPublicationStorageError ||
     /ENOSPC|SQLITE_FULL|SQLITE_IOERR|EIO/.test(error.message) ||
     ('cause' in error && isStorageFailure(error.cause))
   );
