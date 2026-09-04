@@ -1,6 +1,7 @@
 # Astra and Sol through Codex: representative comparison
 
-Tracking: PRI-3088. Status: prepared; no measured runs launched.
+Tracking: PRI-3088. Status: running; first repetition complete (10/30 measured
+attempts), second repetition started. Snapshot: 2026-09-04 20:30 UTC.
 
 Drew prioritized usable evals and experiments and deferred campaign recovery
 and resume. This experiment uses the supported appliance helper and existing
@@ -97,6 +98,79 @@ appliance's OpenAI account. `doctor` reported healthy configuration, no run or
 sync lock, and a running appliance container. Model discovery is not a
 successful inference or an eval result.
 
-No behavioral result is claimed until job IDs, exact provenance and readout
-artifacts are recorded here. Negative results and measurement defects receive
-the same treatment as positive results.
+The paid run was explicitly approved on the experiment appliance branch.
+The live evals source remains `ec5f09fcc5013663d4dfaca4b7227288a6142553`.
+Every submitted measured job has so far verified the same Superpowers and
+Gauntlet SHAs above, Codex 0.146.0, credential bundle
+`blessed-20260901T185556Z`, and container image
+`sha256:cdf467a0050b8c0068e6652e995f559e0f85ab3deb40d8ee8f72332b42a6ba37`.
+Root model and effective `high` effort are verified from session metadata.
+The original appliance branch/configuration is recorded for restoration after
+the study; it has not yet been restored while jobs remain active.
+
+Both excluded planning smokes passed. Their job IDs are
+`job-20260904T194426Z-a94a` (Astra) and `job-20260904T195025Z-9b14` (Sol).
+
+| Repetition | Arm | Job | Batch | Current outcome |
+|---|---|---|---|---|
+| 1 | Sol | `job-20260904T195456Z-c989` | `batch-20260904T195511Z-4b8f` | 4 pass, 1 fail |
+| 1 | Astra | `job-20260904T201358Z-2136` | `batch-20260904T201413Z-1dc1` | 4 pass, 1 indeterminate |
+| 2 | Astra | `job-20260904T202910Z-8b0c` | Pending final collection | Running |
+
+The first review-judgment pair differs: Sol fixed the real bug and rejected
+the wall-clock suggestion, but implemented the speculative storage abstraction.
+Astra declined it and passed. Both passed SDD continuation, planning, and
+phantom-completion verification. Sol passed root-cause debugging. Astra's
+debugging attempt has a malformed grader report and is canonically
+`indeterminate`; a separate deterministic check failed because no test file
+was saved. An independent workdir inspection confirmed the absence of a saved
+regression test. Keep that observation distinct from canonical composition.
+
+The grader failure reached Gauntlet's normal report-validation limit. There
+is no demonstrated environment or configuration fault; continuing the frozen
+slots was independently reviewed as defensible, preserving the indeterminate
+and without replacement or regrading. Reassess before further submissions if
+the malformed-output signature recurs. Do not assume the missing judgment is
+random or convert the embedded malformed `fail` into a canonical verdict.
+
+## Accounting correction
+
+An audit reconciles every available session log against the merged trajectory,
+including delegates. It found repeated Codex usage snapshots in two first-Sol
+runs. The normalizer counted their unchanged cumulative/last-request counters
+twice. This is a real accounting defect, not an additional model request.
+
+The isolated fix is commit `26334578f719b6c098742ff4fa8038d2220d303d`.
+Commit `6d8033e109fed7e6165bcf9b47d8421350521227` separately adds the omitted
+Astra row to the credential-delivery test matrix. The final combined check
+passed lint/typechecks, 3,508 core tests (one skipped), and 144 dashboard tests.
+The first full check exposed only that missing test row. Nothing was pushed
+or installed into the running instrument.
+
+Derived analysis uses the existing fixed `captureToolCalls` and obol at
+checkout `6d8033e109fed7e6165bcf9b47d8421350521227`. Original trajectories,
+verdicts, and costs remain preserved. Correction receipts bind the original
+trajectory, raw logs, fixed source, pricing snapshot, and derived outputs by
+SHA256; the tool-call projection must remain unchanged. Corrected costs are
+selected only when the receipt and coverage audit validate, with no fallback
+to uncorrected amounts. This rule applies to both arms and smokes.
+
+The corrected subject estimates for the affected Sol runs are $0.6733014
+(debugging; correction -$0.0273032) and $0.554361 (phantom completion;
+correction -$0.0203324). All ten first-repetition attempts currently reconcile
+against available logs. These remain standard-tier token estimates; native
+tool fees and unlogged provider usage are not established invoice coverage.
+
+At this interim snapshot, measured all-attempt token estimates total
+$16.9944263, with smokes separately $2.875729. Four complete determinate pairs
+contribute to comparisons; both debugging attempts remain in accounting.
+No general model ranking or completed-study conclusion is available yet.
+
+Private collected artifacts and the reproducible readout are under the
+experiment worktree's gitignored `results/pri-3088/` directory. The frozen
+30-slot manifest SHA256 is
+`07605a29cf1d5b739864fa9365556e5e5ed526e0612c8a6ae07fc4883bb0c52c`.
+The selected price snapshot SHA256 is
+`647411e47e9fcd2c4436b639a80aed528cadf82fed0bae1b0f869ff1f62120d6`;
+Astra/Sol rates are dated September 4 and other model rates retain the
+bundled August 5 table. Raw logs are not committed.
