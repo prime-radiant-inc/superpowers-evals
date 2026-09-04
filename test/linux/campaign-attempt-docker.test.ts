@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -16,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve, sep } from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defaultCommandRunner } from '../../src/agents/command-runner.ts';
 import type { ContainerAttemptSpawnerArgs } from '../../src/campaign/container-spawner.ts';
@@ -1026,6 +1027,107 @@ function attemptLogFiles(fixture: DockerFixture): string[] {
   );
 }
 
+function gauntletResultFiles(fixture: DockerFixture): string[] {
+  const resultsRoot = join(fixture.checkout.root, 'results');
+  const resultMarker = `${sep}gauntlet-agent${sep}results${sep}`;
+  return filesUnder(resultsRoot).filter((path) => path.includes(resultMarker));
+}
+
+function diagnosticDestination(
+  fixture: DockerFixture,
+  diagnosticRoot: string,
+  source: string,
+): string {
+  const attemptsRoot = join(fixture.campaignDir, 'attempts');
+  if (source === attemptsRoot || source.startsWith(`${attemptsRoot}${sep}`)) {
+    return join(diagnosticRoot, 'attempts', relative(attemptsRoot, source));
+  }
+  const resultsRoot = join(fixture.checkout.root, 'results');
+  return join(diagnosticRoot, 'results', relative(resultsRoot, source));
+}
+
+function tailFile(path: string, maxCharacters = 4_000): string {
+  const text = readFileSync(path, 'utf8');
+  if (text === '') return '(empty)';
+  if (text.length <= maxCharacters) return text;
+  return `[...truncated to the last ${maxCharacters} characters...]\n${text.slice(-maxCharacters)}`;
+}
+
+function captureFailureDiagnostics(fixture: DockerFixture): string {
+  const diagnosticRoot = join(fixture.tempDir, 'failure-diagnostics');
+  const sources = [
+    ...attemptLogFiles(fixture),
+    ...gauntletResultFiles(fixture),
+  ];
+  const lines = ['failure diagnostics captured before teardown:'];
+  if (sources.length === 0) {
+    lines.push('no retained attempt logs or gauntlet result files were found');
+    return lines.join('\n');
+  }
+  for (const source of sources) {
+    const destination = diagnosticDestination(fixture, diagnosticRoot, source);
+    const label = relative(diagnosticRoot, destination);
+    try {
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
+      lines.push(`--- ${label} tail ---`, tailFile(destination));
+    } catch (error) {
+      lines.push(
+        `--- ${label} capture failed: ${error instanceof Error ? error.message : String(error)} ---`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+function enrichFailure(error: unknown, diagnostics: string): Error {
+  const message = `${error instanceof Error ? error.message : String(error)}\n\n${diagnostics}`;
+  if (error instanceof Error) {
+    error.message = message;
+    return error;
+  }
+  return new Error(message);
+}
+
+async function withFailureDiagnostics<T>(
+  fixture: DockerFixture,
+  action: () => Promise<T>,
+  cleanup: () => Promise<void>,
+): Promise<T> {
+  let value!: T;
+  let actionError: unknown;
+  let actionFailed = false;
+  try {
+    value = await action();
+  } catch (error) {
+    actionFailed = true;
+    actionError = error;
+  }
+
+  const diagnostics = actionFailed
+    ? captureFailureDiagnostics(fixture)
+    : undefined;
+  let cleanupError: unknown;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (actionFailed) {
+    const enriched = enrichFailure(actionError, diagnostics!);
+    if (cleanupError !== undefined) {
+      throw new AggregateError(
+        [enriched, cleanupError],
+        'campaign test and fixture cleanup failed',
+      );
+    }
+    throw enriched;
+  }
+  if (cleanupError !== undefined) throw cleanupError;
+  return value;
+}
+
 function assertNoCredentialValuesInControlArtifacts(
   fixture: DockerFixture,
   inspected: readonly DockerContainer[],
@@ -1099,166 +1201,176 @@ function mountNamespaceIdentity(pid: number | undefined): string {
 
 it('publishes complete fake container attempts with scoped credentials', async () => {
   const fixture = await createFixture({ mode: 'complete', n: 2 });
-  try {
-    const status = await runCampaign(fixture);
-    expect(status).toBe(0);
+  await withFailureDiagnostics(
+    fixture,
+    async () => {
+      const status = await runCampaign(fixture);
+      expect(status).toBe(0);
 
-    const ids = containerIdsForCampaign(fixture.campaignId);
-    fixture.captureContainers(ids);
-    expect(ids.length).toBe(2);
-    const inspected = ids.map((id) => dockerInspect(id));
-    for (const container of inspected) {
-      expect(container.HostConfig?.Init ?? container.Config?.Init).toBe(true);
-      expect(container.State?.Running).toBe(false);
-      expect(container.State?.ExitCode).toBe(0);
-      assertContainerMountAudit(fixture, container);
-    }
-    assertAttemptLogsPrivate(fixture);
-    assertSubjectIsolation(fixture);
-    assertProviderRecords(fixture, 2);
-    assertNoCredentialValuesInControlArtifacts(fixture, inspected);
+      const ids = containerIdsForCampaign(fixture.campaignId);
+      fixture.captureContainers(ids);
+      expect(ids.length).toBe(2);
+      const inspected = ids.map((id) => dockerInspect(id));
+      for (const container of inspected) {
+        expect(container.HostConfig?.Init ?? container.Config?.Init).toBe(true);
+        expect(container.State?.Running).toBe(false);
+        expect(container.State?.ExitCode).toBe(0);
+        assertContainerMountAudit(fixture, container);
+      }
+      assertAttemptLogsPrivate(fixture);
+      assertSubjectIsolation(fixture);
+      assertProviderRecords(fixture, 2);
+      assertNoCredentialValuesInControlArtifacts(fixture, inspected);
 
-    const published = publishedRunDirs(fixture.checkout.root);
-    expect(published.length).toBe(2);
-    expect(
-      published.every(
-        (runDir) =>
-          existsSync(join(runDir, 'verdict.json')) &&
-          existsSync(join(runDir, 'manifest.json')),
-      ),
-    ).toBe(true);
-    assertFullJournal(fixture, ids);
-  } finally {
-    await fixture.cleanup();
-  }
-});
+      const published = publishedRunDirs(fixture.checkout.root);
+      expect(published.length).toBe(2);
+      expect(
+        published.every(
+          (runDir) =>
+            existsSync(join(runDir, 'verdict.json')) &&
+            existsSync(join(runDir, 'manifest.json')),
+        ),
+      ).toBe(true);
+      assertFullJournal(fixture, ids);
+    },
+    fixture.cleanup,
+  );
+}, 180_000);
 
 it('keeps daemonized subject children from holding a completed container', async () => {
   const fixture = await createFixture({ mode: 'daemonize', n: 1 });
-  try {
-    const status = await runCampaign(fixture);
-    expect(status).toBe(0);
-    const ids = containerIdsForCampaign(fixture.campaignId);
-    fixture.captureContainers(ids);
-    expect(ids.length).toBe(1);
-    const container = dockerInspect(ids[0]!);
-    expect(container.State?.Running).toBe(false);
-    expect(container.State?.ExitCode).toBe(0);
-    const daemonMarkers = filesUnder(fixture.campaignDir).filter((path) =>
-      path.endsWith('subject-evidence/daemon.pid'),
-    );
-    expect(daemonMarkers.length).toBe(1);
-    expect(readFileSync(daemonMarkers[0]!, 'utf8').trim()).not.toBe('');
-    expect(
-      container.Config?.Env?.some((entry) => entry.includes('DAEMONIZE')),
-    ).toBe(false);
-    expect(containerIdsForCampaign(fixture.campaignId)).toEqual(ids);
-  } finally {
-    await fixture.cleanup();
-  }
-});
+  await withFailureDiagnostics(
+    fixture,
+    async () => {
+      const status = await runCampaign(fixture);
+      expect(status).toBe(0);
+      const ids = containerIdsForCampaign(fixture.campaignId);
+      fixture.captureContainers(ids);
+      expect(ids.length).toBe(1);
+      const container = dockerInspect(ids[0]!);
+      expect(container.State?.Running).toBe(false);
+      expect(container.State?.ExitCode).toBe(0);
+      const daemonMarkers = filesUnder(fixture.campaignDir).filter((path) =>
+        path.endsWith('subject-evidence/daemon.pid'),
+      );
+      expect(daemonMarkers.length).toBe(1);
+      expect(readFileSync(daemonMarkers[0]!, 'utf8').trim()).not.toBe('');
+      expect(
+        container.Config?.Env?.some((entry) => entry.includes('DAEMONIZE')),
+      ).toBe(false);
+      expect(containerIdsForCampaign(fixture.campaignId)).toEqual(ids);
+    },
+    fixture.cleanup,
+  );
+}, 180_000);
 
 it('turns docker stop into a stopped verdict and publishes exit evidence', async () => {
   const fixture = await createFixture({ mode: 'hold', n: 1 });
   let run: Promise<number> | null = null;
-  try {
-    run = runCampaign(fixture);
-    const ids = await runningContainers(fixture.campaignId, 1);
-    fixture.captureContainers(ids);
-    await waitForRunAllocation(fixture.campaignDir);
-    stopContainers(ids);
-    expect(await run).toBe(0);
-    for (const id of ids) {
-      expect(dockerInspect(id).State?.Running).toBe(false);
-    }
-    const verdicts = publishedRunDirs(fixture.checkout.root).map(
-      (runDir) =>
-        JSON.parse(readFileSync(join(runDir, 'verdict.json'), 'utf8')) as {
-          final?: string;
-          error?: { stage?: string } | null;
-        },
-    );
-    expect(
-      verdicts.some(
-        (verdict) =>
-          verdict.final === 'indeterminate' &&
-          verdict.error?.stage === 'stopped',
-      ),
-    ).toBe(true);
-    assertAttemptLogsPrivate(fixture);
-  } finally {
-    await awaitRunAndCleanup(run, fixture.cleanup);
-  }
-});
+  await withFailureDiagnostics(
+    fixture,
+    async () => {
+      run = runCampaign(fixture);
+      const ids = await runningContainers(fixture.campaignId, 1);
+      fixture.captureContainers(ids);
+      await waitForRunAllocation(fixture.campaignDir);
+      stopContainers(ids);
+      expect(await run).toBe(0);
+      for (const id of ids) {
+        expect(dockerInspect(id).State?.Running).toBe(false);
+      }
+      const verdicts = publishedRunDirs(fixture.checkout.root).map(
+        (runDir) =>
+          JSON.parse(readFileSync(join(runDir, 'verdict.json'), 'utf8')) as {
+            final?: string;
+            error?: { stage?: string } | null;
+          },
+      );
+      expect(
+        verdicts.some(
+          (verdict) =>
+            verdict.final === 'indeterminate' &&
+            verdict.error?.stage === 'stopped',
+        ),
+      ).toBe(true);
+      assertAttemptLogsPrivate(fixture);
+    },
+    async () => awaitRunAndCleanup(run, fixture.cleanup),
+  );
+}, 180_000);
 
 it('retains mode-0600 logs after a SIGKILL without leaving a running agent', async () => {
   const fixture = await createFixture({ mode: 'hold', n: 1 });
   let run: Promise<number> | null = null;
-  try {
-    run = runCampaign(fixture);
-    const ids = await runningContainers(fixture.campaignId, 1);
-    fixture.captureContainers(ids);
-    killContainer(ids[0]!);
-    expect(await run).toBe(0);
-    expect(dockerInspect(ids[0]!).State?.Running).toBe(false);
-    assertAttemptLogsPrivate(fixture);
-    assertNoCredentialValuesInControlArtifacts(fixture, [
-      dockerInspect(ids[0]!),
-    ]);
-  } finally {
-    await awaitRunAndCleanup(run, fixture.cleanup);
-  }
-});
+  await withFailureDiagnostics(
+    fixture,
+    async () => {
+      run = runCampaign(fixture);
+      const ids = await runningContainers(fixture.campaignId, 1);
+      fixture.captureContainers(ids);
+      killContainer(ids[0]!);
+      expect(await run).toBe(0);
+      expect(dockerInspect(ids[0]!).State?.Running).toBe(false);
+      assertAttemptLogsPrivate(fixture);
+      assertNoCredentialValuesInControlArtifacts(fixture, [
+        dockerInspect(ids[0]!),
+      ]);
+    },
+    async () => awaitRunAndCleanup(run, fixture.cleanup),
+  );
+}, 180_000);
 
 it('gives parallel attempts the same tmux path and separate backing mounts', async () => {
   const fixture = await createFixture({ mode: 'hold', n: 2 });
   let run: Promise<number> | null = null;
-  try {
-    run = runCampaign(fixture);
-    const ids = await runningContainers(fixture.campaignId, 2);
-    fixture.captureContainers(ids);
-    const inspected = ids.map((id) => dockerInspect(id));
-    const tmuxTmpdirs = inspected.map(
-      (container) =>
-        (container.Config?.Env ?? []).find((entry) =>
-          entry.startsWith('TMUX_TMPDIR='),
-        ) ?? '',
-    );
-    expect(tmuxTmpdirs).toEqual([
-      'TMUX_TMPDIR=/run/quorum/attempt',
-      'TMUX_TMPDIR=/run/quorum/attempt',
-    ]);
-    const attemptBackingSources = inspected.map((container) => {
-      const mount = (container.Mounts ?? []).find(
-        (candidate) =>
-          typeof candidate.Destination === 'string' &&
-          candidate.Destination.startsWith(
-            `${join(fixture.campaignDir, 'attempts')}${sep}`,
-          ),
+  await withFailureDiagnostics(
+    fixture,
+    async () => {
+      run = runCampaign(fixture);
+      const ids = await runningContainers(fixture.campaignId, 2);
+      fixture.captureContainers(ids);
+      const inspected = ids.map((id) => dockerInspect(id));
+      const tmuxTmpdirs = inspected.map(
+        (container) =>
+          (container.Config?.Env ?? []).find((entry) =>
+            entry.startsWith('TMUX_TMPDIR='),
+          ) ?? '',
       );
-      return mount?.Source;
-    });
-    expect(attemptBackingSources.every((source) => source !== undefined)).toBe(
-      true,
-    );
-    expect(new Set(attemptBackingSources).size).toBe(2);
-    expect(
-      new Set(
-        inspected.map((container) =>
-          mountNamespaceIdentity(container.State?.Pid),
+      expect(tmuxTmpdirs).toEqual([
+        'TMUX_TMPDIR=/run/quorum/attempt',
+        'TMUX_TMPDIR=/run/quorum/attempt',
+      ]);
+      const attemptBackingSources = inspected.map((container) => {
+        const mount = (container.Mounts ?? []).find(
+          (candidate) =>
+            typeof candidate.Destination === 'string' &&
+            candidate.Destination.startsWith(
+              `${join(fixture.campaignDir, 'attempts')}${sep}`,
+            ),
+        );
+        return mount?.Source;
+      });
+      expect(
+        attemptBackingSources.every((source) => source !== undefined),
+      ).toBe(true);
+      expect(new Set(attemptBackingSources).size).toBe(2);
+      expect(
+        new Set(
+          inspected.map((container) =>
+            mountNamespaceIdentity(container.State?.Pid),
+          ),
+        ).size,
+      ).toBe(2);
+      expect(
+        inspected.every((container) =>
+          (container.Mounts ?? []).some(
+            (mount) => mount.Destination === '/run/quorum/attempt',
+          ),
         ),
-      ).size,
-    ).toBe(2);
-    expect(
-      inspected.every((container) =>
-        (container.Mounts ?? []).some(
-          (mount) => mount.Destination === '/run/quorum/attempt',
-        ),
-      ),
-    ).toBe(true);
-    stopContainers(ids);
-    expect(await run).toBe(0);
-  } finally {
-    await awaitRunAndCleanup(run, fixture.cleanup);
-  }
-});
+      ).toBe(true);
+      stopContainers(ids);
+      expect(await run).toBe(0);
+    },
+    async () => awaitRunAndCleanup(run, fixture.cleanup),
+  );
+}, 180_000);
