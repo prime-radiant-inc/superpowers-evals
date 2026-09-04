@@ -183,6 +183,15 @@ test('superpowersCapability: claude flagged by the D2 two-mode live smoke', () =
   expect(superpowersCapability('claude')).toEqual({ ref: true, none: true });
 });
 
+test('superpowersCapability: codex/kimi/pi flagged by the 2026-09-04 multiharness smokes', () => {
+  // Evidence runs are recorded on the registry entries in src/agents/index.ts.
+  // kimi none-mode stays denied: kimi capture hard-requires the superpowers
+  // plugin_session_start marker, which a none-mode run can never produce.
+  expect(superpowersCapability('codex')).toEqual({ ref: true, none: true });
+  expect(superpowersCapability('kimi')).toEqual({ ref: true, none: false });
+  expect(superpowersCapability('pi')).toEqual({ ref: true, none: true });
+});
+
 test('superpowersCapability: keyed by runtime_family ?? name', () => {
   // Seed one entry so key selection is OBSERVABLE: when both candidate keys
   // are undeclared both arms return the identical default-deny value, so an

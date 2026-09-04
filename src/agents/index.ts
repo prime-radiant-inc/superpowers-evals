@@ -373,6 +373,34 @@ let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
   // (none). Each further adapter's flip is a platform PR carrying the same
   // two-mode live smoke.
   claude: { ref: true, none: true },
+  // Flipped 2026-09-04 by the multiharness two-mode appliance smokes (the
+  // R-REG-9 unblock for the multiharness signature campaign): each family ran
+  // 00-quorum-smoke-hello-world on quorum-appliance in both modes at evals
+  // b3730b4b / superpowers b36e0829 (v6.3.0) / gauntlet fb34bcd, and every
+  // ref-mode run reads back superpowers_rev b36e0829 with dirty=false.
+  // codex (openai_responses_56sol): ref
+  //   00-quorum-smoke-hello-world-codex-openai_responses_56sol-linux-20260904T030915Z-62f9
+  //   (pass; superpowers plugins burned into .codex/config.toml), none
+  //   00-quorum-smoke-hello-world-codex-openai_responses_56sol-linux-20260904T031727Z-a400
+  //   (pass; null rev; zero superpowers entries in config.toml).
+  codex: { ref: true, none: true },
+  // kimi (kimi_k3): ref
+  //   00-quorum-smoke-hello-world-kimi-kimi_k3-linux-20260904T031200Z-8146
+  //   (pass; plugins/ staged under .kimi-code). none stays DENIED: the
+  //   none-mode run
+  //   (00-quorum-smoke-hello-world-kimi-kimi_k3-linux-20260904T031908Z-4a92)
+  //   completed behaviorally (gauntlet pass) but composed indeterminate —
+  //   kimi capture hard-requires the superpowers plugin_session_start marker
+  //   (stage capture: 'missing plugin_session_start plugin=superpowers
+  //   skill=using-superpowers'). Debt: make that marker conditional on the
+  //   run's superpowers mode before flipping none.
+  kimi: { ref: true, none: false },
+  // pi (pi_gpt56_sol): ref
+  //   00-quorum-smoke-hello-world-pi-pi_gpt56_sol-linux-20260904T031444Z-0437
+  //   (pass), none
+  //   00-quorum-smoke-hello-world-pi-pi_gpt56_sol-linux-20260904T032231Z-2758
+  //   (pass; null rev).
+  pi: { ref: true, none: true },
 };
 
 /** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()
