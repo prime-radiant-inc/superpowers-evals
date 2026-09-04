@@ -145,7 +145,7 @@ type AttemptObservation = {
 
 Pass/fail observations require supporting artifacts; empty evidence can only support an explicitly missing indeterminate observation. Accounting or termination may persist a newly discovered immutable container ID for an unbound intent after authenticated inspection, preserving uniqueness and every known ID. That observation never grants start authority.
 
-The positive `block_validated` receipt is required for analytical inclusion; pending validity is explicit missingness even when raw attempt outcomes are readable. Artifact bytes, symlinks, process death and cancellation sidecars are authenticated at the IO boundary before journal commit. The pure fold checks record identity, path shape and legal predecessors, not the filesystem. Cancellation intent remains the one fsynced sidecar; do not add a second journal intent authority. A cancellation writer may append accounting, end and termination records only, never behavior, validity, admission or replacement decisions.
+The positive `block_validated` receipt is required for analytical inclusion; pending validity is explicit missingness even when raw attempt outcomes are readable. Artifact bytes, symlinks, process death and cancellation sidecars are authenticated at the IO boundary before journal commit. Task 5 authenticates immutable attempt publication; Task 7 commits only those verified references; Task 8 revalidates the referenced bytes for field-level reads. Task 3 authenticates cancellation and termination/control-evidence anchors, while runtime producers establish actual namespace death and operation settlement. The pure fold checks record identity, path shape and legal predecessors, not the filesystem. Cancellation intent remains the one fsynced sidecar; do not add a second journal intent authority. A cancellation writer may append accounting, end and termination records only, never behavior, validity, admission or replacement decisions.
 
 ### Failure policy
 
@@ -171,7 +171,7 @@ Release and reacquire normal per-process leases during handoff; never copy/trans
 
 The covered-child branch in `src/cli/run-command.ts` currently skips acquisition entirely. Route that branch through explicit child authorization; the marker alone cannot authorize it. Run-all children must validate their live parent lease identity. A container attempt validates its exact private prepared authority through the entrypoint/runner contract, without mounting host locks or the credential bundle. Keep these two existing child roles explicit; add no general capability service. All host-side lock/claim readers use the same canonical configured lock root, never the attempt's throwaway HOME.
 
-On the appliance, resolve the root from the existing canonical `/srv/quorum/config/appliance.json`; an explicit `EVALS_APPLIANCE_CONFIG` may select a configuration only if its lock root agrees with that canonical appliance configuration. An explicit `QUORUM_LIVE_SPEND_LOCK` mismatch refuses. A present but unreadable/invalid appliance configuration refuses; it never falls back to HOME. The HOME fallback remains only for a workstation without appliance configuration. Add env-unset raw run/run-all tests against an active helper claim. Helper installation with a custom configuration must retain the canonical lock-location configuration; it cannot create a second appliance authority.
+On the appliance, resolve the root from the existing canonical `/srv/quorum/config/appliance.json`; an explicit `EVALS_APPLIANCE_CONFIG` may select a configuration only if its lock root agrees with that canonical appliance configuration. An explicit `QUORUM_LIVE_SPEND_LOCK` mismatch refuses. A present but unreadable/invalid appliance configuration refuses; it never falls back to HOME. Parse the exact bytes from one pinned no-follow configuration read. The HOME fallback remains only for a workstation without appliance configuration. Add env-unset raw run/run-all tests against an active helper claim. Helper installation with a custom configuration must retain the canonical lock-location configuration; it cannot create a second appliance authority. Tasks 6/9 wire the existing installer, source refresh and supported credential mutations through the same host lease and preserve a usable ownership reader.
 
 Prepare private inputs, output root, exact credential projections, deterministic name and complete Docker specification; commit intent; create and inspect; commit immutable container binding; start. Keep runner-minted run IDs and verify/bind them at publication. Docker create/start/inspect/stop client calls have a finite timeout through the existing `CommandRunner` seam; timeout is unknown state, never absent/dead. Inspect image, command/entrypoint, timeout arguments, labels, mounts, user, private PID namespace, init, restart policy, and hardening against the prepared specification.
 
@@ -191,7 +191,7 @@ interface AttemptRuntime {
 }
 ```
 
-Freeze exact public environment values, entrypoint and identity labels in the runtime specification; names alone cannot authenticate output or authority paths. `QUORUM_ATTEMPT_AUTHORITY_FILE` identifies the private prepared attempt authority, distinct from the credential-authority digest. Secret values remain in private credential projections.
+Freeze exact public environment values, entrypoint and identity labels in the runtime specification; names alone cannot authenticate output or authority paths. `QUORUM_ATTEMPT_AUTHORITY_FILE` identifies the private prepared attempt authority, distinct from the credential-authority digest. Its fixed target is `/run/quorum/attempt-authority.json`; the strict document is `{schema_version:1,campaign_id,input_digest,start_id,intent}`. Its single read-only file mount must have a private source outside writable output and every writable source mount, including equal paths. Task 3 validates this contract; Task 5 produces and inspects the actual complete layout. Secret values remain in private credential projections.
 
 Define `AttemptRuntimeSpec` as the existing structured Docker inputs plus frozen deadline/init/restart/private-namespace fields; persist its complete public contents in the intent and authenticate them with `runtime_spec_digest`. It contains no secret values. Cancellation must not reconstruct this specification from mutable configuration. `OwnedRuntimeObservation` is `absent | matching-created | matching-running | matching-stopped | unresolved`, each matching case carrying the immutable container ID and inspected specification digest. `AttemptMonitor` exposes separate `onStopped(VerifiedStopped)` and `onMonitorFailure(reason: string)` callbacks. No callback from a failed follower is death proof. Unknown runtime state prevents publication, capacity release and replacement.
 
@@ -203,7 +203,7 @@ Cancellation first publishes and fsyncs a campaign/start-bound intent sidecar wi
 
 On ENOSPC, cease admission and stop all owned workers. Keep the existing physically allocated 8 MiB reserve. After stop attempts, release it and write/fsync bounded interruption and death evidence; if journal publication fails, use a campaign/input/start-bound emergency sidecar. If both fail, or workers remain unknown, retain the host claim and report unresolved. Verify/recreate the reserve before admitting any new campaign. Never report resumable storage pause.
 
-Status precedence: invalid/unreadable ownership -> `unresolved, next_action=cancel`; outstanding stop intent/unverified workers -> `stopping, next_action=cancel`; dead controller after start -> `interrupted, next_action=cancel` until termination verified, then `next_action=register`; terminal journal -> its outcome and `next_action=report`; matching live controller -> `running, next_action=status`; no start -> `registered, next_action=run`. A claimed launch with unknown/dead launcher and no released controller is interrupted, not registered. Active status exposes progress/cost coverage only, no pass/fail results.
+Status precedence: invalid/unreadable ownership -> `unresolved, next_action=cancel`; outstanding stop intent/unverified workers -> `stopping, next_action=cancel`; dead controller after start and before an ended transition -> `interrupted, next_action=cancel` until termination verified, then `next_action=register`; terminal journal -> its immutable outcome, with `next_action=cancel` while termination or claim release remains outstanding and `next_action=report` after ownership is resolved; matching live controller -> `running, next_action=status`; no start -> `registered, next_action=run`. Controller loss after a committed completed/cancelled end never rewrites that outcome. A claimed launch with unknown/dead launcher and no released controller is interrupted, not registered. Active status exposes progress/cost coverage only, no pass/fail results.
 
 ## Worked report oracle
 
@@ -293,13 +293,15 @@ export function foldTransition(state: CampaignProjection, transition: CampaignTr
 
 ## Task 3: Make journal transitions atomic and host ownership durable
 
+Completed through `4d02be64`; independent task review and scoped fix review passed. The task reported 140 related tests, 69 additional configuration/ownership tests and 95 affected fix tests, with lint/typecheck/scenario validation passing at the recorded stages. Review fixes bind claim release to the complete durable start and reject writable aliases of the private authority file. Actual container/launch/mutation integration remains in Tasks 5–9.
+
 **Files:** Modify `src/campaign/journal.ts`, `locks.ts`, `src/cli/run-command.ts`, `src/run-all/index.ts`; create `src/campaign/ownership.ts`, `test/campaign-transitions.test.ts`, `test/campaign-ownership.test.ts`; extend `test/campaign-lock-threading.test.ts`.
 
 A separate `src/campaign/execution-journal.ts` may hold the V2 writer while unchanged V1 consumers retain `journal.ts` until Task 9 removes them. This is an intermediate source arrangement, never schema-based runtime compatibility. Extract shared durable-file primitives only to avoid duplication. A small pure experiment digest helper may move forward from Task 4 so the journal reader can authenticate its document without a document/journal import cycle. Exclude campaign ID, input digest, and registration actor/time; retain all other frozen fields, including supplied scheduling estimates.
 
 **Interfaces:** Consume Task 2. Produce `commitTransition`, `readProjection(campaignDir): CampaignProjection`, `publishHostClaim(claim: HostCampaignClaim): void`, `readHostClaim(): HostCampaignClaim | null`, `clearHostClaim(receipt: TerminationReceipt): void`. `TerminationReceipt` contains experiment/start identity, the committed termination transition ID/digest and complete stopped inventory. Paths derive from the existing host lock root and campaign directory. `acquireLiveSpendLock` gains an explicit typed matching-start or cancellation authority; default callers can never bypass a claim.
 
-- [ ] Write SQLite fault-injection tests: fail before insert, in the middle of audit-row insertion, and immediately after commit; a reopened reader sees zero or all members. A duplicate ID with unequal bytes fails. A deposed writer cannot append, even with a previously validated projection.
+- [x] Write SQLite fault-injection tests: fail before insert, in the middle of audit-row insertion, and immediately after commit; a reopened reader sees zero or all members. A duplicate ID with unequal bytes fails. A deposed writer cannot append, even with a previously validated projection. A single complete transition row exercises equivalent actual transaction boundaries.
 
 ```ts
 test('a mid-group write failure publishes no admission', () => {
@@ -309,7 +311,7 @@ test('a mid-group write failure publishes no admission', () => {
 });
 ```
 
-- [ ] Run `bun test test/campaign-transitions.test.ts test/campaign-ownership.test.ts`; expect missing atomic API/guard behavior. Implement `BEGIN IMMEDIATE`, fence validation, full transition validation, inserts, commit, then memory update; rollback/poison on uncertain commit as existing storage discipline requires.
+- [x] Run `bun test test/campaign-transitions.test.ts test/campaign-ownership.test.ts`; expect missing atomic API/guard behavior. Implement `BEGIN IMMEDIATE`, fence validation, full transition validation, inserts, commit, then memory update; rollback/poison on uncertain commit as existing storage discipline requires.
 
 ```ts
 const next = foldTransition(current, transition);
@@ -320,15 +322,15 @@ db.transaction(() => {
 current = next;
 ```
 
-- [ ] Implement claim file exclusive publication and file/directory fsync using the existing journal filesystem primitives. Under the host lease, validate any claim before admitting any spender. PID reclamation cannot delete it; cancellation needs a matching durable termination receipt. Include the covered-child branch and canonical host lock root in this plumbing; test parent-release/child-acquire gaps, dead controller/live worker, unknown Docker state and forged child-marker paths.
-- [ ] Exercise ENOSPC using injected filesystem/SQLite failures and physically allocated reserve checks; durable emergency sidecar or unresolved guard is required. Do not simulate ENOSPC by filling Drew's disk.
-- [ ] Run these tests plus existing lock/publication tests whose contracts remain, and commit the journal/ownership deliverable.
+- [x] Implement claim file exclusive publication and file/directory fsync using the existing journal filesystem primitives. Under the host lease, validate any claim before admitting any spender. PID reclamation cannot delete it; cancellation needs a matching durable termination receipt. Include the covered-child branch and canonical host lock root in this plumbing; test parent-release/child-acquire gaps, dead controller/live worker, unknown Docker state and forged child-marker paths.
+- [x] Exercise ENOSPC using injected filesystem/SQLite failures and physically allocated reserve checks; durable emergency sidecar or unresolved guard is required. Do not simulate ENOSPC by filling Drew's disk.
+- [x] Run these tests plus existing lock/publication tests whose contracts remain, and commit the journal/ownership deliverable.
 
 ## Task 4: Compile and register a finite, price-independent experiment
 
 **Files:** Modify `src/contracts/campaign/suite.ts`, `digest.ts`, `src/campaign/registration.ts`, `campaign-document.ts`, `arm-suite-check.ts`; create `src/campaign/resource-policy.ts`, `test/campaign-resource-policy.test.ts`; extend registration/document/credential capability tests.
 
-**Interfaces:** `compileResourcePolicy(registry: Readonly<Record<string, Credential>>, activeCredentialNames: readonly string[]): ReadonlyMap<string, PoolPolicy>` uses the existing registry shape and limiter identity. `prepareRegistration` returns the V2 `Experiment` inputs; `registerCampaign` publishes a new independent campaign ID and initial transition; `loadFrozenCampaign` authenticates schema 2, input digest and journal anchor. Keep existing source resolver, snapshot preparation and exact eligibility checks.
+**Interfaces:** `compileResourcePolicy(registry: Readonly<Record<string, Credential>>, activeCredentialNames: readonly string[]): ReadonlyMap<string, PoolPolicy>` uses the existing registry shape and campaign `poolKey`: explicit `quota_pool`, otherwise endpoint/name plus API plus model. The distinct run-all `limiterKey` remains unchanged. `prepareRegistration` returns the V2 `Experiment` inputs; `registerCampaign` publishes a new independent campaign ID and initial transition; `loadFrozenCampaign` authenticates schema 2, input digest and journal anchor. Keep existing source resolver, snapshot preparation and exact eligibility checks.
 
 - [ ] Add tests for two identical registrations yielding distinct IDs/equal digests, no secret reads for configuration validation, unknown price allowed, missing finite bounds rejected, reserve not expanding primary slots, and aliases reordered without changing policy/admission feasibility.
 
