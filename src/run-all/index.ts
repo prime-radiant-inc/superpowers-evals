@@ -4,6 +4,7 @@ import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { ANTIGRAVITY_RATE_LIMIT_MARKER } from '../agents/antigravity.ts';
+import { runAllChildEnvironment } from '../campaign/child-authority.ts';
 import {
   clockNowMs,
   DEFAULT_RESOURCE_FLOORS,
@@ -14,6 +15,7 @@ import {
 import {
   acquireLiveSpendLock,
   COVERED_BY_LOCK_ENV,
+  type LockLocationOptions,
   realProcessIdentityProbe,
 } from '../campaign/locks.ts';
 import { parseCodingAgentsDirective } from '../checks/index.ts';
@@ -258,6 +260,7 @@ export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
 export type InvokeFn = (args: InvokeChildArgs) => Promise<ChildResult>;
 
 export interface RunBatchArgs {
+  readonly lockLocation?: LockLocationOptions;
   readonly scenariosRoot: string;
   readonly codingAgentsDir: string;
   readonly outRoot: string;
@@ -472,6 +475,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
   // id). The children this batch spawns never acquire — invokeChild marks
   // them covered by this holder's accounting.
   const spendLock = acquireLiveSpendLock({
+    ...(args.lockLocation ? { location: args.lockLocation } : {}),
     clock,
     identity: realProcessIdentityProbe,
   });
@@ -594,6 +598,7 @@ export async function runBatch(args: RunBatchArgs): Promise<string> {
         outRoot,
         ...(entry.credential !== '' ? { credential: entry.credential } : {}),
         credentialsPath: snapshotPath,
+        extraEnv: runAllChildEnvironment(spendLock),
         ...(graderModel !== undefined ? { graderModel } : {}),
       });
 

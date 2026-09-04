@@ -16,6 +16,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,7 +36,10 @@ const REPO_CREDENTIALS = resolve(import.meta.dir, '..', 'credentials.yaml');
 const MOCK = resolve(import.meta.dir, 'mock-gauntlet');
 const LOCKS_TS = resolve(import.meta.dir, '..', 'src', 'campaign', 'locks.ts');
 const CLOCK_TS = resolve(import.meta.dir, '..', 'src', 'scheduler', 'clock.ts');
-const LOCK = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
+const LOCK = join(
+  mkdtempSync(join(realpathSync(tmpdir()), 'lock-')),
+  'live.lock.d',
+);
 
 function sleep(ms: number): Promise<void> {
   const { promise, resolve: done } = Promise.withResolvers<void>();
@@ -85,7 +89,7 @@ function startHolder(): { child: ChildProcess; holderPid: () => number } {
 }
 
 function scenario(): string {
-  const scn = mkdtempSync(join(tmpdir(), 'scn-'));
+  const scn = mkdtempSync(join(realpathSync(tmpdir()), 'scn-'));
   writeFileSync(
     join(scn, 'story.md'),
     '---\nquorum_tier: full\nquorum_max_time: 1m\n---\nDo the thing.',
@@ -124,7 +128,7 @@ function git(dir: string, args: string[]): string {
 }
 
 function gauntletRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'gauntlet-repo-'));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'gauntlet-repo-'));
   git(dir, ['init', '-q']);
   git(dir, ['config', 'user.email', 't@t']);
   git(dir, ['config', 'user.name', 't']);
@@ -135,7 +139,7 @@ function gauntletRepo(): string {
 }
 
 const GAUNTLET_ROOT = gauntletRepo();
-const SUPERPOWERS_ROOT = mkdtempSync(join(tmpdir(), 'sproot-'));
+const SUPERPOWERS_ROOT = mkdtempSync(join(realpathSync(tmpdir()), 'sproot-'));
 
 /** The spender env: hermetic lock path, resolved checkout seams, mock
  * gauntlet on PATH, fixture keys (the mock never makes a real call), and
@@ -169,7 +173,10 @@ function spenderEnv(
 /** A below-floors host-stats fixture (disk free 1 byte): acquisition
  * succeeds, the floors preflight must refuse. */
 function belowFloorsFixture(): string {
-  const path = join(mkdtempSync(join(tmpdir(), 'hs-')), 'below.json');
+  const path = join(
+    mkdtempSync(join(realpathSync(tmpdir()), 'hs-')),
+    'below.json',
+  );
   writeFileSync(
     path,
     JSON.stringify({
@@ -214,7 +221,7 @@ test('the three spender entrypoints all refuse while a live holder holds, naming
         '--coding-agents-dir',
         REAL_CODING_AGENTS,
         '--out-root',
-        mkdtempSync(join(tmpdir(), 'out-')),
+        mkdtempSync(join(realpathSync(tmpdir()), 'out-')),
         '--credentials-file',
         REPO_CREDENTIALS,
       ],
@@ -224,7 +231,7 @@ test('the three spender entrypoints all refuse while a live holder holds, naming
     expect(direct.stderr).toMatch(refusal);
 
     // 2. `run-all` (empty matrix — acquisition precedes scheduling).
-    const emptyRoot = mkdtempSync(join(tmpdir(), 'scnroot-'));
+    const emptyRoot = mkdtempSync(join(realpathSync(tmpdir()), 'scnroot-'));
     const batch = spawnSync(
       'bun',
       [
@@ -235,7 +242,7 @@ test('the three spender entrypoints all refuse while a live holder holds, naming
         '--coding-agents-dir',
         REAL_CODING_AGENTS,
         '--out-root',
-        mkdtempSync(join(tmpdir(), 'out-')),
+        mkdtempSync(join(realpathSync(tmpdir()), 'out-')),
         '--jobs',
         '1',
       ],
@@ -266,10 +273,13 @@ test('run-all drives a full batch whose children are covered by its lock (childr
   // die on the lock and no run dir would appear. The canonical (no-flag)
   // credentials route snapshots the repo registry without the strict
   // campaign-credential check an explicit --credentials-file triggers.
-  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
-  const scenariosRoot = mkdtempSync(join(tmpdir(), 'scnroot-'));
+  const lock = join(
+    mkdtempSync(join(realpathSync(tmpdir()), 'lock-')),
+    'live.lock.d',
+  );
+  const scenariosRoot = mkdtempSync(join(realpathSync(tmpdir()), 'scnroot-'));
   spawnSync('cp', ['-R', scenario(), join(scenariosRoot, 'scn-a')]);
-  const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
+  const outRoot = mkdtempSync(join(realpathSync(tmpdir()), 'out-'));
   const res = spawnSync(
     'bun',
     [
@@ -315,7 +325,10 @@ test('a floors refusal refuses the direct-run launch AND releases the acquired l
   // The acquire -> preflight -> run order with release in the finally: a
   // below-floors host must never launch a paid run, and the refusal must
   // not strand the host-wide lock until heartbeat staleness.
-  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
+  const lock = join(
+    mkdtempSync(join(realpathSync(tmpdir()), 'lock-')),
+    'live.lock.d',
+  );
   const direct = spawnSync(
     'bun',
     [
@@ -327,7 +340,7 @@ test('a floors refusal refuses the direct-run launch AND releases the acquired l
       '--coding-agents-dir',
       REAL_CODING_AGENTS,
       '--out-root',
-      mkdtempSync(join(tmpdir(), 'out-')),
+      mkdtempSync(join(realpathSync(tmpdir()), 'out-')),
       '--credentials-file',
       REPO_CREDENTIALS,
     ],
@@ -343,8 +356,11 @@ test('a floors refusal refuses the direct-run launch AND releases the acquired l
 }, 120_000);
 
 test('a floors refusal refuses the run-all launch AND releases the acquired lock (R-LCK-2)', () => {
-  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
-  const emptyRoot = mkdtempSync(join(tmpdir(), 'scnroot-'));
+  const lock = join(
+    mkdtempSync(join(realpathSync(tmpdir()), 'lock-')),
+    'live.lock.d',
+  );
+  const emptyRoot = mkdtempSync(join(realpathSync(tmpdir()), 'scnroot-'));
   const batch = spawnSync(
     'bun',
     [
@@ -355,7 +371,7 @@ test('a floors refusal refuses the run-all launch AND releases the acquired lock
       '--coding-agents-dir',
       REAL_CODING_AGENTS,
       '--out-root',
-      mkdtempSync(join(tmpdir(), 'out-')),
+      mkdtempSync(join(realpathSync(tmpdir()), 'out-')),
       '--jobs',
       '1',
     ],
@@ -374,14 +390,17 @@ test('a throwing run-all stream releases the acquired lock (nothing throws betwe
   // In-process runBatch with a stream that throws on every write: the
   // acquisition notice itself must sit INSIDE the release envelope — a
   // write failure between acquire and try would strand the host-wide token.
-  const lock = join(mkdtempSync(join(tmpdir(), 'lock-')), 'live.lock.d');
+  const lock = join(
+    mkdtempSync(join(realpathSync(tmpdir()), 'lock-')),
+    'live.lock.d',
+  );
   const prevLock = envSnapshot()['QUORUM_LIVE_SPEND_LOCK'];
   const prevFixture = envSnapshot()['QUORUM_HOST_STATS_PROBE_FIXTURE'];
   setProcessEnv('QUORUM_LIVE_SPEND_LOCK', lock);
   setProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE', HOST_STATS_FIXTURE);
   try {
-    const scenariosRoot = mkdtempSync(join(tmpdir(), 'scnroot-'));
-    const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
+    const scenariosRoot = mkdtempSync(join(realpathSync(tmpdir()), 'scnroot-'));
+    const outRoot = mkdtempSync(join(realpathSync(tmpdir()), 'out-'));
     const boom: { write(_s: string): void } = {
       write() {
         throw new Error('stream exploded');
@@ -410,3 +429,109 @@ test('a throwing run-all stream releases the acquired lock (nothing throws betwe
     else setProcessEnv('QUORUM_HOST_STATS_PROBE_FIXTURE', prevFixture);
   }
 }, 60_000);
+
+test('raw run and run-all with lock env unset refuse an active canonical helper claim', async () => {
+  const { initExecutionJournal, ExecutionJournalWriter } = await import(
+    '../src/campaign/execution-journal.ts'
+  );
+  const { publishHostClaim, currentProcessIdentity } = await import(
+    '../src/campaign/ownership.ts'
+  );
+  const { acquireLiveSpendLock, realProcessIdentityProbe } = await import(
+    '../src/campaign/locks.ts'
+  );
+  const { createBallast, DEFAULT_BALLAST_BYTES } = await import(
+    '../src/campaign/journal.ts'
+  );
+  const { experimentDigest } = await import(
+    '../src/contracts/campaign/experiment-digest.ts'
+  );
+  const { twoArmExperiment, transition, fixtureTime } = await import(
+    './fixtures/core-comparison/factory.ts'
+  );
+  const { RealClock } = await import('../src/scheduler/clock.ts');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'helper-claim-'));
+  const dir = join(root, 'campaign');
+  mkdirSync(dir);
+  const lockPath = join(root, 'live.lock.d');
+  const experiment = twoArmExperiment();
+  experiment.input_digest = experimentDigest(experiment);
+  initExecutionJournal({ campaignDir: dir, experiment });
+  writeFileSync(join(dir, 'campaign.json'), JSON.stringify(experiment));
+  createBallast(dir, DEFAULT_BALLAST_BYTES);
+  const lease = acquireLiveSpendLock({
+    lockPath,
+    clock: new RealClock(),
+    identity: realProcessIdentityProbe,
+  });
+  const writer = ExecutionJournalWriter.elect({
+    campaignDir: dir,
+    experiment,
+    clock: new RealClock(),
+    identity: realProcessIdentityProbe,
+  });
+  try {
+    writer.commitTransition(
+      transition('registered', {
+        campaign_id: experiment.campaign_id,
+        input_digest: experiment.input_digest,
+      }),
+    );
+    const start = {
+      campaign_id: experiment.campaign_id,
+      input_digest: experiment.input_digest,
+      start_id: 'start',
+      launcher: currentProcessIdentity(),
+      claimed_at: fixtureTime(1),
+    };
+    writer.commitTransition(transition('started', start, 1));
+    publishHostClaim({ ...start, campaign_dir: dir }, { lockPath });
+  } finally {
+    writer.release();
+    lease.release();
+  }
+  const canonicalConfigPath = join(root, 'appliance.json');
+  writeFileSync(
+    canonicalConfigPath,
+    JSON.stringify({
+      root,
+      evals: { path: join(root, 'evals'), remote: 'origin', ref: 'main' },
+      superpowers: { path: join(root, 'superpowers'), remote: 'origin' },
+      gauntlet: { path: join(root, 'gauntlet'), remote: 'origin', ref: 'main' },
+      credential_bundle: {
+        name: 'blessed',
+        path: join(root, 'unreadable-bundle'),
+      },
+      container: { name: 'quorum', results_root: join(root, 'results') },
+      live_spend_lock: lockPath,
+    }),
+  );
+  const env = {
+    ...spenderEnv(lockPath),
+    QUORUM_LIVE_SPEND_LOCK: undefined,
+    EVALS_APPLIANCE_CONFIG: undefined,
+    HOME: join(root, 'throwaway'),
+  };
+  const outRoot = join(root, 'out');
+  mkdirSync(outRoot);
+  const opts = {
+    codingAgent: 'claude',
+    codingAgentsDir: REAL_CODING_AGENTS,
+    outRoot,
+    scenariosRoot: root,
+    credentialsFile: REPO_CREDENTIALS,
+    os: 'linux',
+  };
+  const directScript = `import { executeRunCommand } from ${JSON.stringify(resolve('src/cli/run-command.ts'))}; process.exit(await executeRunCommand(${JSON.stringify(scenario())}, ${JSON.stringify(opts)}, 'canonical-snapshot', { lockLocation: ${JSON.stringify({ canonicalConfigPath })} }));`;
+  const batchScript = `import { runBatch } from ${JSON.stringify(resolve('src/run-all/index.ts'))}; await runBatch(${JSON.stringify({ scenariosRoot: root, codingAgentsDir: REAL_CODING_AGENTS, outRoot, jobs: 1, lockLocation: { canonicalConfigPath } })});`;
+  for (const script of [directScript, batchScript]) {
+    const result = spawnSync(process.execPath, ['-e', script], {
+      env,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('unresolved host claim');
+  }
+  expect(readdirSync(outRoot)).toHaveLength(0);
+});

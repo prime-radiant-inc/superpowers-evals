@@ -34,6 +34,7 @@ import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 import { experimentDigest } from '../src/contracts/campaign/experiment-digest.ts';
 import { RealClock } from '../src/scheduler/clock.ts';
 import {
+  blockActivation,
   fixtureTime,
   transition,
   twoArmExperiment,
@@ -300,4 +301,107 @@ test('a symlinked canonical configuration refuses, while absent workstation conf
   expect(() =>
     defaultLiveSpendLockPath({ canonicalConfigPath, env: { HOME: fx.root } }),
   ).toThrow();
+});
+
+test('an unknown worker remains owned after durable emergency interruption evidence', async () => {
+  const { persistStorageInterruption } = await import(
+    '../src/campaign/ownership.ts'
+  );
+  const fx = fixture();
+  publishHostClaim(fx.claim, { lockPath: fx.lockPath });
+  fx.writer.commitTransition(
+    transition(
+      'controller_bound',
+      { start_id: 'start', controller: currentProcessIdentity() },
+      2,
+    ),
+  );
+  const activation = blockActivation(fx.experiment);
+  fx.writer.commitTransition(transition('block_activated', activation, 3));
+  const result = persistStorageInterruption(fx.dir, {
+    campaign_id: fx.claim.campaign_id,
+    input_digest: fx.claim.input_digest,
+    start_id: 'start',
+    at: fixtureTime(4),
+    stopped: [],
+    unresolved_attempt_ids: activation.attempts.map(
+      (attempt) => attempt.identity.execution_attempt_id,
+    ),
+  });
+  expect(result.kind).toBe('durable');
+  expect(readHostClaim({ lockPath: fx.lockPath })).toEqual(fx.claim);
+  fx.lease.release();
+  expect(() => fx.acquire()).toThrow(/claim/);
+});
+
+test('ENOSPC while writing emergency evidence leaves an unresolved ownership guard', async () => {
+  const { persistStorageInterruption } = await import(
+    '../src/campaign/ownership.ts'
+  );
+  const { journalFsOps } = await import('../src/campaign/journal.ts');
+  const fx = fixture();
+  publishHostClaim(fx.claim, { lockPath: fx.lockPath });
+  const result = persistStorageInterruption(
+    fx.dir,
+    {
+      campaign_id: fx.claim.campaign_id,
+      input_digest: fx.claim.input_digest,
+      start_id: 'start',
+      at: fixtureTime(2),
+      stopped: [],
+      unresolved_attempt_ids: [],
+    },
+    {
+      ...journalFsOps,
+      write: () => {
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      },
+    },
+  );
+  expect(result.kind).toBe('unresolved');
+  expect(readHostClaim({ lockPath: fx.lockPath })).toEqual(fx.claim);
+});
+
+test('a caller-supplied lock path cannot split the canonical appliance authority', () => {
+  const fx = fixture();
+  const canonicalConfigPath = join(fx.root, 'canonical.json');
+  writeFileSync(
+    canonicalConfigPath,
+    JSON.stringify(applianceConfig(fx.root, fx.lockPath)),
+  );
+  expect(() =>
+    acquireLiveSpendLock({
+      lockPath: join(fx.root, 'second.lock'),
+      location: { canonicalConfigPath },
+      clock: new RealClock(),
+      identity: realProcessIdentityProbe,
+    }),
+  ).toThrow(/disagree/);
+});
+
+test('dead controller lease reclamation preserves the claim while worker state is unknown', () => {
+  const fx = fixture();
+  publishHostClaim(fx.claim, { lockPath: fx.lockPath });
+  fx.writer.commitTransition(
+    transition(
+      'controller_bound',
+      {
+        start_id: 'start',
+        controller: { pid: 999999, birth: 'gone', boot_id: 'previous-boot' },
+      },
+      2,
+    ),
+  );
+  fx.writer.commitTransition(
+    transition('block_activated', blockActivation(fx.experiment), 3),
+  );
+  fx.lease.release();
+  mkdirSync(fx.lockPath);
+  writeFileSync(
+    join(fx.lockPath, 'owner-00000000-0000-0000-0000-000000000000'),
+    '999999\n0\n0\n',
+  );
+  expect(() => fx.acquire()).toThrow(/claim/);
+  expect(readHostClaim({ lockPath: fx.lockPath })).toEqual(fx.claim);
+  expect(fx.writer.readProjection().attempts.size).toBe(2);
 });

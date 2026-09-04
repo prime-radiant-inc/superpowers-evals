@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SuperpowersSpec } from '../agents/superpowers.ts';
+import { authorizeCoveredChild } from '../campaign/child-authority.ts';
 
 import {
   clockNowMs,
@@ -12,6 +13,7 @@ import {
   acquireLiveSpendLock,
   COVERED_BY_LOCK_ENV,
   type LiveSpendLock,
+  type LockLocationOptions,
   realProcessIdentityProbe,
 } from '../campaign/locks.ts';
 import {
@@ -145,6 +147,7 @@ export function runAllocatedLine(runDir: string): string {
 
 export interface RunCommandDependencies {
   readonly signalSource?: RunStopSignalSource;
+  readonly lockLocation?: LockLocationOptions;
 }
 
 // Shared by the public `quorum run` command and run-all's narrow internal child
@@ -225,16 +228,16 @@ export async function executeRunCommand(
       opts.campaignIdentityJson === undefined
         ? undefined
         : CampaignIdentitySchema.parse(JSON.parse(opts.campaignIdentityJson));
-    // Children never acquire (R-LCK-2 explicit channel): a process marked
-    // covered — by the campaign spawner (src/campaign/spawn.ts) or run-all's
-    // invokeChild — rides its holder's accounting and bypasses acquisition
-    // entirely (C4: the marker means never acquire, not acquire-and-fail).
-    // Only an uncovered process is a top-level spender.
     if (getEnv(COVERED_BY_LOCK_ENV) === undefined) {
       spendLock = acquireLiveSpendLock({
         clock,
         identity: realProcessIdentityProbe,
+        ...(dependencies.lockLocation
+          ? { location: dependencies.lockLocation }
+          : {}),
       });
+    } else {
+      authorizeCoveredChild(campaignIdentity);
     }
     // R-LCK-2 floors preflight — unconditional (no platform bypass): the
     // injectable probe resolves through the fixture seam; production gets the

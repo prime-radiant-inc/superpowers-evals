@@ -12,7 +12,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { runAllChildEnvironment } from '../src/campaign/child-authority.ts';
+import {
+  acquireLiveSpendLock,
+  realProcessIdentityProbe,
+} from '../src/campaign/locks.ts';
 import { buildChildRunArgs, invokeChild } from '../src/run-all/index.ts';
+import { RealClock } from '../src/scheduler/clock.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
@@ -311,42 +317,55 @@ test('buildChildRunArgs: legacy argv unchanged; superpowers flags forwarded when
 // `gauntlet` name — a decoy first on PATH would otherwise run a healthy-
 // looking eval on the wrong instrument.
 test('invokeChild forwards gauntletBin: the child runs the wrapper, never the PATH gauntlet', async () => {
-  const mockDir = mockGauntletDir('pass');
-  const bin = mkdtempSync(join(tmpdir(), 'snapbin-'));
-  const wrapperMarker = join(bin, 'wrapper-ran');
-  const decoyMarker = join(bin, 'decoy-ran');
-  // Snapshot-style wrapper: marks itself, then execs the mock gauntlet.
-  const wrapper = join(bin, 'gauntlet-snapshot');
-  writeFileSync(
-    wrapper,
-    `#!/bin/sh\necho ran > '${wrapperMarker}'\nexec '${join(mockDir, 'gauntlet')}' "$@"\n`,
-  );
-  chmodSync(wrapper, 0o755);
-  // Decoy under the bare name, FIRST on PATH — also a working mock, so a
-  // fallback run would complete green while running the wrong instrument.
-  const decoyDir = mkdtempSync(join(tmpdir(), 'decoy-'));
-  writeFileSync(
-    join(decoyDir, 'gauntlet'),
-    `#!/bin/sh\necho ran > '${decoyMarker}'\nexec '${join(mockDir, 'gauntlet')}' "$@"\n`,
-  );
-  chmodSync(join(decoyDir, 'gauntlet'), 0o755);
-  const result = await invokeChild({
-    scenarioDir: scenario(),
-    codingAgent: 'claude',
-    codingAgentsDir: REAL_CODING_AGENTS,
-    outRoot: mkdtempSync(join(tmpdir(), 'out-')),
-    credentialsPath: REPO_CREDENTIALS,
-    gauntletBin: wrapper,
-    extraEnv: {
-      PATH: `${decoyDir}:${MOCK}:${process.env['PATH'] ?? ''}`,
-      ANTHROPIC_API_KEY: 'sk-test',
-      AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
-      SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
-    },
+  const lease = acquireLiveSpendLock({
+    lockPath: join(
+      realpathSync(mkdtempSync(join(tmpdir(), 'parent-lease-'))),
+      'live.lock.d',
+    ),
+    clock: new RealClock(),
+    identity: realProcessIdentityProbe,
   });
-  expect(result.error).toBeNull();
-  expect(existsSync(wrapperMarker)).toBe(true);
-  expect(existsSync(decoyMarker)).toBe(false);
+  try {
+    const mockDir = mockGauntletDir('pass');
+    const bin = mkdtempSync(join(tmpdir(), 'snapbin-'));
+    const wrapperMarker = join(bin, 'wrapper-ran');
+    const decoyMarker = join(bin, 'decoy-ran');
+    // Snapshot-style wrapper: marks itself, then execs the mock gauntlet.
+    const wrapper = join(bin, 'gauntlet-snapshot');
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\necho ran > '${wrapperMarker}'\nexec '${join(mockDir, 'gauntlet')}' "$@"\n`,
+    );
+    chmodSync(wrapper, 0o755);
+    // Decoy under the bare name, FIRST on PATH — also a working mock, so a
+    // fallback run would complete green while running the wrong instrument.
+    const decoyDir = mkdtempSync(join(tmpdir(), 'decoy-'));
+    writeFileSync(
+      join(decoyDir, 'gauntlet'),
+      `#!/bin/sh\necho ran > '${decoyMarker}'\nexec '${join(mockDir, 'gauntlet')}' "$@"\n`,
+    );
+    chmodSync(join(decoyDir, 'gauntlet'), 0o755);
+    const result = await invokeChild({
+      scenarioDir: scenario(),
+      codingAgent: 'claude',
+      codingAgentsDir: REAL_CODING_AGENTS,
+      outRoot: mkdtempSync(join(tmpdir(), 'out-')),
+      credentialsPath: REPO_CREDENTIALS,
+      gauntletBin: wrapper,
+      extraEnv: {
+        ...runAllChildEnvironment(lease),
+        PATH: `${decoyDir}:${MOCK}:${process.env['PATH'] ?? ''}`,
+        ANTHROPIC_API_KEY: 'sk-test',
+        AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
+        SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),
+      },
+    });
+    expect(result.error).toBeNull();
+    expect(existsSync(wrapperMarker)).toBe(true);
+    expect(existsSync(decoyMarker)).toBe(false);
+  } finally {
+    lease.release();
+  }
 }, 60000);
 
 // The internal run-all child parser is a separate flag surface: the explicit

@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { existsSync, lstatSync, mkdirSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
 import { jcsCanonicalize, sha256Hex } from '../contracts/campaign/digest.ts';
@@ -32,6 +32,7 @@ export interface CommittedTransition {
   prefix_digest: string;
 }
 interface Row {
+  transition_id: string;
   sequence: number;
   body: string;
   transition_digest: string;
@@ -82,7 +83,7 @@ export function initExecutionJournal(args: {
   const experiment = authenticatedExperiment(args.experiment);
   mkdirSync(args.campaignDir, { recursive: true });
   const path = join(args.campaignDir, JOURNAL_DB_FILENAME);
-  const existed = existsSync(path);
+  const existed = lstatSync(path, { throwIfNoEntry: false }) !== undefined;
   if (existed) assertDbFile(args.campaignDir);
   const db = new Database(path, { create: !existed });
   try {
@@ -126,7 +127,7 @@ function replay(
   let prefix = EMPTY_PREFIX;
   for (const row of db
     .query(
-      'SELECT sequence, body, transition_digest, prefix_digest FROM execution_transitions ORDER BY sequence',
+      'SELECT sequence, transition_id, body, transition_digest, prefix_digest FROM execution_transitions ORDER BY sequence',
     )
     .all() as Row[]) {
     const transition = CampaignTransitionSchema.parse(JSON.parse(row.body));
@@ -141,6 +142,7 @@ function replay(
     );
     if (
       row.sequence !== sequence ||
+      row.transition_id !== transition.transition_id ||
       jcsCanonicalize(transition) !== row.body ||
       digest !== row.transition_digest ||
       prefix !== row.prefix_digest

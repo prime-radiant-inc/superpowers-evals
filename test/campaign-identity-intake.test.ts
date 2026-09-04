@@ -347,23 +347,14 @@ test('stopped path: SIGINT writes the stopped verdict stamped with the identity'
 }, 60_000);
 
 test(
-  'covered child marker: the child entry never attempts lock acquisition',
+  'covered child marker alone refuses before allocating a run',
   () => {
-    // C4 defect-addendum: campaign children enter covered by the holder's
-    // live-spend lock (QUORUM_COVERED_BY_LIVE_SPEND_LOCK=1, set by the spawner
-    // in src/campaign/spawn.ts). The marker means NEVER acquire — acquisition
-    // under it refuses loudly (acquireLease in src/campaign/locks.ts) — so a
-    // full pass through the shared child entry (executeRunCommand) proves no
-    // exit path attempts acquisition, before and after task 9c wires the
-    // top-level spender verbs.
     const r = runChild(['--campaign-identity', JSON.stringify(IDENTITY)], {
       QUORUM_COVERED_BY_LIVE_SPEND_LOCK: '1',
     });
-    expect(r.status).toBe(0);
-    const verdict = JSON.parse(
-      readFileSync(join(r.runDir!, 'verdict.json'), 'utf8'),
-    );
-    expect(verdict.campaign).toEqual(IDENTITY);
+    expect(r.status).not.toBe(0);
+    expect(r.runDir).toBeNull();
+    expect(r.stderr).toContain('marker alone');
   },
   CHILD_RUN_TIMEOUT_MS,
 );

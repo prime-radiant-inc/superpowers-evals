@@ -25,6 +25,7 @@ import {
   DEFAULT_BALLAST_BYTES,
   fsyncDir,
   type JournalFsOps,
+  releaseBallast,
   verifyBallast,
 } from './journal.ts';
 import {
@@ -84,7 +85,7 @@ export function currentProcessIdentity(): ProcessIdentity {
   return { pid: process.pid, birth: String(birth), boot_id: boot };
 }
 function pathFor(options: OwnershipPaths): string {
-  return `${options.lockPath ?? defaultLiveSpendLockPath()}.claim.json`;
+  return `${defaultLiveSpendLockPath(options.lockPath ? { requestedLockPath: options.lockPath } : {})}.claim.json`;
 }
 function optionalDocument(path: string): string | null {
   if (!lstatSync(path, { throwIfNoEntry: false })) return null;
@@ -97,7 +98,9 @@ function optionalDocument(path: string): string | null {
 }
 function requireHostLease(options: OwnershipPaths): void {
   const holder = readLiveSpendHolder(
-    options.lockPath ?? defaultLiveSpendLockPath(),
+    defaultLiveSpendLockPath(
+      options.lockPath ? { requestedLockPath: options.lockPath } : {},
+    ),
   );
   if (
     !holder ||
@@ -242,4 +245,53 @@ export function clearHostClaim(
   // All mutators hold the same host lease; reclamation never touches this file.
   unlinkSync(pathFor(options));
   fsyncDir(dirname(pathFor(options)));
+}
+
+export const StorageInterruptionSchema = ExperimentIdentitySchema.extend({
+  start_id: IdSchema,
+  at: TimestampSchema,
+  stopped: z.array(VerifiedStoppedSchema),
+  unresolved_attempt_ids: z.array(IdSchema),
+}).strict();
+export type StorageInterruption = z.infer<typeof StorageInterruptionSchema>;
+/** Called only after stop attempts. Evidence records uncertainty; it never releases ownership. */
+export function persistStorageInterruption(
+  campaignDir: string,
+  input: StorageInterruption,
+  fsOps?: JournalFsOps,
+): { kind: 'durable'; path: string } | { kind: 'unresolved'; reason: string } {
+  try {
+    const evidence = StorageInterruptionSchema.parse(input);
+    const projection = readProjection(campaignDir);
+    if (!projection.start || !identityMatches(evidence, projection.start))
+      throw new Error('storage interruption start mismatch');
+    const inventory = [
+      ...evidence.stopped.map((item) => item.execution_attempt_id),
+      ...evidence.unresolved_attempt_ids,
+    ];
+    if (
+      new Set(inventory).size !== inventory.length ||
+      inventory.length !== projection.attempts.size ||
+      inventory.some((id) => !projection.attempts.has(id))
+    )
+      throw new Error(
+        'storage interruption requires complete stopped or unresolved inventory',
+      );
+    const path = join(campaignDir, 'storage-interruption.json');
+    const existing = optionalDocument(path);
+    if (existing !== null) {
+      if (!same(JSON.parse(existing), evidence))
+        throw new Error('different emergency evidence already published');
+      fsyncDir(campaignDir, fsOps);
+      return { kind: 'durable', path };
+    }
+    releaseBallast(campaignDir, fsOps);
+    createDurableMarker(path, `${jcsCanonicalize(evidence)}\n`, fsOps);
+    return { kind: 'durable', path };
+  } catch (error) {
+    return {
+      kind: 'unresolved',
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }

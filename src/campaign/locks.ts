@@ -974,6 +974,7 @@ export interface LockLocationOptions {
   /** Read-only configuration seam; production always uses the canonical appliance path. */
   readonly canonicalConfigPath?: string;
   readonly env?: Record<string, string | undefined>;
+  readonly requestedLockPath?: string;
 }
 export function defaultLiveSpendLockPath(
   options: LockLocationOptions = {},
@@ -1008,6 +1009,13 @@ export function defaultLiveSpendLockPath(
       'explicit appliance config disagrees with canonical live-spend lock',
     );
   const appliance = canonical ?? selected;
+  const requested = options.requestedLockPath;
+  if (requested && !isAbsolute(requested))
+    throw new LockError('requested live-spend lock must be an absolute path');
+  if (appliance && requested && requested !== appliance)
+    throw new LockError(
+      'requested lock disagrees with canonical appliance lock',
+    );
   const explicit = env['QUORUM_LIVE_SPEND_LOCK'];
   if (explicit && !isAbsolute(explicit))
     throw new LockError('QUORUM_LIVE_SPEND_LOCK must be an absolute path');
@@ -1016,6 +1024,7 @@ export function defaultLiveSpendLockPath(
       'QUORUM_LIVE_SPEND_LOCK disagrees with canonical appliance lock',
     );
   if (appliance) return appliance;
+  if (requested) return requested;
   if (explicit) return explicit;
   const home = env['HOME'];
   if (!home || !isAbsolute(home))
@@ -1033,13 +1042,17 @@ export function acquireLiveSpendLock(args: {
   readonly lockPath?: string;
   readonly campaignId?: string;
   readonly authority?: LiveSpendAuthority;
+  readonly location?: LockLocationOptions;
   readonly clock: Clock;
   readonly identity: ProcessIdentityProbe;
   /** Heartbeat driver; forwarded to the lease (tests inject failures or
    *  scripted beats through it). */
   readonly scheduler?: HeartbeatScheduler | undefined;
 }): LiveSpendLock {
-  const lockPath = args.lockPath ?? defaultLiveSpendLockPath();
+  const lockPath = defaultLiveSpendLockPath({
+    ...args.location,
+    ...(args.lockPath ? { requestedLockPath: args.lockPath } : {}),
+  });
   mkdirSync(dirname(lockPath), { recursive: true });
   const lease = acquireLease({
     lockPath,

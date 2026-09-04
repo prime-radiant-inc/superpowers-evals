@@ -1476,7 +1476,7 @@ export interface JournalFsOps {
   exists(path: string): boolean;
 }
 
-const realFsOps: JournalFsOps = {
+export const journalFsOps: JournalFsOps = {
   openExclusive: (path) => openSync(path, 'wx'),
   openRead: (path) => openSync(path, 'r'),
   close: closeSync,
@@ -1537,7 +1537,7 @@ function cleanupUnlink(fsOps: JournalFsOps, path: string): string | null {
 export function createBallast(
   campaignDir: string,
   sizeBytes: number,
-  fsOps: JournalFsOps = realFsOps,
+  fsOps: JournalFsOps = journalFsOps,
 ): void {
   if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
     throw new JournalError(
@@ -1607,7 +1607,7 @@ export function createBallast(
 export function verifyBallast(
   campaignDir: string,
   sizeBytes: number,
-  fsOps: JournalFsOps = realFsOps,
+  fsOps: JournalFsOps = journalFsOps,
 ): boolean {
   if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) return false;
   try {
@@ -1623,7 +1623,7 @@ export function verifyBallast(
  *  spent — recovery journals that note). */
 export function releaseBallast(
   campaignDir: string,
-  fsOps: JournalFsOps = realFsOps,
+  fsOps: JournalFsOps = journalFsOps,
 ): void {
   const path = join(campaignDir, '.ballast');
   if (!fsOps.exists(path)) {
@@ -1671,7 +1671,7 @@ export function releaseBallast(
 export function createDurableMarker(
   path: string,
   body: string,
-  fsOps: JournalFsOps = realFsOps,
+  fsOps: JournalFsOps = journalFsOps,
 ): void {
   const stage = `${path}.stage.${process.pid}.${randomBytes(4).toString('hex')}`;
   const fd = fsOps.openExclusive(stage);
@@ -1735,7 +1735,10 @@ export function isStorageFullError(err: unknown): boolean {
   );
 }
 
-export function fsyncDir(dir: string, fsOps: JournalFsOps = realFsOps): void {
+export function fsyncDir(
+  dir: string,
+  fsOps: JournalFsOps = journalFsOps,
+): void {
   const fd = fsOps.openRead(dir);
   try {
     fsOps.fsync(fd);
@@ -1752,7 +1755,7 @@ export function stageAndPublishCampaignJson(
   campaignDir: string,
   campaign: unknown,
   expectedBallastBytes: number = DEFAULT_BALLAST_BYTES,
-  fsOps: JournalFsOps = realFsOps,
+  fsOps: JournalFsOps = journalFsOps,
 ): void {
   if (fsOps.exists(join(campaignDir, 'campaign.json'))) {
     throw new JournalError(

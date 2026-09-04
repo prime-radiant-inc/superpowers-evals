@@ -1,11 +1,13 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, expect, test } from 'bun:test';
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -168,4 +170,26 @@ test('foreign journal and changed frozen experiment refuse without writing', () 
     initExecutionJournal({ campaignDir: dir, experiment: fx.experiment }),
   ).toThrow();
   expect(readFileSync(dbPath)).toEqual(before);
+});
+
+test('a dangling journal symlink cannot create a database outside the campaign', () => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'journal-link-'));
+  cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+  const target = join(dir, 'foreign.db');
+  symlinkSync(target, join(dir, 'journal.db'));
+  const experiment = twoArmExperiment();
+  experiment.input_digest = experimentDigest(experiment);
+  expect(() =>
+    initExecutionJournal({ campaignDir: dir, experiment }),
+  ).toThrow();
+  expect(existsSync(target)).toBe(false);
+});
+test('the durable transition ID column must agree with its authenticated canonical body', () => {
+  const fx = fixture();
+  const db = new Database(join(fx.dir, 'journal.db'));
+  db.exec(
+    "UPDATE execution_transitions SET transition_id = 'foreign-id' WHERE sequence = 1",
+  );
+  db.close();
+  expect(() => readProjection(fx.dir)).toThrow();
 });
