@@ -1,8 +1,9 @@
 # Campaign consolidation: one execution model, useful comparisons
 
 **Date:** 2026-09-04
-**Status:** direction approved by Drew after the five-reviewer architecture
-audit; detailed design written for review. Implementation has not started.
+**Status:** direction approved by Drew; core scope narrowed after staff review
+to defer resume/restart until the next increment. Detailed design amended for
+review. Implementation has not started.
 **Scope:** consolidation of the campaign kernel and appliance V2 roadmap.
 **Source baseline:** main `f8e1889c`; appliance work `65c28448` on
 `drew/child1-tasks-15-17-recut`. Recorded tests and live runs are evidence
@@ -16,6 +17,11 @@ controller's persistence and ownership boundaries before adding features.
 The deliverable is a comparison an operator can configure, run, inspect,
 and understand without a custom driver or result extractor.
 
+The current increment delivers that comparison within one controller session.
+If the controller is lost, preserve the evidence and terminate remaining work;
+the campaign cannot resume or restart. Continuing interrupted campaigns belongs
+to the next increment. This overrides the earlier V2 availability requirements.
+
 This is the accepted forward direction for the remaining campaign work:
 
 | Earlier direction | Disposition |
@@ -25,6 +31,7 @@ This is the accepted forward direction for the remaining campaign work:
 | V1-specific D4b gating seal, adjudication, and operator integration | Pause. Do not build a second supported campaign lifecycle on the format V2 retires. |
 | Appliance V2: host controller, isolated attempts, measurement-only cost | Retain, subject to the consolidation decisions below. |
 | V2's four-child sequence and its durable-contract details | Replace where they require duplicate authority or independently committed fragments of one internal transition. The delivery sequence below governs consolidation planning. |
+| V2 resume/restart, worker adoption, and recovery admission | Defer to the next increment. Retain only the ownership information and cancellation path needed to terminate interrupted work. |
 | Separate formal qualification campaign and automatic release authority | Remain retired. Required executor verification still applies. |
 
 The detailed contract requires written review before implementation planning.
@@ -61,7 +68,8 @@ flowchart LR
 | Responsibility | Owner and boundary |
 |---|---|
 | Experiment intent | Frozen registration: expanded sample/block inventory, input identities, execution limits, and measurement policy. |
-| Admission, cancellation, replacement selection | One controller; durable decisions in one SQLite journal. Dispatch and recovery share the event fold. |
+| Admission and replacement selection | One controller session; durable decisions in one SQLite journal. Dispatch, status, and reports derive from the same event semantics. |
+| Cancellation after interruption | A fenced cancellation handler reads ownership, stops workers, and records termination. It has no admission or sample-replacement authority. |
 | Process existence | Container runtime, checked against journaled identities. A dead controller does not establish dead attempts. |
 | Credentials | Host projector stages exactly the subject and grader credentials for an attempt. Workers cannot read the host bundle or sibling attempts. |
 | Observations | Immutable attempt artifacts with identities, manifests, and explicit missingness. |
@@ -97,9 +105,27 @@ invents a different default.
 **Bound work directly.** Freeze finite planned samples, replacement/reserve
 allowances, attempt-count limits, and per-attempt execution limits. A new
 attempt always consumes a new attempt number and the applicable allowance;
-crash recovery cannot reset those limits. Behavioral failure does not purchase
-a replacement. Recovery requires an explicit operator `run`; permitted
-automatic retries during that invocation follow the frozen failure policy.
+behavioral failure does not purchase a replacement. Retain existing bounded
+retries and whole-block replacements only within the uninterrupted controller
+session and its frozen failure policy. There are no cross-session retries.
+An enforced whole-attempt deadline covers setup, drive, and capture, survives
+controller death, and terminates the complete worker namespace after bounded
+graceful shutdown. Automatic container restart is disabled.
+
+**Consume one run authorization.** Under shared exclusion, atomically record
+that the campaign has started before launching its controller. Only a
+never-started registration may launch a controller. Repeating `run` returns
+active status or refuses a launch for interrupted or terminal work. An invocation lost
+after consuming this authorization cannot retry it, even if no worker started.
+A deliberate new run requires a new campaign identity and verified termination
+of the old work. Status remains read-only.
+
+Establish stable campaign/input/output roots and the minimum attempt ownership
+record in this increment's format before exercising the container boundary.
+Pin the public credential authority and exact projection policy for the session;
+supported credential replacement paths must refuse changes while referenced
+workers or a controller remain active or unresolved. Revocation prevents new
+starts. Credential rotation for dormant resumable campaigns is deferred.
 
 **Commit internal transitions atomically.** Ordered event rows remain the
 audit record, but one SQLite transaction commits one indivisible transition:
@@ -121,29 +147,49 @@ call, container operation, or filesystem publication.
 2. Create and inspect the container; durably bind its immutable runtime ID
    before `docker start` can authorize provider access.
 3. Execute the existing runner with private inputs and outputs.
-4. Preserve logs and partial evidence on exit; verify the worker manifest and
-   publish immutable results before recording their accepted journal binding.
-5. Verify complete container death before releasing execution capacity or
-   starting a replacement.
+4. Verify complete container death. A monitor failure means runtime state is
+   unknown and invokes the stop path; an exit callback alone is not death proof.
+5. Preserve logs and partial evidence; publish only validated immutable
+   artifacts. Atomically record the terminal observation with its verified
+   references or an explicit missing-evidence reason. Only then release
+   capacity or start a permitted in-session replacement.
 
-Recovery reconciles a prepared identity without a container, a created but
-unbound container, a bound but unstarted container, and published but
-unjournaled evidence. Discovery uses exact labels and verifies the complete
-expected identity/specification; a label alone is not authorization. Ambiguous
-ownership or unverified death yields `recovery_required` and stops admission.
+**Interruption ends execution.** A lost controller is never replaced for the
+same campaign. Existing workers may remain alive until cancellation or their
+independent deadlines terminate them. Host exclusion blocks every other
+top-level spender while any of those workers could live; stale controller
+identity alone cannot release it.
+
+Post-crash `cancel` performs termination reconciliation only: inspect prepared
+identities and possibly created containers, verify exact labels and the expected
+specification, stop owned workers, and establish complete namespace death.
+It never starts or adopts a container, reconstructs dispatch, replenishes an
+allowance, or selects replacement observations. A label alone is insufficient
+ownership proof. Ambiguous ownership retains host exclusion and exposes the
+unresolved stop operation.
 
 Cancellation persists intent before signalling and reaches every owned worker.
-`cancelled` requires verified worker death and durable campaign cancellation.
-An invocation that stopped without that proof reports an interrupted command
-and unresolved campaign state. Storage exhaustion stops admission and all owned
-workers, verifies their death, then preserves bounded control evidence using
-the existing emergency-reserve mechanism. `storage_paused` requires verified
-worker death and durable pause evidence; otherwise report `recovery_required`.
-Status never repairs or starts work. Host exclusion remains effective while an
-old worker could live.
+An ordinary operator cancellation requires verified worker death and durable
+cancellation evidence. After controller loss, the campaign remains interrupted;
+`cancel` records termination and quiescence without relabeling it completed or
+reconstructing sample dispositions. If death or durable closure cannot be
+established, status reports the unresolved stop and retains host exclusion.
+Storage exhaustion stops admission and owned workers and preserves bounded
+termination evidence using the existing emergency reserve. It ends the session
+as incomplete; there is no resumable `storage_paused` state in this increment.
 
-**Separate execution from analytical inclusion.** A planned sample is a slot
-in the experiment. An attempt has its own execution outcome. A disposition
+Already accepted observations remain usable in an incomplete report. Preserve
+unaccepted artifacts for inspection; cancellation cannot promote them into
+accepted behavioral outcomes. No completed-campaign seal or full journal
+recovery is required to expose this partial readout. Include validated cost
+observations independently of behavioral acceptance, and report missing
+accounting as missing instead of reconstructing an apparently complete run.
+
+**Separate execution from analytical inclusion.** The primary sample inventory,
+frozen after eligibility, defines the planned slots and their denominator. A
+reserve block supplies replacement capacity; it adds no planned slots. Every
+activated successor maps to the original primary slots and preserves their
+arm identities. An attempt has its own execution outcome. A disposition
 states whether an observed attempt contributes to that slot and comparison.
 Completing an attempt never becomes "admitted" again. Replacement creates a
 new attempt and explicit lineage; it does not rewrite the predecessor's
@@ -164,24 +210,34 @@ The shared measurement input contains only what execution and reports need:
 | Record | Required information |
 |---|---|
 | Arm | Stable identity; requested agent/model/endpoint and skill ref or absence; frozen configuration and instrument identities. |
-| Planned sample | Scenario/check identity, arm, replicate, comparison and block membership. This inventory supplies denominators for work that never starts. |
+| Planned sample | Primary-slot identity, scenario/check identity, arm, replicate, and comparison membership. Block instances and reserve successors map to these fixed slots, including work that never starts. |
 | Attempt | Sample/attempt IDs, timestamps, execution status and typed cause, observed versions/models, artifact references/digests, separate Gauntlet-Agent and deterministic judgments, subject/grader usage and cost with missingness. |
 | Disposition | Inclusion/exclusion or replacement selection, reason, and predecessor/successor references. |
 
 Reports distinguish planned samples, executed attempts, usable outcomes, and
 fully observed pairs. The first supported report contains:
 
-- Per-arm, per-scenario pass/fail/indeterminate/unobserved counts and completion
-  shares over planned slots, plus total attempt counts.
+- Counts grouped by comparison, scenario, and arm. Selected
+  pass/fail/indeterminate/no-usable-result counts sum to the fixed primary-slot
+  denominator, including interrupted and cancelled work. Explain missing
+  results as never executed, unresolved, or observed but excluded. Show total
+  attempt counts separately; repeated baselines in different comparisons stay
+  separate.
 - Descriptive per-arm pass rates over usable determinate outcomes. The primary
   comparative delta uses complete determinate pairs from the same selected
   block instances; show the pair count separately. No silent switch between
-  independent-arm and complete-pair denominators.
-- Per-arm wall-time and subject/grader cost summaries for those comparable
-  pairs, with a separate contributing count for each quantity. Missing price
-  can remove a cost observation without removing its behavioral observation.
+  independent-arm and complete-pair denominators. This delta describes observed
+  complete pairs, not all planned work.
+- Wall-time and subject/grader cost comparisons use the same contributing
+  blocks on both arms for each quantity, with that quantity's paired count.
+  Different quantities may use different block sets. These summaries are
+  conditional on determinate outcomes. Missing price never removes a behavioral
+  observation. Single-arm summaries use selected determinate samples and show
+  each quantity's available count.
 - Observed total cost by arm and across all attempts, cost coverage, and
-  discarded-work cost separate from the comparable-pair summaries.
+  discarded-work cost separate from the comparable-pair summaries. Include
+  observed attempt wall-time totals and duration coverage across all attempts;
+  those totals measure worker occupancy, not elapsed operator time.
 - Exclusion/replacement reasons, Gauntlet-Agent versus deterministic-check
   disagreements, provenance caveats, and links to the underlying artifacts.
 
@@ -192,7 +248,7 @@ campaign elapsed time is reported separately.
 
 Sealing anchors immutable measurement data, inclusion decisions, and the
 versioned report fold. Missing costs can coexist with complete behavioral
-execution. Cancelled or abandoned campaigns produce explicitly incomplete
+execution. Cancelled or interrupted campaigns produce explicitly incomplete
 readouts. Sealing never certifies that the scenario's checks match its intent.
 Human formatting is derived from canonical data; changing presentation does
 not reinterpret or invalidate that data.
@@ -207,21 +263,20 @@ and adjudication tooling are outside the first consolidation delivery.
 ## Operator workflow
 
 The supported entry point is `evals-appliance campaign`. Each verb delegates
-to the same controller/read model; a second raw-CLI recovery procedure is not
-part of the product.
+to the same ownership/read model. Post-crash cancellation is the only mutating
+operation on interrupted work; there is no second raw-CLI continuation path.
 
 | Verb | Operator-visible result |
 |---|---|
 | `register` | Expanded comparison, eligibility exclusions, finite work limits, pinned inputs, and accepted campaign identity. Prices are optional information. |
 | `list` / `status` | Campaign lifecycle, progress, observed cost coverage, blockers, and one explicit next action. Running status contains no behavioral outcomes. |
-| `run` | Start or reconcile/resume the selected campaign; never silently start paid work after host restart. |
-| `cancel` | Persist cancellation and establish worker death, or state precisely why cancellation remains incomplete. |
+| `run` | Consume the never-started campaign's sole run authorization. Repeated calls report active status or refuse; they never resume, restart, or create another controller. |
+| `cancel` | Persist stop intent and establish worker death. After controller loss, append a termination receipt and keep the outcome interrupted. Report unresolved stops precisely. |
 | `costs` / `report` | The same measurement projection, with mid-run costs or the terminal comparison respectively. |
-| `abandon` | End an unrecoverable campaign only after worker death is established, preserving incomplete evidence. |
-| `cleanup` | Preview a positive deletion list; apply only that reviewed plan while preserving verified evidence and required inputs. |
 
-One concise runbook owns this journey. No dashboard controls, fleet, queueing
-service, automatic resume daemon, or general analysis plugin framework is added.
+One concise runbook owns this journey. General cleanup automation and a separate
+`abandon` command are deferred; preserve evidence. No dashboard controls, fleet,
+queueing service, automatic resume daemon, or analysis plugin framework is added.
 
 ## Deletion and retention ledger
 
@@ -234,12 +289,13 @@ the named responsibility, not the entire file by default.
 | V1-specific D4b seal/adjudication integration | Do not implement it. Preserve the draft as historical planning; optional analysis uses the surviving measurement contract. |
 | Campaign budget object, budget stops/amendments, in-flight dollar exposure and its recovery | Remove from new V2 contracts and execution together. All-attempt cost/missingness reports must work first. |
 | Per-event commits within indivisible transition groups; corresponding partial-prefix/suffix repair | Atomic groups pass failure-cut tests. Old V1 prefixes remain the old reader's responsibility. |
+| Worker adoption, replay-driven dispatch reconstruction, recovery admission, cross-session retries, and resumable pause states | Deferred entirely. Interrupted campaigns only support inspection and termination reconciliation. |
 | Separate event-routing mirrors in dispatch and replay | One shared incremental fold. Reporting may retain a distinct pure projection. |
 | Registration/runtime pool-cap derivations | One frozen policy map and demand calculation, proven invariant under credential/arm ordering. |
 | Combined sample execution/exclusion/reentry state machine | Immutable attempt outcomes plus explicit slot/block dispositions and replacement lineage. |
 | Appliance job records claiming campaign completion/cancellation | Invocation receipts plus journal/worker-derived campaign status. |
-| Host-direct process-group/tmux recovery as an appliance campaign backend | Exact container reconciliation and verified namespace death. Keep process support still used by direct development runs. |
-| Pooled-only report counts/economics and routine scratch extractors | Canonical per-arm rows, complete-pair comparisons, and all-attempt costs. |
+| Host-direct process-group/tmux recovery as an appliance campaign backend | Exact container ownership and verified namespace death. Keep process support still used by direct development runs. |
+| Pooled-only report counts/economics and routine scratch extractors | Canonical comparison/scenario/arm rows, complete-pair comparisons, and all-attempt costs. |
 | Linux appliance-only preflight imposed on workstation development | Real platform-specific development checks, preserving exclusion and provenance. |
 | Empty tags/metrics sections, generic errata, duplicated statistical implementations | No current consumer; do not add them to consolidation. |
 | Multiple live V1/V2 controller implementations after cutover | One V2 runtime; archive the V1 checkout and evidence for read-only historical use. |
@@ -253,25 +309,36 @@ or a renamed module is not evidence of simplification.
 
 ## Delivery and acceptance
 
-Deliver three bounded increments, each with its own implementation plan after
-this design is reviewed. Their scope is fixed here; detailed task breakdowns
-must name the exact code removed and the behavior replacing it.
+The current increment is one complete comparison path: configure, register,
+run once, inspect status/costs, cancel when needed, and read a canonical report.
+Its implementation plan must identify the exact responsibilities removed and
+justify each rewritten transition against these acceptance requirements.
 
-1. **Prove attempt ownership.** Complete the existing container seam's
-   prepare/bind/start, evidence publication, cancellation, and reconciliation
-   behavior. Exercise it with the real runner and a local fake provider on
-   Linux. Add only the transition support needed for that proof; no new V1
-   decision or budget features. Reuse the resulting worker boundary in V2.
-2. **Consolidate the model.** Implement atomic control transitions, shared pool
-   policy/fold, separate attempt/disposition state, and the measurement/report
-   contract as one coherent V2 format change. Remove the corresponding V1
-   responsibilities from the new path. Demonstrate a paired comparison and
-   interrupted recovery through the helper with useful per-arm output.
-3. **Finish the operator cutover.** Complete the single command journey,
-   durable paths, credential-generation integration, and evidence-preserving
-   cleanup. Drain V1 activity, verify worker absence and retained evidence,
-   then retire V1 execution on the appliance. Archive the old checkout and
-   artifacts without translation; V2 rejects them and never resumes them.
+Establish the minimal durable ownership format, stable paths, credential
+delivery, and atomic writer API together. Prove the existing container boundary
+with the real runner and a local fake provider on Linux. Preserve dispatcher
+algorithms, provisioning, checks, and capture that satisfy those contracts;
+do not build a temporary persisted lifecycle or a general new controller.
+
+Deliver the supported helper journey and report in this same increment.
+Demonstrate one mixed-evidence report with a baseline repeated in two
+comparisons, one reserve replacement, determinate and indeterminate outcomes,
+one missing price, and a never-started slot. Its JSON and readable rendering
+must explain what changed, what is missing, and what obtaining the answer cost
+and took. Every number derives from canonical data without an extractor.
+
+Resume/restart is the next increment, after this core works. Defer worker
+adoption, dispatch reconstruction, cross-session retries, dormant credential
+rotation, and controller-upgrade replay guarantees. Retain only the ownership
+reader needed to cancel this increment's interrupted work; supported helper
+replacement cannot strand that cancellation capability. Drain active or
+unresolved work before changing its ownership format. This is not a promise
+that future controllers can continue every historical campaign.
+
+Operational cutover follows core verification: drain V1 activity, verify worker
+absence and retained evidence, then retire V1 execution on the appliance.
+Archive the old checkout and artifacts without translation. General cleanup
+automation and historical migration are outside the core increment.
 
 Do not move or convert old artifacts during development. Historical read-only
 tools stay separate from V2, with no compatibility reader added to its runtime.
@@ -283,15 +350,18 @@ Required evidence is specific rather than a new qualification program:
 
 | Check | Passing evidence |
 |---|---|
-| Configuration usability | A maintainer expresses a supported comparison and accepts registration in under 30 minutes with no `src/` edits. |
+| Configuration usability | Checked-in examples and configuration checks cover PR/base, harness/harness, superpowers/stock, and model/model within declared adapter support. From a blank editor on a prepared appliance, a maintainer expresses a changed supported question and accepts registration in under 30 minutes with no `src/` edits. Document setup prerequisites separately. |
 | Atomic transitions | Failure before/after commit leaves the whole admission/replacement present or absent; no partial internal bundle needs repair. |
-| External crash cuts | Interrupt before create, after create/before binding, after binding/before start, after result publication/before journal acceptance, and during cancellation. Repeated recovery creates no overlapping replacement, duplicate inclusion, or unowned worker. |
-| Storage exhaustion | Fail durable writes while workers are active. Admission stops, exact owned workers are stopped and verified dead, and a durable pause or explicit recovery-required condition remains; no false completed pause is reported. |
-| Finite work | Repeated interruption and recovery never replenish attempt limits or reserve allowances; exhaustion produces explicit missing evidence without further admission. |
+| Single launch | Concurrent/repeated `run`, loss after the start claim but before worker creation, and calls after interruption or host restart never launch another controller or worker for that campaign. |
+| Termination cuts | Interrupt before create, after create/before binding, after binding/before start, after publication/before journal acceptance, and during cancellation. Repeated `cancel` only stops and records termination; it never dispatches, adopts, selects observations, or changes inclusion. |
+| Worker ownership | After controller death, another campaign, direct run, run-all, and appliance refresh cannot bypass unresolved host ownership. A failed runtime monitor cannot publish mutable evidence or release capacity. |
+| Independent deadline | Kill the controller with a hung runner and daemonized child. The frozen execution deadline terminates the entire container namespace without another controller session. |
+| Storage exhaustion | Fail durable writes with active workers. Admission ends, workers stop and are verified dead, and termination evidence or an explicit unresolved stop remains. No resumable pause or false completion is reported. |
+| Finite work | In-session retries consume the frozen attempt and reserve limits. Exhaustion leaves missing evidence; interruption permanently prevents further admission for the campaign. |
 | Resource policy | Reordered aliases/arms produce identical capacity decisions; shared subject/grader pools obey the same complete demand vector during registration and execution. |
 | Cost independence | Unknown price permits the behavioral comparison, reports incomplete cost coverage, and never changes admission or inclusion. All observed discarded-attempt costs remain visible. |
-| Honest reports | Mixed determinate/indeterminate, never-started, excluded, and retried fixtures yield exact per-arm and complete-pair denominators; disagreements remain visible. |
-| Operator semantics | Controller death alone never yields campaign cancellation/completion; status explains the action needed. The supported verbs suffice without journal surgery. |
+| Honest reports | The mixed-evidence fixture preserves fixed primary-slot denominators and comparison identity, matches each comparative quantity on common blocks, and exposes all-attempt cost/duration coverage. Interrupted reports never promote unaccepted outcomes or hide missing work. |
+| Operator semantics | A normal helper comparison produces the complete report. Controller death produces an interrupted campaign, an explicit stop action if workers remain unresolved, and an honest partial readout; no continuation is required. |
 | Development workflow | Supported workstation smoke remains usable with real platform checks and no fabricated test environment. |
 | Preservation and removal | Historical artifacts retain their digests; V2 has no runtime V1 reader, dollar-control path, duplicate campaign authority, or partial-internal-transition recovery. |
 
@@ -301,10 +371,10 @@ installed path. Record failures as well as passes. A simulated eight-hour
 release workload remains a capacity prediction until measured on the actual
 mix; the recorded 121-minute sentinel campaign is not that measurement.
 
-Stop expanding the design if the isolated executor still needs overlapping
-state machines to pass these cuts, or a supported comparison still needs
-source changes. Those are grounds to reconsider the boundary. Source size
-and review fatigue alone are not grounds for a wholesale rewrite.
+Stop expanding the design if termination-only handling still requires dispatch
+reconstruction or a supported comparison needs source changes. Reconsider that
+boundary instead of importing the deferred resume engine. Source size and
+review fatigue alone are not grounds for a wholesale rewrite.
 
 ## Evidence and implementation anchors
 
