@@ -67,7 +67,7 @@ export function materializeCampaignSnapshot(
 }
 
 /** R-RCV-6: reconstruction reads expected SHAs from current worktree HEADs,
- *  so resume cross-checks the handle against Campaign.refs and refuses
+ *  so the controller cross-checks the handle against Campaign.refs and refuses
  *  loudly on ANY mismatch — evals SHA, gauntlet SHA, and the exact set of
  *  arm superpowers SHAs. */
 export function reconstructCampaignSnapshot(args: {
@@ -102,7 +102,7 @@ export function reconstructCampaignSnapshot(args: {
   }
   if (mismatches.length > 0) {
     throw new SnapshotIntegrationError(
-      `snapshot reconstruction failed the Campaign.refs cross-check at ${args.campaignDir}: ${mismatches.join('; ')} — expected identity never derives from current HEAD alone; refusing to resume (fail-closed). Next: reconcile the on-disk trees against the campaign.json refs — rebuild drifted trees with the authorized drift repair (quorum campaign run), or re-open the campaign record if the registered refs themselves are wrong`,
+      `snapshot reconstruction failed the Campaign.refs cross-check at ${args.campaignDir}: ${mismatches.join('; ')} — expected identity never derives from current HEAD alone; this controller session is interrupted`,
     );
   }
   return handle;

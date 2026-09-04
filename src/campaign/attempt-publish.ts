@@ -382,3 +382,26 @@ export function publishExecution(args: {
     ],
   };
 }
+
+/** Read only publisher-returned references beneath the configured results root.
+ * Revalidate bytes at each consumer boundary; a pathname alone is not evidence. */
+export function readPublishedArtifact(
+  resultsRoot: string,
+  ref: ArtifactRef,
+): string {
+  const body = readPinnedNoFollowFile(
+    resultsRoot,
+    ref.path.split('/'),
+    'published campaign artifact',
+    true,
+  );
+  if (
+    body === null ||
+    Buffer.byteLength(body) !== ref.bytes ||
+    createHash('sha256').update(body).digest('hex') !== ref.sha256
+  )
+    throw new AttemptPublishError(
+      'published artifact differs from authenticated reference',
+    );
+  return body;
+}

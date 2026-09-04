@@ -33,7 +33,7 @@ import {
   killSubjectHostVerified,
   performStoragePause,
   realGroupSignaler,
-  runCampaignDispatch,
+  runBudgetedCampaignDispatch as runCampaignDispatch,
   SPAWN_FAILURE_HALT_N,
   type SubjectHostProbe,
 } from '../src/campaign/dispatcher.ts';

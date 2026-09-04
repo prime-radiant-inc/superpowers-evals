@@ -663,15 +663,9 @@ export function exposureProbeForAgent(agent: string): ExposureProbe {
  *  time, never an offset. */
 export function trajectoryExposureMs(runDir: string): number | null {
   try {
-    const t = JSON.parse(
+    return trajectoryExposureFromText(
       readFileSync(join(runDir, 'trajectory.json'), 'utf8'),
-    ) as {
-      steps?: { timestamp?: string }[];
-    };
-    const first = t.steps?.find((s) => s.timestamp !== undefined)?.timestamp;
-    if (first === undefined) return null;
-    const ms = Date.parse(first);
-    return Number.isFinite(ms) ? ms : null;
+    );
   } catch {
     return null;
   }
@@ -782,4 +776,19 @@ export function auditExposure(args: {
     inclusionChanged,
     invalidationReason: inclusionChanged ? 'exposure_audit' : null,
   };
+}
+
+/** The same capture exposure calculation on authenticated publication bytes. */
+export function trajectoryExposureFromText(text: string): number | null {
+  try {
+    const trajectory = JSON.parse(text) as { steps?: { timestamp?: string }[] };
+    const timestamp = trajectory.steps?.find(
+      (step) => step.timestamp !== undefined,
+    )?.timestamp;
+    if (timestamp === undefined) return null;
+    const milliseconds = Date.parse(timestamp);
+    return Number.isFinite(milliseconds) ? milliseconds : null;
+  } catch {
+    return null;
+  }
 }

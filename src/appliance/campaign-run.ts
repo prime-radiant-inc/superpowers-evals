@@ -45,6 +45,7 @@ import type {
 } from '../contracts/campaign/execution.ts';
 import type { Experiment } from '../contracts/campaign/experiment.ts';
 import { RealClock } from '../scheduler/clock.ts';
+import { CAMPAIGN_IMAGE_REF, imageDigestOf } from './campaign-image.ts';
 import { loadStateConfig } from './config.ts';
 import { readBundleEnvForProjection } from './credential-scope.ts';
 import { ApplianceError } from './errors.ts';
@@ -53,29 +54,7 @@ import { acquireLock, type LockHandle } from './locks.ts';
 import { appendLog, detachedWorkerEnv } from './process.ts';
 import type { JobRecord, LoadedApplianceConfig } from './types.ts';
 
-export const CAMPAIGN_IMAGE_REF = 'superpowers-evals:local';
-const IMAGE_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
-
-export function imageDigestOf(runner: CommandRunner, imageRef: string): string {
-  const result = runner.run('docker', [
-    'image',
-    'inspect',
-    imageRef,
-    '--format',
-    '{{.Id}}',
-  ]);
-  let value = result.stdout;
-  if (value.endsWith('\n')) value = value.slice(0, -1);
-  if (value.endsWith('\r')) value = value.slice(0, -1);
-  if (result.status !== 0 || !IMAGE_DIGEST_RE.test(value)) {
-    throw new ApplianceError(
-      'config_invalid',
-      'image',
-      `worker image ${imageRef} is missing or has a non-canonical digest`,
-    );
-  }
-  return value;
-}
+export { CAMPAIGN_IMAGE_REF, imageDigestOf } from './campaign-image.ts';
 
 export interface RunCampaignWorkerDeps {
   readonly runCampaign?: (

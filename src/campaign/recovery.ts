@@ -62,7 +62,7 @@ import {
   realGroupSignaler,
   realSamplerSeam,
   realSubjectHostProbe,
-  runCampaignDispatch,
+  runBudgetedCampaignDispatch as runCampaignDispatch,
   runCostFromArtifacts,
   type SubjectHostProbe,
 } from './dispatcher.ts';

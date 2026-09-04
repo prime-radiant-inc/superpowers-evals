@@ -19,7 +19,7 @@ import {
   type DispatchRunArgs,
   type DispatchSamplerHooks,
   type DispatchSamplerSeam,
-  runCampaignDispatch,
+  runBudgetedCampaignDispatch as runCampaignDispatch,
 } from '../src/campaign/dispatcher.ts';
 import {
   electWriter,

@@ -1022,3 +1022,18 @@ test('campaign cancellation remains stopping when host liveness is unknown', asy
   expect(stopping.status).toBe('stopping');
   expect(stopping.result.summary).toContain('still live');
 });
+
+test('imageDigestOf always bounds its Docker client request', () => {
+  let timeout: number | undefined;
+  imageDigestOf(
+    {
+      run(_command, _args, options) {
+        timeout = options?.timeoutMs;
+        return { status: 0, stdout: `${DIGEST}\n`, stderr: '' };
+      },
+    },
+    'superpowers-evals:local',
+  );
+  expect(timeout).toBeGreaterThan(0);
+  expect(timeout).toBeLessThanOrEqual(30_000);
+});
