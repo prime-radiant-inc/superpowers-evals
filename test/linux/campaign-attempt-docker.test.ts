@@ -1054,30 +1054,40 @@ function tailFile(path: string, maxCharacters = 4_000): string {
 }
 
 function captureFailureDiagnostics(fixture: DockerFixture): string {
-  const diagnosticRoot = join(fixture.tempDir, 'failure-diagnostics');
-  const sources = [
-    ...attemptLogFiles(fixture),
-    ...gauntletResultFiles(fixture),
-  ];
-  const lines = ['failure diagnostics captured before teardown:'];
-  if (sources.length === 0) {
-    lines.push('no retained attempt logs or gauntlet result files were found');
-    return lines.join('\n');
-  }
-  for (const source of sources) {
-    const destination = diagnosticDestination(fixture, diagnosticRoot, source);
-    const label = relative(diagnosticRoot, destination);
-    try {
-      mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(source, destination);
-      lines.push(`--- ${label} tail ---`, tailFile(destination));
-    } catch (error) {
+  try {
+    const diagnosticRoot = join(fixture.tempDir, 'failure-diagnostics');
+    const sources = [
+      ...attemptLogFiles(fixture),
+      ...gauntletResultFiles(fixture),
+    ];
+    const lines = ['failure diagnostics captured before teardown:'];
+    if (sources.length === 0) {
       lines.push(
-        `--- ${label} capture failed: ${error instanceof Error ? error.message : String(error)} ---`,
+        'no retained attempt logs or gauntlet result files were found',
       );
+      return lines.join('\n');
     }
+    for (const source of sources) {
+      const destination = diagnosticDestination(
+        fixture,
+        diagnosticRoot,
+        source,
+      );
+      const label = relative(diagnosticRoot, destination);
+      try {
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(source, destination);
+        lines.push(`--- ${label} tail ---`, tailFile(destination));
+      } catch (error) {
+        lines.push(
+          `--- ${label} capture failed: ${error instanceof Error ? error.message : String(error)} ---`,
+        );
+      }
+    }
+    return lines.join('\n');
+  } catch (error) {
+    return `failure diagnostics capture failed: ${error instanceof Error ? error.message : String(error)}`;
   }
-  return lines.join('\n');
 }
 
 function enrichFailure(error: unknown, diagnostics: string): Error {
