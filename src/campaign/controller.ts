@@ -47,10 +47,16 @@ import { type HostStatsProbe, hostStatsProbeForCli } from './host-stats.ts';
 import type { SnapshotHandle } from './instrument-snapshot.ts';
 import { createDurableMarker } from './journal.ts';
 import { resolveKeyForSpawn } from './key-select.ts';
-import { persistStorageInterruption, readCancelIntent } from './ownership.ts';
+import {
+  persistStorageInterruption,
+  publishCancelIntent,
+  readCancelIntent,
+} from './ownership.ts';
 import { assertCredentialAuthority } from './registration.ts';
 import { assertFeasible, blockDemandVector } from './resource-policy.ts';
 import {
+  gauntletEventStreamTextsFromText,
+  gauntletResultText,
   senseEvidence,
   sensorAttributionRank,
   trajectoryExposureFromText,
@@ -72,6 +78,7 @@ export interface RuntimeAuthority {
   assertStartAuthorized(bound: BoundExecution): void;
 }
 export interface SessionDependencies {
+  signal?: AbortSignal;
   clock: Clock;
   registry(): Readonly<Record<string, Credential>>;
   verifySnapshot(): void;
@@ -261,10 +268,11 @@ export async function runCampaignDispatch(
       }
     | {
         failed: string;
+        attemptId: string;
       }
   )[] = [];
   const signal = () => wake?.();
-  const keyGrants = new Map<string, string[]>();
+  const keyGrants = new Map<string, { credential: string; env: string }[]>();
   const latches = new Map<string, number>();
   const policy = new Map(experiment.pool_policy.map((p) => [p.pool_id, p]));
   let registry: Readonly<Record<string, Credential>> = {};
@@ -303,7 +311,7 @@ export async function runCampaignDispatch(
   const guard = () => {
     if (halted) throw Error(halted);
     cancelled = deps.cancelIntent();
-    if (cancelled) throw Error('operator cancellation');
+    if (cancelled || deps.signal?.aborted) throw Error('operator cancellation');
     context.assertAdmission();
     writer.assertCurrentOwner();
     assertCredentialAuthority(deps.registry(), experiment);
@@ -374,7 +382,11 @@ export async function runCampaignDispatch(
       };
     }
   };
-  const observe = (stopped: VerifiedStopped, accountingOnly: boolean) => {
+  const observe = (
+    stopped: VerifiedStopped,
+    accountingOnly: boolean,
+    unknownCause = false,
+  ) => {
     const id = stopped.execution_attempt_id;
     const a = required(projection().attempts.get(id));
     stoppedInventory.set(id, stopped);
@@ -408,35 +420,6 @@ export async function runCampaignDispatch(
         throw Error('verdict identity mismatch');
       outcome = verdict.final;
       stage = verdict.error?.stage;
-      for (const ref of evidence.artifacts) {
-        const source = ref.path.endsWith('/trajectory.json')
-          ? 'child_stderr'
-          : ref.path.includes('/gauntlet-agent/')
-            ? 'event_stream'
-            : null;
-        if (!source) continue;
-        const role = source === 'child_stderr' ? 'subject' : 'grader';
-        const name =
-          role === 'subject'
-            ? credentialFor(required(slots.get(a.intent.identity.sample_id)))
-            : experiment.grader.credential;
-        const cred = required(registry[name]);
-        const found = senseEvidence({
-          source,
-          text: readPublishedArtifact(context.resultsRoot, ref),
-          credential: {
-            api: cred.api,
-            ...(cred.base_url ? { base_url: cred.base_url } : {}),
-          },
-          role,
-        });
-        if (
-          found &&
-          (!strongest ||
-            sensorAttributionRank(found) < sensorAttributionRank(strongest))
-        )
-          strongest = found;
-      }
     } catch (error) {
       if (isStorageFailure(error)) {
         storageFailed = true;
@@ -445,6 +428,61 @@ export async function runCampaignDispatch(
       outcome = 'indeterminate';
       stage = undefined;
       missing = 'invalid or missing authenticated verdict';
+    }
+    for (const ref of evidence.artifacts) {
+      try {
+        const role = ref.path.includes('/gauntlet-agent/')
+          ? ('grader' as const)
+          : ('subject' as const);
+        const texts =
+          ref.path.endsWith('/run.jsonl') && role === 'grader'
+            ? gauntletEventStreamTextsFromText(
+                readPublishedArtifact(context.resultsRoot, ref),
+              )
+            : ref.path.endsWith('/result.json') && role === 'grader'
+              ? [
+                  {
+                    source: 'gauntlet_result' as const,
+                    text: gauntletResultText(
+                      readPublishedArtifact(context.resultsRoot, ref),
+                    ),
+                  },
+                ]
+              : [];
+        const name =
+          role === 'grader'
+            ? experiment.grader.credential
+            : credentialFor(required(slots.get(a.intent.identity.sample_id)));
+        const cred = required(registry[name]);
+        for (const text of texts) {
+          const found = senseEvidence({
+            ...text,
+            role,
+            credential: {
+              api: cred.api,
+              ...(cred.base_url ? { base_url: cred.base_url } : {}),
+            },
+          });
+          if (
+            found &&
+            (!strongest ||
+              sensorAttributionRank(found) < sensorAttributionRank(strongest))
+          )
+            strongest = found;
+        }
+      } catch (error) {
+        if (isStorageFailure(error)) {
+          storageFailed = true;
+          throw error;
+        }
+        outcome = 'indeterminate';
+        missing = 'invalid authenticated sensor evidence';
+      }
+    }
+    if (unknownCause) {
+      outcome = 'indeterminate';
+      stage = undefined;
+      strongest = null;
     }
     const classification = classifyFailure({
       outcome,
@@ -488,7 +526,11 @@ export async function runCampaignDispatch(
     )
       halted = classification.cause;
   };
-  const stopAttempt = async (id: string, accountingOnly: boolean) => {
+  const stopAttempt = async (
+    id: string,
+    accountingOnly: boolean,
+    unknownCause = false,
+  ) => {
     const a = required(projection().attempts.get(id));
     if (a.stopped) return;
     const owned = await runtime.inspectOwned({ intent: a.intent });
@@ -512,7 +554,7 @@ export async function runCampaignDispatch(
       if (result.kind !== 'dead') throw Error('runtime death unresolved');
       stopped = result.stopped;
     }
-    observe(stopped, accountingOnly);
+    observe(stopped, accountingOnly, unknownCause);
   };
   const replacementCause = (
     p: CampaignProjection,
@@ -586,11 +628,27 @@ export async function runCampaignDispatch(
                 readPublishedArtifact(context.resultsRoot, ref),
               )
             : null;
-        } catch {
+        } catch (error) {
+          if (isStorageFailure(error)) {
+            storageFailed = true;
+            throw error;
+          }
           return null;
         }
       });
-      if (!cause && exposures.some((t) => t === null)) cause = 'exposure';
+      if (
+        !cause &&
+        exposures.some(
+          (timestamp, index) =>
+            timestamp === null ||
+            timestamp < Date.parse(required(attempts[index]).prepared_at) ||
+            timestamp >
+              Date.parse(
+                required(required(attempts[index]).stopped).observed_at,
+              ),
+        )
+      )
+        cause = 'exposure';
       if (
         !cause &&
         Math.max(...(exposures as number[])) -
@@ -610,7 +668,20 @@ export async function runCampaignDispatch(
           reason: cause,
           evidence_refs: [ref],
         });
-      } else if (!b.excluded && !b.validity_receipt) {
+      } else if (
+        !b.excluded &&
+        !b.validity_receipt &&
+        sidecar.lines.some(
+          (line) =>
+            !('missing' in line) &&
+            line.ts_ms >=
+              Math.max(
+                ...attempts.map((a) =>
+                  Date.parse(required(a.stopped).observed_at),
+                ),
+              ),
+        )
+      ) {
         const ref = controlEvidence(id, 'valid', {
           exposures,
           contention: 'clean',
@@ -637,8 +708,8 @@ export async function runCampaignDispatch(
       breach = false;
       signal();
     },
-    onSampleError(error) {
-      if (isStorageFailure(error)) {
+    onSampleError(error, source) {
+      if (source === 'storage' || isStorageFailure(error)) {
         storageFailed = true;
         halted = 'telemetry storage failed';
       }
@@ -674,6 +745,52 @@ export async function runCampaignDispatch(
       last + (policy.get(pool)?.launch_spacing_seconds ?? 0),
     );
   };
+  const drainEvents = async () => {
+    while (events.length) {
+      const event = required(events.shift());
+      if ('failed' in event) {
+        await stopAttempt(event.attemptId, false, true);
+        halted = 'runtime monitor failure';
+        break;
+      }
+      observe(event.stopped, false);
+      if (halted) break;
+      const a = required(
+        projection().attempts.get(event.stopped.execution_attempt_id),
+      );
+      if (replacementCause(projection(), a.intent.identity.block_id)) {
+        for (const sibling of required(
+          projection().blocks.get(a.intent.identity.block_id),
+        ).activation.attempts)
+          await stopAttempt(sibling.identity.execution_attempt_id, false);
+      }
+    }
+    guard();
+  };
+  const onSignal = () => {
+    if (!supplied && !projection().ended) {
+      try {
+        if (!readCancelIntent(context.campaignDir))
+          publishCancelIntent(context.campaignDir, {
+            campaign_id: experiment.campaign_id,
+            input_digest: experiment.input_digest,
+            start_id: required(projection().start).start_id,
+            requested_at: now(),
+            controller_loss_established: false,
+            reason: 'controller cancellation signal',
+          });
+      } catch {
+        halted = 'cancellation intent publication failed';
+        storageFailed = true;
+      }
+    }
+    signal();
+  };
+  deps.signal?.addEventListener('abort', onSignal);
+  if (!supplied) {
+    process.on('SIGTERM', onSignal);
+    process.on('SIGINT', onSignal);
+  }
   try {
     registry = deps.registry();
     graderPool = poolKey(
@@ -698,24 +815,7 @@ export async function runCampaignDispatch(
     samplerLoop = sampler.start();
     for (;;) {
       guard();
-      while (events.length) {
-        const event = required(events.shift());
-        if ('failed' in event) {
-          halted = 'runtime monitor failure';
-          break;
-        }
-        observe(event.stopped, false);
-        if (halted) break;
-        const a = required(
-          projection().attempts.get(event.stopped.execution_attempt_id),
-        );
-        if (replacementCause(projection(), a.intent.identity.block_id)) {
-          for (const sibling of required(
-            projection().blocks.get(a.intent.identity.block_id),
-          ).activation.attempts)
-            await stopAttempt(sibling.identity.execution_attempt_id, false);
-        }
-      }
+      await drainEvents();
       guard();
       audit();
       guard();
@@ -823,7 +923,7 @@ export async function runCampaignDispatch(
               sample_ids: experiment.planned_slots
                 .filter((s) => s.primary_block_id === primary)
                 .map((s) => s.sample_id),
-            } as Parameters<typeof blockPrioritySeconds>[0]['block'],
+            },
             sampleEstimateSeconds: (id) => {
               const s = required(slots.get(id));
               return experiment.estimates?.[s.scenario]?.[s.arm]?.duration_s;
@@ -869,10 +969,21 @@ export async function runCampaignDispatch(
         predecessor_block_id: candidate.predecessor,
         attempts: [],
       };
-      const keyLoads: Record<string, number> = {};
-      for (const [id, names] of keyGrants)
+      const keyLoads = new Map<string, Record<string, number>>();
+      const loadsFor = (credential: string) => {
+        let loads = keyLoads.get(credential);
+        if (!loads) {
+          loads = {};
+          keyLoads.set(credential, loads);
+        }
+        return loads;
+      };
+      for (const [id, grants] of keyGrants)
         if (!projection().attempts.get(id)?.stopped)
-          for (const name of names) keyLoads[name] = (keyLoads[name] ?? 0) + 1;
+          for (const { credential, env } of grants) {
+            const loads = loadsFor(credential);
+            loads[env] = (loads[env] ?? 0) + 1;
+          }
       for (const slot of experiment.planned_slots.filter(
         (s) => s.primary_block_id === candidate.primary,
       )) {
@@ -887,13 +998,14 @@ export async function runCampaignDispatch(
           const selection = resolveKeyForSpawn({
             cred: required(registry[name]),
             credentialName: name,
-            inFlight: keyLoads,
+            inFlight: loadsFor(name),
           });
           if (selection.kind === 'wait')
             throw Error('aggregate admission exceeded per-key capacity');
           if (selection.kind === 'native') return undefined;
           const env = selection.grant.envName;
-          keyLoads[env] = (keyLoads[env] ?? 0) + 1;
+          const loads = loadsFor(name);
+          loads[env] = (loads[env] ?? 0) + 1;
           return env;
         };
         const subjectKeyEnv = grant(credentialFor(slot));
@@ -908,12 +1020,14 @@ export async function runCampaignDispatch(
         });
         guard();
         activation.attempts.push(prepared.intent);
-        keyGrants.set(
-          prepared.intent.identity.execution_attempt_id,
-          [subjectKeyEnv, graderKeyEnv].filter(
-            (s): s is string => s !== undefined,
-          ),
-        );
+        keyGrants.set(prepared.intent.identity.execution_attempt_id, [
+          ...(subjectKeyEnv
+            ? [{ credential: credentialFor(slot), env: subjectKeyEnv }]
+            : []),
+          ...(graderKeyEnv
+            ? [{ credential: experiment.grader.credential, env: graderKeyEnv }]
+            : []),
+        ]);
       }
       commit(
         candidate.reason ? 'block_replaced' : 'block_activated',
@@ -922,6 +1036,12 @@ export async function runCampaignDispatch(
           : activation,
       );
       for (const intent of activation.attempts) {
+        await drainEvents();
+        if (
+          projection().attempts.get(intent.identity.execution_attempt_id)
+            ?.stopped
+        )
+          continue;
         guard();
         const bound = await runtime.create({ intent });
         guard();
@@ -942,8 +1062,19 @@ export async function runCampaignDispatch(
               nextStart(graderPool),
             ),
           );
+          await drainEvents();
+          if (
+            projection().attempts.get(intent.identity.execution_attempt_id)
+              ?.stopped
+          )
+            break;
           guard();
         }
+        if (
+          projection().attempts.get(intent.identity.execution_attempt_id)
+            ?.stopped
+        )
+          continue;
         guard();
         const monitor = await runtime.start(bound);
         writer.assertCurrentOwner();
@@ -959,7 +1090,7 @@ export async function runCampaignDispatch(
           throw Error('successful start receipt binding differs');
         commit('runtime_started', {
           execution_attempt_id: intent.identity.execution_attempt_id,
-          observed_at: now(),
+          observed_at: monitor.startedAt,
           receipt: 'docker_start_succeeded',
         });
         guard();
@@ -968,7 +1099,10 @@ export async function runCampaignDispatch(
           signal();
         });
         monitor.onMonitorFailure((failed) => {
-          events.push({ failed });
+          events.push({
+            failed,
+            attemptId: intent.identity.execution_attempt_id,
+          });
           signal();
         });
       }
@@ -1028,6 +1162,11 @@ export async function runCampaignDispatch(
       reason: ended?.reason ?? halted,
     };
   } finally {
+    deps.signal?.removeEventListener('abort', onSignal);
+    if (!supplied) {
+      process.off('SIGTERM', onSignal);
+      process.off('SIGINT', onSignal);
+    }
     await sampler.stop();
     await samplerLoop;
   }

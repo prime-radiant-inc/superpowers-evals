@@ -789,3 +789,44 @@ test('a resolved historical campaign is not reopened by a different host campaig
     next_action: 'cancel',
   });
 });
+
+for (const claimed of [false, true]) {
+  test(`unbound ${claimed ? 'claimed' : 'unclaimed'} start reports exact launcher authority without inferring loss`, () => {
+    const f = fixture();
+    started(f);
+    const lease = claimed
+      ? claimStart(f)
+      : acquireLiveSpendLock({
+          lockPath: f.loaded.config.live_spend_lock!,
+          clock: new RealClock(),
+          identity: realProcessIdentityProbe,
+        });
+    const live = {
+      observe: (identity: ProcessIdentity) => {
+        expect(identity).toEqual(currentProcessIdentity());
+        return 'live' as const;
+      },
+    };
+    try {
+      expect(observeCampaignStatus(f, live)).toEqual({
+        state: 'running',
+        next_action: 'status',
+        progress: { prepared: 0, stopped: 0 },
+      });
+      expect(observeCampaignStatus(f, { observe: () => 'unknown' })).toEqual({
+        state: 'unresolved',
+        next_action: 'cancel',
+      });
+      expect(observeCampaignStatus(f, dead)).toEqual({
+        state: 'interrupted',
+        next_action: 'cancel',
+      });
+    } finally {
+      lease.release();
+    }
+    expect(observeCampaignStatus(f, live)).toEqual({
+      state: 'unresolved',
+      next_action: 'cancel',
+    });
+  });
+}

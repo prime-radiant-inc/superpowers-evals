@@ -514,7 +514,7 @@ export interface SamplerArgs {
   readonly fsOps?: SidecarFsOps;
   readonly onBreachEntry: (metrics: readonly string[]) => void;
   readonly onBreachExit: (window: BreachWindow) => void;
-  readonly onSampleError: (err: unknown) => void;
+  readonly onSampleError: (err: unknown, source: 'probe' | 'storage') => void;
 }
 
 /** The timer-driven sampler: reads the host-stats probe at the registered
@@ -598,11 +598,12 @@ export class ContentionSampler {
       // A sidecar that cannot be repaired must not be appended onto: report
       // once and stay down — samplerStaleMs turns a down sampler into an
       // admission halt (fail-closed).
-      this.args.onSampleError(err);
+      this.args.onSampleError(err, 'storage');
       return;
     }
     while (!this.stopping) {
       const nowMs = clockNowMs(this.args.clock);
+      let failureSource: 'probe' | 'storage' = 'probe';
       try {
         const sample = this.args.probe.sample(nowMs);
         const violated = thresholdViolations(
@@ -619,6 +620,7 @@ export class ContentionSampler {
           this.openSince !== null
             ? (this.crossedMetricsAtOpen ?? violated)
             : [];
+        failureSource = 'storage';
         appendSidecarLine(
           this.args.campaignDir,
           {
@@ -647,8 +649,9 @@ export class ContentionSampler {
           );
         } catch (appendErr) {
           failure = appendErr;
+          failureSource = 'storage';
         }
-        this.args.onSampleError(failure);
+        this.args.onSampleError(failure, failureSource);
       }
       await Promise.race([
         this.args.clock.sleepUntil(

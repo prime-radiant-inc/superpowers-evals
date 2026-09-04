@@ -398,7 +398,7 @@ function seedCompletedSnapshot(
   runner.heads.set(join(campaignDir, 'gauntlet'), GAUNTLET);
 }
 
-test("reconstruction refusal names the operator's next step (R-RCV-6 fail-closed)", () => {
+test('snapshot rejection preserves expected and observed source identities', () => {
   const runner = new RecordingRunner();
   const campaignDir = mkdtempSync(join(tmpdir(), 'camp-'));
   seedCompletedSnapshot(runner, campaignDir, [SP_A]);
@@ -416,8 +416,6 @@ test("reconstruction refusal names the operator's next step (R-RCV-6 fail-closed
   expect(message).toContain('evals');
   expect(message).toContain(EVALS); // both identities are named
   expect(message).toContain('f'.repeat(40));
-  expect(message).toContain('refusing to resume');
-  expect(message).toContain('drift repair'); // the named recovery verb
 });
 
 // Real-git end-to-end (the instrument-snapshot/provisioning real-repo

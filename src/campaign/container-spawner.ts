@@ -1286,6 +1286,7 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
     const result = this.docker(['start', bound.container_id]);
     if (result.status !== 0)
       throw new AttemptContainerError('docker start completion unresolved');
+    const startedAt = new Date().toISOString();
     this.requests.set(bound.container_id, 'settled');
     this.uncertainAttempts.delete(intent.identity.execution_attempt_id);
     let stopped: VerifiedStopped | undefined;
@@ -1316,6 +1317,7 @@ export class ContainerAttemptRuntime implements AttemptRuntime {
       }
     };
     const monitor: AttemptMonitor = {
+      startedAt,
       onStopped(cb) {
         if (stopped) notify('stopped', [cb], stopped);
         else stops.push(cb);

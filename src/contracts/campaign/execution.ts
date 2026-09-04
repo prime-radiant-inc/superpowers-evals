@@ -364,6 +364,8 @@ export type OwnedRuntimeObservation =
     }
   | { kind: 'unresolved'; reason: string };
 export interface AttemptMonitor {
+  /** Successful start response time, captured before follower startup. */
+  readonly startedAt: string;
   onStopped(callback: (stopped: VerifiedStopped) => void): void;
   onMonitorFailure(callback: (reason: string) => void): void;
 }

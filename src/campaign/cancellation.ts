@@ -210,6 +210,24 @@ export function observeCampaignStatus(
       };
     if (intent) return { state: 'stopping', next_action: 'cancel' };
     if (!p.start) return { state: 'registered', next_action: 'run' };
+    if (!p.controller) {
+      const launcherState = processes.observe(p.start.launcher);
+      if (launcherState === 'dead')
+        return { state: 'interrupted', next_action: 'cancel' };
+      const holder = readLiveSpendHolder(lockPath);
+      if (
+        launcherState === 'live' &&
+        holder &&
+        holder.pid === p.start.launcher.pid &&
+        String(holder.birth_ts_ms) === p.start.launcher.birth
+      )
+        return {
+          state: 'running',
+          next_action: 'status',
+          progress: { prepared: 0, stopped: 0 },
+        };
+      return { state: 'unresolved', next_action: 'cancel' };
+    }
     const controllerState = p.controller
       ? processes.observe(p.controller)
       : null;

@@ -736,3 +736,35 @@ test('fsync-before-notify: the exit sample is durable BEFORE the closed-window c
   expect(exitLineCountAtNotify).toBe(5);
   expect(exitFsyncCountAtNotify).toBe(5); // one completed fsync per line, exit line included
 });
+
+test('sampler distinguishes an opaque storage failure from missing probe evidence', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cont-storage-source-'));
+  const sources: string[] = [];
+  const sampler = new ContentionSampler({
+    campaignDir: dir,
+    clock: new FakeClock(0),
+    probe: { sample: stats },
+    thresholds: [MEM_FLOOR],
+    sustainK: 2,
+    cadenceMs: 100,
+    cpuCores: FROZEN_CORES,
+    fsOps: {
+      openSync() {
+        throw Error('opaque persistence failure');
+      },
+      writeSync,
+      fsyncSync,
+      closeSync,
+      renameSync,
+    },
+    onBreachEntry() {},
+    onBreachExit() {},
+    onSampleError(_error, source) {
+      sources.push(source);
+    },
+  });
+  const running = sampler.start();
+  await sampler.stop();
+  await running;
+  expect(sources).toEqual(['storage']);
+});

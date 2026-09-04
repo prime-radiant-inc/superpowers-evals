@@ -1,4 +1,8 @@
-import { blockPrioritySeconds, compareAdmissionOrder } from './admission.ts';
+import {
+  blockPrioritySeconds,
+  compareAdmissionOrder,
+  DispatcherError,
+} from './admission.ts';
 
 export { runCampaignDispatch } from './controller.ts';
 
@@ -129,16 +133,13 @@ import {
   type SpawnedCampaignChild,
 } from './spawn.ts';
 
-export class DispatcherError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DispatcherError';
-  }
-}
-
 export const SPAWN_FAILURE_HALT_N = 3;
 
-export { blockPrioritySeconds, compareAdmissionOrder } from './admission.ts';
+export {
+  blockPrioritySeconds,
+  compareAdmissionOrder,
+  DispatcherError,
+} from './admission.ts';
 export { blockDemandVector } from './resource-policy.ts';
 
 /** E7.7: the absolute-total snapshot value — total remaining estimated

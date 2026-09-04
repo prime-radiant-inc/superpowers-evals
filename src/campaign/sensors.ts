@@ -442,9 +442,7 @@ export function terminalEvidenceTexts(
     } catch {
       continue;
     }
-    const text = [r.summary, r.reasoning]
-      .filter((t): t is string => typeof t === 'string' && t !== '')
-      .join('\n');
+    const text = gauntletResultText(JSON.stringify(r));
     if (text !== '') {
       out.push({ source: 'gauntlet_result', text });
       break;
@@ -485,23 +483,7 @@ export function gauntletEventStreamTexts(
     } catch {
       continue;
     }
-    for (const line of raw.split('\n')) {
-      if (line.trim() === '') continue;
-      let rec: unknown;
-      try {
-        rec = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (
-        typeof rec !== 'object' ||
-        rec === null ||
-        (rec as Record<string, unknown>)['type'] !== 'run_error'
-      )
-        continue;
-      const text = deepStrings(rec).join('\n');
-      if (text !== '') out.push({ source: 'event_stream', text });
-    }
+    out.push(...gauntletEventStreamTextsFromText(raw));
     break; // one stream per run dir (single-run-per-dir convention)
   }
   return out;
@@ -791,4 +773,37 @@ export function trajectoryExposureFromText(text: string): number | null {
   } catch {
     return null;
   }
+}
+
+/** Parse the retained run_error surface from authenticated stream bytes. */
+export function gauntletEventStreamTextsFromText(
+  raw: string,
+): { source: SensorEvidenceSource; text: string }[] {
+  const out: { source: SensorEvidenceSource; text: string }[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue;
+    let rec: unknown;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      typeof rec !== 'object' ||
+      rec === null ||
+      (rec as Record<string, unknown>)['type'] !== 'run_error'
+    )
+      continue;
+    const text = deepStrings(rec).join('\n');
+    if (text !== '') out.push({ source: 'event_stream', text });
+  }
+  return out;
+}
+
+/** The composed grader result exposes summary/reasoning as its sensor surface. */
+export function gauntletResultText(raw: string): string {
+  const result = JSON.parse(raw) as { summary?: unknown; reasoning?: unknown };
+  return [result.summary, result.reasoning]
+    .filter((text): text is string => typeof text === 'string' && text !== '')
+    .join('\n');
 }

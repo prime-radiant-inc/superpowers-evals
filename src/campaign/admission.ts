@@ -1,23 +1,30 @@
 import type { Block } from '../contracts/campaign/campaign.ts';
 
+export class DispatcherError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DispatcherError';
+  }
+}
+
 /** R-DSP-2: dispatch priority = the MAX expected duration across the
  *  block's samples (a two-arm block is as long as its longest arm).
  *  A missing optional estimate uses the experiment's frozen attempt
  *  deadline. Explicit estimates must be finite and non-negative. */
 export function blockPrioritySeconds(args: {
-  block: Block;
+  block: Pick<Block, 'sample_ids'>;
   sampleEstimateSeconds: (sampleId: string) => number | undefined;
   attemptDeadlineSeconds?: number;
 }): number {
   if (args.block.sample_ids.length === 0) {
-    throw new Error('blockPrioritySeconds: block has no samples');
+    throw new DispatcherError('blockPrioritySeconds: block has no samples');
   }
   let max = 0;
   for (const sampleId of args.block.sample_ids) {
     const estimate = args.sampleEstimateSeconds(sampleId);
     const seconds = estimate ?? args.attemptDeadlineSeconds;
     if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) {
-      throw new Error(
+      throw new DispatcherError(
         `blockPrioritySeconds: invalid estimate for sample ${sampleId}: ${seconds}`,
       );
     }
