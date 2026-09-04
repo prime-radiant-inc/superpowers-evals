@@ -400,6 +400,125 @@ test('a turn with no preceding tool-call step still gets a usage-bearing step', 
   expect(metricSteps[0]!.metrics!.cached_tokens).toBe(39808); // per-turn, not 330752
 });
 
+function usageEvent(total: unknown, last: unknown, timestamp: string) {
+  return JSON.stringify({
+    type: 'event_msg',
+    timestamp,
+    payload: {
+      type: 'token_count',
+      info: { total_token_usage: total, last_token_usage: last },
+    },
+  });
+}
+
+const requestUsage = {
+  input_tokens: 100,
+  cached_input_tokens: 60,
+  output_tokens: 20,
+  reasoning_output_tokens: 5,
+  total_tokens: 120,
+};
+const twiceRequestUsage = {
+  input_tokens: 200,
+  cached_input_tokens: 120,
+  output_tokens: 40,
+  reasoning_output_tokens: 10,
+  total_tokens: 240,
+};
+
+test('repeated cumulative usage is billed once while an equal-size next request is preserved', () => {
+  const raw = [
+    turnContextLine,
+    functionCallLine,
+    usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:42Z'),
+    applyPatchLine,
+    usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:49Z'),
+    usageEvent(twiceRequestUsage, requestUsage, '2026-09-04T20:07:52Z'),
+  ].join('\n');
+  const trajectory = normalizeCodex(raw, 'test');
+  const metrics = trajectory.steps.flatMap((step) => step.metrics ?? []);
+  expect(metrics).toEqual([
+    { prompt_tokens: 40, cached_tokens: 60, completion_tokens: 20 },
+    { prompt_tokens: 40, cached_tokens: 60, completion_tokens: 20 },
+  ]);
+  expect(trajectory.final_metrics).toEqual({
+    total_prompt_tokens: 80,
+    total_completion_tokens: 40,
+    extra: { total_cached_tokens: 120 },
+  });
+  expect(flattenToolCalls(trajectory)).toHaveLength(2);
+});
+
+for (const total of [undefined, null, {}]) {
+  test(`usage without a cumulative counter is not deduplicated (${JSON.stringify(total)})`, () => {
+    const trajectory = normalizeCodex(
+      [
+        turnContextLine,
+        usageEvent(total, requestUsage, '2026-09-04T20:07:42Z'),
+        usageEvent(total, requestUsage, '2026-09-04T20:07:49Z'),
+      ].join('\n'),
+      'test',
+    );
+    expect(trajectory.steps.filter((step) => step.metrics)).toHaveLength(2);
+  });
+}
+
+test('an intervening partial usage event prevents deduplication across its unknown counter', () => {
+  const trajectory = normalizeCodex(
+    [
+      turnContextLine,
+      usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:42Z'),
+      usageEvent(undefined, requestUsage, '2026-09-04T20:07:49Z'),
+      usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:52Z'),
+    ].join('\n'),
+    'test',
+  );
+  expect(trajectory.steps.filter((step) => step.metrics)).toHaveLength(3);
+});
+
+test('changed last usage with the same cumulative counter is retained for accounting diagnosis', () => {
+  const trajectory = normalizeCodex(
+    [
+      turnContextLine,
+      usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:42Z'),
+      usageEvent(requestUsage, twiceRequestUsage, '2026-09-04T20:07:49Z'),
+    ].join('\n'),
+    'test',
+  );
+  expect(trajectory.steps.flatMap((step) => step.metrics ?? [])).toEqual([
+    { prompt_tokens: 40, cached_tokens: 60, completion_tokens: 20 },
+    { prompt_tokens: 80, cached_tokens: 120, completion_tokens: 40 },
+  ]);
+});
+
+test('a cumulative reset does not discard a request with previously observed usage', () => {
+  const trajectory = normalizeCodex(
+    [
+      turnContextLine,
+      usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:42Z'),
+      usageEvent(twiceRequestUsage, requestUsage, '2026-09-04T20:07:49Z'),
+      usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:52Z'),
+    ].join('\n'),
+    'test',
+  );
+  expect(trajectory.steps.filter((step) => step.metrics)).toHaveLength(3);
+});
+
+test('normalizing another model session retains its independently billed usage', () => {
+  for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra']) {
+    const trajectory = normalizeCodex(
+      [
+        JSON.stringify({ type: 'turn_context', payload: { model } }),
+        usageEvent(requestUsage, requestUsage, '2026-09-04T20:07:42Z'),
+      ].join('\n'),
+      'test',
+    );
+    const steps = trajectory.steps.filter((step) => step.metrics);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.model_name).toBe(model);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Full-fidelity adds: messages, reasoning, observations, web_search_call,
 // session_id, agent.version, agent.extra
