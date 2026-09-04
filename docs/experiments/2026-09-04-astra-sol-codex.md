@@ -1,201 +1,233 @@
 # Astra and Sol through Codex: representative comparison
 
-Tracking: PRI-3088. Status: running; 15/30 measured attempts complete. Sol
-repetition 2 is active. Snapshot: 2026-09-04 20:50 UTC.
+Tracking: [PRI-3088](https://linear.app/prime-radiant/issue/PRI-3088/compare-astra-and-sol-on-a-representative-codex-panel).
+Completed September 4, 2026: **30/30 measured attempts**, plus two excluded
+configuration smokes. The appliance was restored and its health check passed.
 
-Drew prioritized usable evals and experiments and deferred campaign recovery
-and resume. This experiment uses the supported appliance helper and existing
-runner. Interrupted work remains explicitly incomplete.
+The panel found repeatable, task-specific behavior differences. Astra declined
+speculative review scope in all three repetitions; Sol implemented it in all
+three. Both repaired the debugging defect, but Astra repeatedly used inline
+tests without retaining the required regression. Sol had lower subject-cost
+medians in every scenario. Astra was substantially quicker on review and
+planning. Three repetitions of five small skill fixtures cannot establish a
+general model ranking, equivalence, or production-code quality.
 
-## Question and interpretation
+## Study design and treatment
 
-At the same Codex configuration, how do Astra-led and Sol-led workflows differ
-in behavior, correctness, elapsed time, and observed cost on five practical
-Superpowers tasks? This is a small exploratory comparison, not a model ranking
-or release gate. Three repetitions cannot establish equivalence or a general
-superiority claim.
+Drew prioritized useful experiments and deferred recovery/resume. This study
+used the existing Phase 1 appliance helper and `run-all`, with no kernel/V2
+deployment. It therefore supplies evidence about that execution path and the
+measurement workflow, not proof of the kernel's lifecycle correctness.
 
-The treatment is `gpt-6-astra`; the baseline is `gpt-5.6-sol`. Both use Codex,
-the OpenAI Responses API, and `high` reasoning effort. The scenario config
-fragments pin effort for every Codex run of these five scenarios; they do not
-change other harnesses. Keep these fragments on the pinned experiment branch;
-changing the ordinary scenario defaults is outside this experiment. Effective
-model and effort must be checked in the
-captured turn metadata. Delegation policy is shared; any other models used by
-subagents are reported and charged to their respective parent workflow.
+Each model ran the same five scenarios three times through Codex 0.146.0,
+OpenAI Responses, and `high` reasoning effort. The grader was
+`claude-sonnet-5`, verified from all 30 grader starts. Six five-scenario jobs
+ran sequentially with at most two attempts in parallel. Arm order was
+Sol/Astra, Astra/Sol, Sol/Astra. Replicates are matched observations, not
+randomized or contemporaneous pairs; time/order effects remain possible.
+There were no selective reruns, replacements, regrading, or changed outcomes.
 
-## Planned observations
+The treatment is a **native model-led Codex workflow**. All 30 captured roots
+match their requested model and high effort; personality and shared developer
+permissions/skill catalog agree. Root base-instruction fingerprints are stable
+within each arm but differ between models. Astra's base includes "do not add
+tests to codebases with no tests"; Sol's captured base lacks that prohibition.
+This plausibly contributes to the retained-test difference, without proving
+causation. The experiment cannot isolate model weights from native prompts.
 
-| Scenario | Behavior measured | Repetitions per model |
-|---|---|---:|
-| systematic-debugging-fixes-root-cause | Fix the actual producer defect and retain a regression test. | 3 |
-| receiving-code-review-pushback | Act on sound feedback and reject incorrect or speculative changes. | 3 |
-| verification-phantom-completion | Detect false completion, repair the work, and verify it. | 3 |
-| triggering-writing-plans | Select planning before implementation. | 3 |
-| sdd-breaker-rules-and-continues | Resolve an SDD workflow contradiction and complete implementation. | 3 |
+Scenario wording matches after prose-only whitespace normalization, with code
+unchanged. Code-review prompts have three observed layouts: wrapped numbered
+list, unwrapped list, and flattened paragraph. Preserve this presentation
+variation as a limitation. Delegation remained part of each native workflow;
+coordination instructions and actual delegate choices could differ. Sol used
+Sol/Terra; Astra used Astra/Sol/Terra/Luna. All captured
+delegates are included in the parent workflow's subject cost.
 
-There are 30 planned measured attempts. Transport/configuration smokes, if
-needed, are recorded separately and do not enter those denominators. Keep
-unfavorable behavioral outcomes; do not selectively rerun them. Missing or
-interrupted observations retain their planned slots and explicit reasons.
+## Canonical outcomes and trace evidence
 
-## Execution controls
+P/F/I means pass/fail/indeterminate. Each cell has three planned and observed
+attempts. These are original composed outcomes, with no adjusted score.
 
-The Phase 1 helper permits one `(agent, credential)` selection per job. Use
-six five-scenario `run-all` jobs, one per model and repetition, with `--jobs 2`.
-Pair observations by scenario and repetition for analysis; these are sequential
-matched jobs, not contemporaneous campaign blocks. Model order is Sol/Astra,
-Astra/Sol, Sol/Astra across the three repetitions. Report possible time/order
-effects; do not describe the launch schedule as randomized or fully balanced.
+| Scenario | Sol P/F/I | Astra P/F/I | Interpretation |
+|---|---:|---:|---|
+| systematic-debugging-fixes-root-cause | 2/1/0 | 0/2/1 | Both fix the producer; Astra never retains the regression. Sol R3 has a detector defect and an unproven commit requirement. |
+| receiving-code-review-pushback | 0/3/0 | 3/0/0 | Sol repeatedly accepts speculative abstraction; Astra declines it. |
+| verification-phantom-completion | 3/0/0 | 3/0/0 | Both pass this false-completion detection and repair fixture. |
+| triggering-writing-plans | 3/0/0 | 3/0/0 | Both pass the planning-trigger fixture; this is not a plan-quality measure. |
+| sdd-breaker-rules-and-continues | 2/1/0 | 3/0/0 | Sol R3 fails a ledger punctuation check despite recording the decision and rationale. |
 
-Every job uses the same exact evals, Gauntlet and Superpowers SHAs, container
-image and Codex version. Record the helper's resolved provenance before
-accepting a job into the comparison. The provisional Superpowers SHA already
-present on the appliance is `b36e0829c6d0140e93cfef2ca599b1b07d4a7797`; the
-Gauntlet SHA observed at preparation is
-`fb34bcd03cc169f8841a2e4c8cf1d9173a229f18`. These are observations, not proof of
-the identities a future job will use. Fix the grader model and route across
-all jobs and record its actual identity and configuration.
+The raw arm totals are Sol 10 pass/5 fail and Astra 12 pass/2 fail/1
+indeterminate. They are not a defensible general quality ranking. Staff trace
+review found the following material qualifications:
 
-Use `evals-appliance prepare`, `run-all`, `status`, `show`, `costs`, and
-`cancel`. No raw campaign launch, lock bypass, V2 deployment, or resume is
-required. Stop subsequent submission on infrastructure failure or provenance
-drift; preserve any completed and partial results.
+- **Review scope:** both models fixed the real boundary bug and rejected the
+  wall-clock suggestion. Sol's failure is specifically accepting an unneeded
+  storage abstraction, including a `Protocol` variant in R2. That variant
+  evaded the checks' `Backend` naming heuristic; the grader correctly failed
+  it. Astra's three traces explicitly defer the abstraction and retain focused
+  diffs. This is evidence about scope judgment on this fixture.
+- **Saved regressions:** all three Astra debugging traces show the producer
+  repair and real inline checks. R1 ran 17 passing inline checks; R2/R3 ran
+  five. None saved the required regression test. This is not an absence of
+  testing or evidence of inability to fix the bug. R1 remains canonically
+  indeterminate because its grader report was malformed; the missing test is
+  a separate observation. R2/R3 have valid failing judgments.
+- **Sol R3 debugging:** source inspection and a failing reproduction preceded
+  edits; a saved regression then ran red-to-green. The `investigated` detector
+  missed real inspection vocabulary and commands obscured by the normalized
+  composite-tool representation. The grader passed, but no commit is observed
+  despite the story's literal committed-test requirement. The detector defect
+  is confirmed; full satisfaction of the story remains unproven. Keep the
+  canonical fail.
+- **Sol R3 SDD:** the persisted ledger contains a substantive ruling, rationale,
+  and risk comparison, but separates them with sentences/semicolon rather
+  than the regex's required em dash after `Ruling:`. This is a marker-format
+  false negative against the semantic intent. The grader passed. Keep the
+  canonical fail and the disagreement; do not silently award an adjusted pass.
+- **Passes have limited scope:** planning checks include vacuous assertions
+  because some edit-order detectors miss shell-based edits. An inspected trace
+  supports real planning before implementation, but the fixture establishes
+  skill triggering rather than plan quality, security, or finished feature
+  correctness. SDD passing primarily establishes adjudication and continuation,
+  not resolution of every possible functional ambiguity.
 
-## Pricing and readout
+There are three judge/check disagreements among the 29 determinate attempts.
+Grader formatting is also fragile: **20/30 attempts needed report retries**
+(21 retry events). Nineteen recovered; Astra R1 debugging exhausted the normal
+limit and became indeterminate. The frozen provider tool schema and validator
+both require `reasoning`; source review found no demonstrated deterministic
+schema mismatch. Generation versus provider conversion remains unresolved.
+All retries and the exhausted attempt remain in time and cost accounting.
 
-Official pricing checked on 2026-09-04:
+## Matched cost and speed
 
-| Model | Uncached input / MTok | Cached input / MTok | Output / MTok |
-|---|---:|---:|---:|
-| gpt-6-astra | $10 | $1 | $50 |
-| gpt-5.6-sol | $4 | $0.40 | $20 |
+The comparison uses the same determinate, provenance-valid pairs on both arms
+for each quantity: debugging R2/R3 (n=2), all repetitions elsewhere (n=3),
+**14 pairs total**. Failed outcomes are included. Debugging R1 is excluded from
+comparisons on both arms because Astra is indeterminate; both attempts remain
+in all-attempt accounting ($1.689 together). No missing amounts are imputed.
 
-Sources: [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra)
-and [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
-Long-context, cache-write and service-tier adjustments also apply where
-observed. Freeze the pricing source used in analysis. The existing registry's
-Sol pricing comment and bundled obol snapshot predate these published rates;
-do not reuse them as current prices or overwrite historical captured costs.
-Reuse obol for any separately labeled repricing of captured trajectories.
-Unpriced models or unknown usage remain explicit; no partial subtotal is a
-complete bill.
+Subject USD includes the Coding-Agent and its captured delegates. Grader USD
+is separate. These are frozen, standardized token estimates, not invoices.
+The following are arm medians within those shared pairs:
 
-Report one row per scenario/model with planned, pass, fail, indeterminate and
-unobserved counts; Gauntlet/check disagreements; observed model/effort;
-attempt wall time; subject and grader costs separately; contributing counts;
-and artifact references. Comparative behavioral deltas use complete determinate
-scenario/replicate pairs. Comparative cost and duration summaries use the same
-contributing pairs on both arms and state any conditioning on determinate
-outcomes. Also report all-attempt known spend, missing coverage, discarded work,
-and campaign elapsed time. Summed attempt durations measure occupied worker
-time, not elapsed time for Drew.
+| Scenario | Pairs | Subject USD Sol / Astra | Grader USD Sol / Astra | Attempt minutes Sol / Astra |
+|---|---:|---:|---:|---:|
+| Debugging | 2 | 0.308 / 0.558 | 0.202 / 0.174 | 3.14 / 2.51 |
+| Review | 3 | 1.075 / 1.386 | 0.219 / 0.257 | 7.88 / 5.02 |
+| Verification | 3 | 0.554 / 1.695 | 0.211 / 0.139 | 3.57 / 3.61 |
+| Planning | 3 | 1.569 / 1.711 | 0.290 / 0.230 | 6.93 / 3.85 |
+| SDD | 3 | 1.579 / 3.654 | 0.354 / 0.348 | 10.14 / 9.71 |
 
-## Evidence and results
+The generated readout also gives medians of paired deltas, which need not
+match differences between arm medians. Variability matters: Astra's three SDD
+subject estimates are $3.654, $8.174, and $3.512. Additional delegate/review work
+can raise cost without establishing better output quality. Verification's arm
+median times are nearly equal; do not turn a different paired-delta statistic
+into a blanket speed claim.
 
-Read-only preflight confirmed both exact model IDs are available to the
-appliance's OpenAI account. `doctor` reported healthy configuration, no run or
-sync lock, and a running appliance container. Model discovery is not a
-successful inference or an eval result.
+All-attempt accounting includes all 30 measured attempts, regardless of outcome
+or comparability. Every collected subject/grader amount has coverage under the
+available-log audit:
 
-The paid run was explicitly approved on the experiment appliance branch.
-The live evals source remains `ec5f09fcc5013663d4dfaca4b7227288a6142553`.
-Every submitted measured job has so far verified the same Superpowers and
-Gauntlet SHAs above, Codex 0.146.0, credential bundle
-`blessed-20260901T185556Z`, and container image
-`sha256:cdf467a0050b8c0068e6652e995f559e0f85ab3deb40d8ee8f72332b42a6ba37`.
-Root model and effective `high` effort are verified from session metadata.
-The original appliance branch/configuration is recorded for restoration after
-the study; it has not yet been restored while jobs remain active.
+| Scope | Attempts | Subject USD | Grader USD | Total USD |
+|---|---:|---:|---:|---:|
+| Sol measured | 15 | 16.176 | 4.120 | 20.296 |
+| Astra measured | 15 | 31.080 | 3.319 | 34.399 |
+| All measured | 30 | 47.256 | 7.439 | **54.695** |
+| Excluded smokes | 2 | 2.420 | 0.456 | **2.876** |
 
-Both excluded planning smokes passed. Their job IDs are
+The measured batch envelope was **100.95 minutes**, from 19:55:11.981 to
+21:36:08.777 UTC, including gaps between jobs. Summed attempt wall time was
+176.89 worker-minutes; it is occupancy, not study latency. Attempt wall time
+is verdict finish minus start. Captured Coding-Agent session spans include
+waiting; grader session spans overlap subject execution and cannot be added
+or subtracted to obtain active compute time.
+
+## Pricing and capture correction
+
+Official September 4 prices per million tokens: Astra $10 input/$1 cached
+input/$50 output; Sol $4/$0.40/$20. Sources:
+[Astra](https://developers.openai.com/api/docs/models/gpt-6-astra) and
+[Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
+The frozen obol 0.9.0 snapshot overrides those two models with September 4
+rates; other models retain the bundled August 5 rates. Grader estimates use
+frozen verdict economics. This is explicitly a mixed-date pricing basis.
+
+An independent audit of all 32 attempts checked 74 raw-log hashes and 160
+artifact hashes against correction receipts. All match. All 32 available-log
+capture audits pass, with no unpriced models or within-session model changes.
+No captured request crosses its 272k input threshold: maximum inputs are Sol
+68,808, Astra 67,998, Terra 31,073, and Luna 14,578. Session cumulative totals
+are not per-request context sizes. Eleven captured service-tier fields say
+`default`, while every estimate retains obol's `AssumedStandardTier` caveat.
+Client settings are not billing receipts. Unlogged calls and separate tool
+fees are outside established coverage.
+
+The capture audit found a real Codex normalizer defect: unchanged cumulative
+and last-request counters could be counted twice. Five Sol measured attempts
+were affected, with a combined subject-cost correction of **-$0.1177224**.
+Both arms and smokes were uniformly re-normalized from preserved logs using
+the existing corrected capture implementation and obol. Original trajectories,
+verdicts, and costs remain unchanged. Receipts bind raw logs, original and
+corrected artifacts, source, and pricing by SHA256; tool-call projections must
+remain unchanged. Invalid correction evidence excludes a cost comparison;
+there is no fallback to the original amount.
+
+The derived-analysis checkout is
+`6d8033e109fed7e6165bcf9b47d8421350521227`. The independently reviewable production
+fix is isolated on `codex/pri-3088-codex-usage-counters`, commit
+`0e379793410e9831011206a964bb35f528d33553`, based on the original main SHA below.
+Only the normalizer and its regression tests are included. Validation passed
+56 targeted tests, then lint/typechecks, 3,502 core tests (one skipped), and
+144 dashboard tests. The first full run hit five subprocess timeouts; those
+passed unchanged in isolation, and an unchanged full rerun passed. The fix
+was not deployed into the live experiment or appliance.
+
+## Provenance and operational closeout
+
+Every measured job verified these exact identities:
+
+| Component | Identity |
+|---|---|
+| Evals runtime | `ec5f09fcc5013663d4dfaca4b7227288a6142553` |
+| Superpowers | `b36e0829c6d0140e93cfef2ca599b1b07d4a7797` |
+| Gauntlet | `fb34bcd03cc169f8841a2e4c8cf1d9173a229f18` |
+| Codex | `0.146.0` |
+| Image | `sha256:cdf467a0050b8c0068e6652e995f559e0f85ab3deb40d8ee8f72332b42a6ba37` |
+| Credential bundle | `blessed-20260901T185556Z` |
+
+| Repetition | Arm | Job | Batch | P/F/I |
+|---|---|---|---|---:|
+| 1 | Sol | `job-20260904T195456Z-c989` | `batch-20260904T195511Z-4b8f` | 4/1/0 |
+| 1 | Astra | `job-20260904T201358Z-2136` | `batch-20260904T201413Z-1dc1` | 4/0/1 |
+| 2 | Astra | `job-20260904T202910Z-8b0c` | `batch-20260904T202926Z-1129` | 4/1/0 |
+| 2 | Sol | `job-20260904T204552Z-d6a3` | `batch-20260904T204608Z-b5c8` | 4/1/0 |
+| 3 | Sol | `job-20260904T210520Z-1696` | `batch-20260904T210536Z-8555` | 2/3/0 |
+| 3 | Astra | `job-20260904T212338Z-df3e` | `batch-20260904T212354Z-038a` | 4/1/0 |
+
+The excluded planning smokes both passed:
 `job-20260904T194426Z-a94a` (Astra) and `job-20260904T195025Z-9b14` (Sol).
 
-| Repetition | Arm | Job | Batch | Current outcome |
-|---|---|---|---|---|
-| 1 | Sol | `job-20260904T195456Z-c989` | `batch-20260904T195511Z-4b8f` | 4 pass, 1 fail |
-| 1 | Astra | `job-20260904T201358Z-2136` | `batch-20260904T201413Z-1dc1` | 4 pass, 1 indeterminate |
-| 2 | Astra | `job-20260904T202910Z-8b0c` | `batch-20260904T202926Z-1129` | 4 pass, 1 fail |
-| 2 | Sol | `job-20260904T204552Z-d6a3` | `batch-20260904T204608Z-b5c8` | Running |
+At **21:36:57.669 UTC**, under the helper's run/sync mutation locks, the
+appliance returned to `main` at
+`c89d6e2b94e08d70134d446a37847a520eb45b29`. Its exact original configuration
+bytes and 0644 mode were restored; the SHA256 is
+`7833695b75490ca99950b5adeca0e9055ee25a943a557e231880bee489aa8dc7`.
+All six jobs were terminal, and the container contained only `docker-init`
+and `sleep`. The subsequent read-only `doctor` passed, with no run/sync lock
+and the container running. No helper installation or credential change was
+made. Private restoration receipts are retained with the experiment data.
 
-The first review-judgment pair differs: Sol fixed the real bug and rejected
-the wall-clock suggestion, but implemented the speculative storage abstraction.
-Astra declined it and passed. Both passed SDD continuation, planning, and
-phantom-completion verification. Sol passed root-cause debugging. Astra's
-debugging attempt has a malformed grader report and is canonically
-`indeterminate`; a separate deterministic check failed because no test file
-was saved. An independent workdir inspection confirmed the absence of a saved
-regression test. Keep that observation distinct from canonical composition.
+## Reproduction and next work
 
-The grader failure reached Gauntlet's normal report-validation limit. An
-all-attempt diagnostic pass found report-format retries in 11/15 completed
-attempts: ten recovered within the frozen grader's built-in retry policy and
-one exhausted it. All captured grader starts identify `claude-sonnet-5`.
-This is common format fragility, not an isolated malformed response. There
-is no demonstrated environment or configuration fault; continuing the frozen
-slots was independently reviewed as defensible. Preserve original outcomes
-and retry time/cost; do not replace or regrade attempts. Reassess before new
-submission on another exhausted validation failure. Do not assume the missing
-judgment is random or convert the embedded malformed `fail` into a canonical
-verdict.
+The dated offline readout has 18 passing contract tests. The experiment's
+omitted Astra credential-delivery test row was repaired after live execution;
+all 69 credential-scope tests pass. These analysis/test commits do not change
+the recorded runtime SHA. The five high-effort scenario fragments belong to
+this experiment branch; do not merge them as ordinary scenario defaults.
 
-Astra repetition 2 again fixed the debugging producer defect without saving
-a regression test; this time the valid grader report and deterministic check
-both failed. Captured native Codex base instructions differ by model: Astra's
-include "do not add tests to codebases with no tests," while Sol's captured
-base does not contain that prohibition. This plausibly contributes to the
-behavior but does not establish causation. The root base fingerprints were
-stable within each arm across the first 13 completed runs inspected; main
-scenario prompts matched by scenario after whitespace normalization, and
-personality/effort settings matched. The models' native instructions are part
-of this workflow treatment. The result cannot isolate underlying model
-weights from prompts or delegation choices. Do not change those instructions
-after seeing outcomes.
-
-The Astra base SHA256 is
-`ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807`;
-Sol's is `cbefa6b0bede0e332d957fca70ccacf9f12f4c0ecdf81b819e5cbe1a3b16e265`.
-Private evidence links are in
-`results/pri-3088/analysis/native-codex-instructions.md`.
-
-## Accounting correction
-
-An audit reconciles every available session log against the merged trajectory,
-including delegates. It found repeated Codex usage snapshots in two first-Sol
-runs. The normalizer counted their unchanged cumulative/last-request counters
-twice. This is a real accounting defect, not an additional model request.
-
-The isolated fix is commit `26334578f719b6c098742ff4fa8038d2220d303d`.
-Commit `6d8033e109fed7e6165bcf9b47d8421350521227` separately adds the omitted
-Astra row to the credential-delivery test matrix. The final combined check
-passed lint/typechecks, 3,508 core tests (one skipped), and 144 dashboard tests.
-The first full check exposed only that missing test row. Nothing was pushed
-or installed into the running instrument.
-
-Derived analysis uses the existing fixed `captureToolCalls` and obol at
-checkout `6d8033e109fed7e6165bcf9b47d8421350521227`. Original trajectories,
-verdicts, and costs remain preserved. Correction receipts bind the original
-trajectory, raw logs, fixed source, pricing snapshot, and derived outputs by
-SHA256; the tool-call projection must remain unchanged. Corrected costs are
-selected only when the receipt and coverage audit validate, with no fallback
-to uncorrected amounts. This rule applies to both arms and smokes.
-
-The corrected subject estimates for the affected Sol runs are $0.6733014
-(debugging; correction -$0.0273032) and $0.554361 (phantom completion;
-correction -$0.0203324). All fifteen completed measured attempts currently reconcile
-against available logs. These remain standard-tier token estimates; native
-tool fees and unlogged provider usage are not established invoice coverage.
-
-At this interim snapshot, measured all-attempt token estimates total
-$31.3899901, with smokes separately $2.875729. Four complete determinate pairs
-contribute to comparisons; both debugging attempts remain in accounting.
-No general model ranking or completed-study conclusion is available yet.
-The second Astra SDD attempt passed with a subject estimate of $8.173847,
-compared with $3.6540152 in its first repetition; the final report must retain
-per-attempt variation rather than only averages.
-
-The dated offline analysis and its 18 contract tests are committed alongside
-this log. To regenerate from the private collected data:
+Regenerate from the private collected data in this worktree:
 
 ```sh
 python3 docs/experiments/2026-09-04-astra-sol-readout.py \
@@ -203,11 +235,31 @@ python3 docs/experiments/2026-09-04-astra-sol-readout.py \
   --output-dir results/pri-3088/analysis
 ```
 
-Private collected artifacts and the reproducible readout are under the
-experiment worktree's gitignored `results/pri-3088/` directory. The frozen
-30-slot manifest SHA256 is
+`results/pri-3088/analysis/summary.{md,json}` contains every planned slot,
+per-attempt references, common pair IDs, cost deltas, coverage and input hashes.
+Private audit notes are `quality-evidence-review.md`,
+`native-codex-instructions.md`, `pricing-assumptions.md`,
+`grader-format-findings.md`, and `product-lessons.md` in that directory.
+Raw logs remain private and uncommitted.
+
+Frozen manifest SHA256:
 `07605a29cf1d5b739864fa9365556e5e5ed526e0612c8a6ae07fc4883bb0c52c`.
-The selected price snapshot SHA256 is
-`647411e47e9fcd2c4436b639a80aed528cadf82fed0bae1b0f869ff1f62120d6`;
-Astra/Sol rates are dated September 4 and other model rates retain the
-bundled August 5 table. Raw logs are not committed.
+Pricing snapshot SHA256:
+`647411e47e9fcd2c4436b639a80aed528cadf82fed0bae1b0f869ff1f62120d6`.
+Root instruction SHA256s: Astra
+`ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807`;
+Sol `cbefa6b0bede0e332d957fca70ccacf9f12f4c0ecdf81b819e5cbe1a3b16e265`.
+
+The existing runner can produce a useful study within a workday. Configuring
+and interpreting it still required too much custom engineering. The next
+product increment should make one finite configure/run/report journey work:
+explicit model/effort treatments without scenario edits, one planned inventory,
+one execution owner, and a canonical report with common denominators,
+accounting coverage, and visible grader/check disagreements. Repair the
+specific measurement contracts alongside that workflow. Keep termination,
+ownership, and cancellation guarantees; recovery/resume can remain deferred.
+
+This evidence supports the earlier recommendation to retain the kernel's
+useful experiment contracts and consolidate execution/persistence ownership.
+It does not justify a wholesale rewrite, validate kernel/V2 execution, or
+support promising that one more increment will finish the architecture.
