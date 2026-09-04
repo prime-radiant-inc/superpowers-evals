@@ -1,12 +1,73 @@
 # Astra and Sol: Fractals head-to-head
 
-Tracking: PRI-3088. Status: preparation; no Fractals attempts launched.
+Tracking: PRI-3088. Status: cancelled at Drew's request; appliance restored.
+One Sol attempt ran; Astra was never launched. No completed model comparison.
 
 Drew requested a direct Fractals follow-up to the completed five-scenario
 Astra/Sol panel. Start with one full build per model. Keep this two-attempt
 study separate from the prior 30 measured attempts.
 
+## Cancellation and retained evidence
+
+Sol ran through the installed helper as `job-20260904T224135Z-b60f`, batch
+`batch-20260904T224150Z-0bc5`, using evals commit
+`edc3e23d219bfd87c581366839693a14999c493e`. Its observed run directory was
+`sdd-go-fractals-opus48-codex-openai_responses_56sol-linux-20260904T224151Z-ae48`.
+The batch started at 22:41:50.757 UTC and ended at 23:12:43.070 UTC.
+
+The helper transitioned to `cancelled` during grading, before Drew's subsequent
+instruction to cancel the comparison. Its outer exit code was zero, but the
+batch's sole result row had `run_id: null`. The observed run had no canonical
+verdict, normalized trajectory, native usage artifact, or terminal grader
+result. The helper label alone does not establish what caused the interruption:
+its `lost`-to-terminal-batch path can also classify a job as cancelled. No
+timeout, external canceller, or model failure was established. Investigation
+stopped with Drew's cancellation instruction; no replacement attempt,
+regrading, or Astra launch followed.
+
+The delivered Git repository was preserved from a clean `main` checkout at
+`acbc5db8d8d9442485e385b5a7dd4c8ed8b7dacd`. Its archive SHA-256 is
+`4a361c3a2006cf382c434727a28f3cd8370e5e958b0be0aa436b1ac253fe056f`;
+15 source/module/fixture fingerprints match the preserved copy. A separate
+archive retains 19 Codex session logs, the partial grader event/usage logs,
+and phase metadata (22 files), SHA-256
+`daafd6f369be6b5d23afa0a58d116504278072edd6a14c2dbfe5238d129d5bc8`.
+Credential files are excluded. Private evidence and receipts are under
+`results/pri-3088-fractals/measured/job-20260904T224135Z-b60f/`.
+
+Sol reported completing implementation, reviews, repairs, tests, vet, build,
+and main-checkout delivery. Repository identity and delivery were independently
+verified; the prepared supplemental output probes were not run. These are
+partial observations, not a canonical pass or independently established
+product-quality result. Paid activity occurred; missing canonical accounting
+must not be interpreted as zero cost. No final cost comparison was produced.
+
+At 23:16:02.106 UTC the appliance was restored to its original `main` commit
+`c89d6e2b94e08d70134d446a37847a520eb45b29` and exact configuration bytes/mode.
+Configuration SHA-256:
+`7833695b75490ca99950b5adeca0e9055ee25a943a557e231880bee489aa8dc7`.
+Only container init/sleep processes remained. A subsequent helper doctor
+reported healthy, `evals_ref: main`, and both run/sync locks absent. Restoration
+receipts are `results/pri-3088-fractals/restoration.json` and
+`restoration-doctor.json`.
+
+## Why the arms were sequential
+
+The installed Phase 1 helper accepts exactly one coding-agent/credential
+selection per job and holds an appliance-wide run lock. It also recreates one
+shared container around the selected credential scope. Its `--jobs` option
+permits scenario concurrency within that selection; multiple model credentials
+are rejected before launch. The underlying runner's model-matrix support does
+not supply a supported parallel Sol/Astra path through this installed helper.
+See `src/appliance/cli.ts`, `src/appliance/preflight.ts`,
+`src/appliance/process.ts`, and the credential-scoping section of
+`docs/appliance-runbook.md`. This is an experiment-workflow limitation; no
+concurrency or credential safeguards were bypassed.
+
 ## Frozen comparison
+
+The following protocol was recorded before launch. Cancellation prevented its
+completion.
 
 Use `sdd-go-fractals-opus48`: the existing seven-task, two-fractal Go CLI
 fixture. `opus48` identifies the plan's author, not the tested model.
