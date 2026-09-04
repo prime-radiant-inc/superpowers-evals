@@ -475,7 +475,16 @@ function writeFakeScenario(
   );
   writeFileSync(
     join(scenarioDir, 'checks.sh'),
-    ['pre() { :; }', 'post() { :; }', ''].join('\n'),
+    [
+      'pre() {',
+      '  file-exists fake-coding-agent',
+      '}',
+      '',
+      'post() {',
+      '  file-exists subject-ran.txt',
+      '}',
+      '',
+    ].join('\n'),
     { mode: 0o644 },
   );
   if (mode !== 'complete') {

@@ -7,6 +7,7 @@ evidence_dir=$attempt_dir/subject-evidence
 mkdir -p "$evidence_dir" "$agent_home/.claude/projects/fake"
 
 env | LC_ALL=C sort >> "$evidence_dir/env.txt"
+printf '%s\n' 'fake subject ran' > "$PWD/subject-ran.txt"
 
 if [ -r /proc/sys/kernel/random/uuid ]; then
   session_id=$(cat /proc/sys/kernel/random/uuid)
