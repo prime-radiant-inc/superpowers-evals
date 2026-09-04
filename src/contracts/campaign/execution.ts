@@ -212,7 +212,19 @@ export const AttemptObservationSchema = z
     evidence_missing: IdSchema.nullable(),
     validity: z.enum(['valid', 'invalid', 'unknown']),
   })
-  .strict();
+  .strict()
+  .superRefine((observation, ctx) => {
+    if (
+      observation.outcome !== 'indeterminate' &&
+      observation.artifacts.length === 0
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['artifacts'],
+        message: 'pass or fail requires supporting behavior evidence',
+      });
+    }
+  });
 export type AttemptObservation = z.infer<typeof AttemptObservationSchema>;
 const AccountingSchema = z
   .object({

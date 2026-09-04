@@ -124,14 +124,30 @@ function timeWithin(time: string, floor: string, ceiling: string) {
     'observation timestamp is outside its execution window',
   );
 }
-function death(a: AttemptProjection, stopped: VerifiedStopped, at: string) {
+function death(
+  state: CampaignProjection,
+  a: AttemptProjection,
+  stopped: VerifiedStopped,
+  at: string,
+): AttemptProjection {
   requireCondition(
     stopped.execution_attempt_id === a.intent.identity.execution_attempt_id,
     'death proof belongs to another attempt',
   );
   requireCondition(
-    stopped.container_id === a.container_id,
+    (a.container_id === null && a.stopped === null) ||
+      stopped.container_id === a.container_id,
     'death proof container identity mismatch',
+  );
+  requireCondition(
+    stopped.container_id === null ||
+      ![...state.attempts.values()].some(
+        (other) =>
+          other.intent.identity.execution_attempt_id !==
+            stopped.execution_attempt_id &&
+          other.container_id === stopped.container_id,
+      ),
+    'death proof container is already owned by another attempt',
   );
   if (a.container_id !== null)
     requireCondition(
@@ -143,6 +159,8 @@ function death(a: AttemptProjection, stopped: VerifiedStopped, at: string) {
     a.stopped?.observed_at ?? a.started_at ?? a.bound_at ?? a.prepared_at,
     at,
   );
+  // Discovery closes execution; it never creates a runtime binding or start receipt.
+  return { ...a, container_id: stopped.container_id, stopped };
 }
 function artifacts(artifacts: { path: string }[], missing: string | null) {
   requireCondition(
@@ -457,7 +475,7 @@ function applyValidatedTransition(
         a.observation === null,
         'accepted observation is immutable',
       );
-      death(a, obs.stopped, t.at);
+      const stoppedAttempt = death(state, a, obs.stopped, t.at);
       artifacts(obs.artifacts, obs.evidence_missing);
       const b = block(state, a.intent.identity.block_id);
       requireCondition(
@@ -482,8 +500,7 @@ function applyValidatedTransition(
         });
       }
       state.attempts.set(obs.execution_attempt_id, {
-        ...a,
-        stopped: obs.stopped,
+        ...stoppedAttempt,
         observation: obs,
       });
       break;
@@ -494,11 +511,10 @@ function applyValidatedTransition(
         a.accounting === null,
         'accounting observation is immutable',
       );
-      death(a, t.payload.stopped, t.at);
+      const stoppedAttempt = death(state, a, t.payload.stopped, t.at);
       artifacts(t.payload.artifacts, t.payload.evidence_missing);
       state.attempts.set(t.payload.execution_attempt_id, {
-        ...a,
-        stopped: t.payload.stopped,
+        ...stoppedAttempt,
         accounting: t.payload,
       });
       break;
@@ -591,8 +607,10 @@ function applyValidatedTransition(
       );
       for (const stopped of t.payload.stopped) {
         const a = attempt(state, stopped.execution_attempt_id);
-        death(a, stopped, t.at);
-        state.attempts.set(stopped.execution_attempt_id, { ...a, stopped });
+        state.attempts.set(
+          stopped.execution_attempt_id,
+          death(state, a, stopped, t.at),
+        );
       }
       state.termination = t.payload;
       break;

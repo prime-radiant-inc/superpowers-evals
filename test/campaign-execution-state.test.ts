@@ -31,6 +31,7 @@ test('replacement preserves observations and the primary denominator', () => {
 
 import {
   ArtifactRefSchema,
+  AttemptObservationSchema,
   AttemptRuntimeSpecSchema,
   CampaignTransitionSchema,
 } from '../src/contracts/campaign/execution.ts';
@@ -731,4 +732,250 @@ test('normalized scenarios cannot disappear without an explicit eligibility excl
   expect(ExperimentSchema.safeParse(e).success).toBe(false);
   e.excluded_cells.push({ cell: 'comparison:other', reason: 'ineligible' });
   expect(ExperimentSchema.safeParse(e).success).toBe(true);
+});
+
+test('interrupted unbound attempt records discovered container death without start authority', () => {
+  const { state, primary } = active();
+  const interrupted = foldTransition(
+    state,
+    transition(
+      'ended',
+      {
+        outcome: 'interrupted',
+        reason: 'controller lost after create',
+        cancel_intent: null,
+      },
+      4,
+    ),
+  );
+  const id = primary.attempts[0]!.identity.execution_attempt_id;
+  const stopped = {
+    execution_attempt_id: id,
+    container_id: 'd'.repeat(64),
+    proof: 'inspected_stopped' as const,
+    observed_at: fixtureTime(5),
+  };
+  const accounted = foldTransition(
+    interrupted,
+    transition(
+      'accounting_observed',
+      {
+        execution_attempt_id: id,
+        stopped,
+        artifacts: [],
+        evidence_missing: 'absent',
+      },
+      5,
+    ),
+  );
+  expect(accounted.attempts.get(id)?.container_id).toBe('d'.repeat(64));
+  expect(accounted.attempts.get(id)?.bound_at).toBeNull();
+  expect(accounted.attempts.get(id)?.observation).toBeNull();
+  expect(interrupted.attempts.get(id)?.container_id).toBeNull();
+  const terminated = foldTransition(
+    accounted,
+    transition(
+      'termination_verified',
+      {
+        start_id: 'start',
+        stopped: [stopped, observation(primary, 1, 6).stopped],
+        process_evidence: [evidenceRef],
+      },
+      6,
+    ),
+  );
+  expect(terminated.termination).not.toBeNull();
+  expect(terminated.ended?.outcome).toBe('interrupted');
+  expect(() =>
+    foldTransition(
+      terminated,
+      transition(
+        'accounting_observed',
+        {
+          execution_attempt_id:
+            primary.attempts[1]!.identity.execution_attempt_id,
+          stopped: observation(primary, 1, 7).stopped,
+          artifacts: [],
+          evidence_missing: 'absent',
+        },
+        7,
+      ),
+    ),
+  ).toThrow();
+});
+
+test('termination can record discovery directly and rejects duplicate container inventory atomically', () => {
+  const { state, primary } = active();
+  const interrupted = foldTransition(
+    state,
+    transition(
+      'ended',
+      {
+        outcome: 'interrupted',
+        reason: 'controller lost after create',
+        cancel_intent: null,
+      },
+      4,
+    ),
+  );
+  const stopped = primary.attempts.map((a, index) => ({
+    execution_attempt_id: a.identity.execution_attempt_id,
+    container_id: String(index + 1).repeat(64),
+    proof: 'inspected_stopped' as const,
+    observed_at: fixtureTime(5),
+  }));
+  const duplicate = structuredClone(stopped);
+  duplicate[1]!.container_id = duplicate[0]!.container_id;
+  expect(() =>
+    foldTransition(
+      interrupted,
+      transition(
+        'termination_verified',
+        {
+          start_id: 'start',
+          stopped: duplicate,
+          process_evidence: [evidenceRef],
+        },
+        5,
+      ),
+    ),
+  ).toThrow();
+  expect(
+    [...interrupted.attempts.values()].every((a) => a.container_id === null),
+  ).toBe(true);
+  const terminated = foldTransition(
+    interrupted,
+    transition(
+      'termination_verified',
+      { start_id: 'start', stopped, process_evidence: [evidenceRef] },
+      5,
+    ),
+  );
+  expect(
+    terminated.attempts.get(stopped[0]!.execution_attempt_id)?.container_id,
+  ).toBe('1'.repeat(64));
+  expect(
+    terminated.attempts.get(stopped[1]!.execution_attempt_id)?.container_id,
+  ).toBe('2'.repeat(64));
+});
+
+test('discovery cannot claim another attempt container or change an already known identity', () => {
+  const { state, primary } = active();
+  const first = primary.attempts[0]!;
+  const second = primary.attempts[1]!;
+  const bound = foldTransition(
+    state,
+    transition(
+      'runtime_bound',
+      {
+        execution_attempt_id: first.identity.execution_attempt_id,
+        container_id: 'c'.repeat(64),
+        runtime_spec_digest: first.runtime_spec_digest,
+      },
+      4,
+    ),
+  );
+  const interrupted = foldTransition(
+    bound,
+    transition(
+      'ended',
+      { outcome: 'interrupted', reason: 'lost', cancel_intent: null },
+      5,
+    ),
+  );
+  for (const [id, container] of [
+    [first.identity.execution_attempt_id, 'd'.repeat(64)],
+    [second.identity.execution_attempt_id, 'c'.repeat(64)],
+  ]) {
+    expect(() =>
+      foldTransition(
+        interrupted,
+        transition(
+          'accounting_observed',
+          {
+            execution_attempt_id: id!,
+            stopped: {
+              execution_attempt_id: id!,
+              container_id: container!,
+              proof: 'inspected_stopped',
+              observed_at: fixtureTime(6),
+            },
+            artifacts: [],
+            evidence_missing: 'absent',
+          },
+          6,
+        ),
+      ),
+    ).toThrow();
+  }
+});
+
+test.each([
+  'pass',
+  'fail',
+] as const)('empty behavior evidence cannot become an included %s', (outcome) => {
+  const { state, primary } = active();
+  const obs = observation(primary, 0, 4, {
+    outcome,
+    artifacts: [],
+    evidence_missing: 'absent',
+    validity: 'valid',
+  });
+  expect(AttemptObservationSchema.safeParse(obs).success).toBe(false);
+  expect(() =>
+    foldTransition(
+      state,
+      transition(
+        'attempt_observed',
+        { observation: obs, excluded_block: null },
+        4,
+      ),
+    ),
+  ).toThrow();
+  expect(state.attempts.get(obs.execution_attempt_id)?.observation).toBeNull();
+  expect(() =>
+    foldTransition(
+      state,
+      transition(
+        'block_validated',
+        { block_id: 'primary', evidence_refs: [evidenceRef] },
+        5,
+      ),
+    ),
+  ).toThrow();
+});
+
+test('indeterminate empty evidence and supported outcomes with partial missingness remain readable', () => {
+  const { state, primary } = active();
+  const empty = observation(primary, 0, 4, {
+    outcome: 'indeterminate',
+    artifacts: [],
+    evidence_missing: 'absent',
+  });
+  let accepted = foldTransition(
+    state,
+    transition(
+      'attempt_observed',
+      { observation: empty, excluded_block: null },
+      4,
+    ),
+  );
+  const partial = observation(primary, 1, 5, {
+    outcome: 'pass',
+    evidence_missing: 'token usage absent',
+  });
+  accepted = foldTransition(
+    accepted,
+    transition(
+      'attempt_observed',
+      { observation: partial, excluded_block: null },
+      5,
+    ),
+  );
+  expect(
+    accepted.attempts.get(empty.execution_attempt_id)?.observation?.outcome,
+  ).toBe('indeterminate');
+  expect(
+    accepted.attempts.get(partial.execution_attempt_id)?.observation?.outcome,
+  ).toBe('pass');
 });
