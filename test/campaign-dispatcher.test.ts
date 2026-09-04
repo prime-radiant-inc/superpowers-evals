@@ -120,6 +120,17 @@ test('priority = max sample estimate (REV sol #15); zero is valid, invalid is no
   ).toBe(0);
 });
 
+test('missing scheduling estimates use the frozen attempt deadline', () => {
+  expect(
+    blockPrioritySeconds({
+      block: block(['estimated', 'missing']),
+      sampleEstimateSeconds: (sample) =>
+        sample === 'estimated' ? 300 : undefined,
+      attemptDeadlineSeconds: 900,
+    }),
+  ).toBe(900);
+});
+
 test('admission tie-break is total and deterministic over all valid block ids', () => {
   expect(
     compareAdmissionOrder({ block_id: 'c1:a:b2' }, { block_id: 'c1:a:b1' }),

@@ -12,7 +12,7 @@ import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
-import { loadFrozenCampaign } from '../campaign/campaign-document.ts';
+import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from '../campaign/campaign-document.ts';
 import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,

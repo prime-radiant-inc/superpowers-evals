@@ -782,7 +782,7 @@ import { isAbsolute } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
-import { loadFrozenCampaign } from '../campaign/campaign-document.ts';
+import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from '../campaign/campaign-document.ts';
 import type { ContainerStopper } from '../campaign/container-spawner.ts';
 import { clockNowMs, hostStatsProbeForCli } from '../campaign/host-stats.ts';
 import { openJournalRead } from '../campaign/journal.ts';
@@ -793,7 +793,7 @@ import {
   resumeCampaign,
   universeOf,
 } from '../campaign/recovery.ts';
-import { registerCampaign } from '../campaign/registration.ts';
+import { registerBudgetedCampaign as registerCampaign } from '../campaign/registration.ts';
 import {
   canonicalReportBytes,
   comparePresentReportArtifacts,

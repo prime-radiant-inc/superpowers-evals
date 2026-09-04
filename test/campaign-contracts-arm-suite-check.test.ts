@@ -79,6 +79,63 @@ test('valid arm + suite files cross-reference cleanly', () => {
   expect(result.ok).toBe(true);
 });
 
+test('valid finite V2 suite cross-references cleanly', () => {
+  const suite = [
+    'schema_version: 2',
+    'name: compare_fx',
+    'reserve: 1',
+    'max_exposure_skew: 3',
+    'attempt_bounds:',
+    '  max_attempts: 2',
+    '  max_time_s: 900',
+    'grader:',
+    '  credential: opus_fx',
+    '  model: claude-opus-5',
+    'comparisons:',
+    '  - baseline: claude_fx',
+    '    treatment: claude_fx2',
+    '    scenarios: [scn_a]',
+    '    n: 2',
+  ].join('\n');
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'arms/claude_fx2.yaml': ARM.replace('name: claude_fx', 'name: claude_fx2'),
+    'suites/compare_fx.yaml': suite,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+
+  expect(check(root)).toEqual({ ok: true, errors: [], warnings: [] });
+});
+
+test('V2 suite fails validation when finite attempt bounds are missing', () => {
+  const suite = [
+    'schema_version: 2',
+    'name: compare_fx',
+    'reserve: 0',
+    'max_exposure_skew: 3',
+    'grader:',
+    '  credential: opus_fx',
+    '  model: claude-opus-5',
+    'comparisons:',
+    '  - baseline: claude_fx',
+    '    treatment: claude_fx2',
+    '    scenarios: [scn_a]',
+    '    n: 2',
+  ].join('\n');
+  const root = repo({
+    'arms/claude_fx.yaml': ARM,
+    'arms/claude_fx2.yaml': ARM.replace('name: claude_fx', 'name: claude_fx2'),
+    'suites/compare_fx.yaml': suite,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+  });
+
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(/attempt_bounds/);
+});
+
 test('arm cross-references fail loud', () => {
   const root = repo({
     'arms/bad.yaml': ARM.replace('agent: claude', 'agent: ghost').replace(

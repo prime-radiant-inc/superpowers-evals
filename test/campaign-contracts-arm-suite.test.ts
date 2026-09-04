@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test';
 import { parse as parseYaml } from 'yaml';
 import { ArmSchema } from '../src/contracts/campaign/arm.ts';
-import { SuiteSchema } from '../src/contracts/campaign/suite.ts';
+import {
+  SuiteSchema as ExperimentSuiteSchema,
+  BudgetedSuiteSchema as SuiteSchema,
+} from '../src/contracts/campaign/suite.ts';
 
 const ARM = {
   schema_version: 1,
@@ -260,4 +263,58 @@ test('exploratory suites may carry reserve (optional, never rejected)', () => {
 test('suites are strict and need at least one comparison', () => {
   expect(() => SuiteSchema.parse(twoArmSuite({ comparisons: [] }))).toThrow();
   expect(() => SuiteSchema.parse(twoArmSuite({ rigor: 'high' }))).toThrow();
+});
+test('V2 suite requires finite attempt and exposure bounds', () => {
+  const base = {
+    schema_version: 2 as const,
+    name: 'finite_suite',
+    comparisons: [
+      {
+        baseline: 'baseline',
+        treatment: 'treatment',
+        scenarios: ['scenario'],
+        n: 1,
+      },
+    ],
+    reserve: 0,
+    max_exposure_skew: 10,
+    attempt_bounds: { max_attempts: 1, max_time_s: 60 },
+  };
+
+  expect(ExperimentSuiteSchema.parse(base)).toEqual(base);
+  expect(() =>
+    ExperimentSuiteSchema.parse({ ...base, attempt_bounds: undefined }),
+  ).toThrow();
+  expect(() =>
+    ExperimentSuiteSchema.parse({
+      ...base,
+      attempt_bounds: { max_attempts: 1, max_time_s: Number.POSITIVE_INFINITY },
+    }),
+  ).toThrow();
+  expect(() =>
+    ExperimentSuiteSchema.parse({ ...base, max_exposure_skew: Number.NaN }),
+  ).toThrow();
+});
+
+test('V2 suite rejects removed budget and profile fields', () => {
+  const base = {
+    schema_version: 2 as const,
+    name: 'finite_suite',
+    comparisons: [
+      {
+        arm: 'baseline',
+        scenarios: ['scenario'],
+        n: 1,
+      },
+    ],
+    reserve: 0,
+    max_exposure_skew: 10,
+    attempt_bounds: { max_attempts: 1, max_time_s: 60 },
+  };
+  expect(() =>
+    ExperimentSuiteSchema.parse({ ...base, budget_usd: 100 }),
+  ).toThrow();
+  expect(() =>
+    ExperimentSuiteSchema.parse({ ...base, profile: 'descriptive_v1' }),
+  ).toThrow();
 });

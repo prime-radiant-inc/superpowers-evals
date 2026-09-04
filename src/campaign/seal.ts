@@ -32,7 +32,7 @@ import {
 } from '../contracts/campaign/journal-events.ts';
 import type { Report } from '../contracts/campaign/report.ts';
 import type { Clock } from '../scheduler/clock.ts';
-import { loadFrozenCampaign } from './campaign-document.ts';
+import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from './campaign-document.ts';
 import { evaluateContention, parseSidecar } from './contention.ts';
 import {
   type ElectWriterArgs,

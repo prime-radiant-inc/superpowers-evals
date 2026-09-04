@@ -1,24 +1,35 @@
-// The frozen campaign document's runtime intake. Schema validity is not
-// authenticity: CampaignSchema accepts a document whose digest does not
-// match its content, whose campaign_id is unrelated to its digest, and whose
-// samples name cells, arms, and refs that do not exist. Dispatch and
-// recovery both derive real money from this document — estimates, pools,
-// credentials, superpowers refs — so an unauthenticated read turns a
-// corrupted or hand-edited file into zero-cost budget proposals and
-// empty-string credential lookups.
-//
-// Every runtime consumer reads through this loader: recompute the digest,
-// match it against the recorded identity, and close the document over
-// itself. Any violation refuses loudly; nothing is substituted.
+// Frozen campaign document authentication. Budget-bearing consumers use the
+// explicit budgeted loader until cutover. V2 readers validate the strict
+// Experiment, recompute its input digest, and anchor its identity to the
+// registered execution-journal transition. Any violation refuses loudly.
 
-import { readFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import {
   type Campaign,
   CampaignSchema,
 } from '../contracts/campaign/campaign.ts';
 import { campaignDigest } from '../contracts/campaign/digest.ts';
+import {
+  type Experiment,
+  ExperimentSchema,
+} from '../contracts/campaign/experiment.ts';
+import { experimentDigest } from '../contracts/campaign/experiment-digest.ts';
 import type { JournalEvent } from '../contracts/campaign/journal-events.ts';
+import {
+  type CommittedTransition,
+  readProjection,
+} from './execution-journal.ts';
+import type { CampaignProjection } from './execution-state.ts';
 import { openJournalRead } from './journal.ts';
 
 export class CampaignDocumentError extends Error {
@@ -108,7 +119,10 @@ function authenticate(campaign: Campaign, source: string): Campaign {
 }
 
 /** Parse + authenticate a frozen campaign document from parsed JSON. */
-export function parseFrozenCampaign(raw: unknown, source: string): Campaign {
+export function parseFrozenBudgetedCampaign(
+  raw: unknown,
+  source: string,
+): Campaign {
   const parsed = CampaignSchema.safeParse(raw);
   if (!parsed.success) {
     refuse(
@@ -170,7 +184,7 @@ function assertAnchoredToJournal(
 
 /** Read + authenticate `<campaignDir>/campaign.json`, then anchor its
  *  identity against the journal registration froze it in. */
-export function loadFrozenCampaign(campaignDir: string): Campaign {
+export function loadFrozenBudgetedCampaign(campaignDir: string): Campaign {
   const path = join(campaignDir, 'campaign.json');
   let raw: unknown;
   try {
@@ -182,7 +196,114 @@ export function loadFrozenCampaign(campaignDir: string): Campaign {
       }) — refusing to derive campaign identity or membership from an unreadable document; ${AUDIT}`,
     );
   }
-  const campaign = parseFrozenCampaign(raw, `campaign.json at ${path}`);
+  const campaign = parseFrozenBudgetedCampaign(raw, `campaign.json at ${path}`);
   assertAnchoredToJournal(campaign, campaignDir);
   return campaign;
+}
+
+/** Parse and authenticate a strict V2 experiment without consulting storage. */
+export function parseFrozenCampaign(raw: unknown, source: string): Experiment {
+  const parsed = ExperimentSchema.safeParse(raw);
+  if (!parsed.success) {
+    refuse(
+      source,
+      parsed.error.issues
+        .map((issue) => `${issue.path.join('.')} ${issue.message}`)
+        .slice(0, 5)
+        .join('; '),
+    );
+  }
+  const observed = experimentDigest(parsed.data);
+  if (observed !== parsed.data.input_digest) {
+    refuse(
+      source,
+      `input digest ${parsed.data.input_digest} does not authenticate the experiment (${observed})`,
+    );
+  }
+  return parsed.data;
+}
+
+/** Load the sole V2 document and authenticate it against the V2 journal fold. */
+export function loadFrozenCampaign(campaignDir: string): Experiment {
+  const path = join(campaignDir, 'campaign.json');
+  let projection: CampaignProjection;
+  try {
+    projection = readProjection(campaignDir);
+  } catch (error) {
+    throw new CampaignDocumentError(
+      `campaign.json at ${path} cannot be anchored to its V2 execution journal (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!projection.registered) {
+    refuse(
+      sourceOf(path),
+      'the execution journal has no registered transition',
+    );
+  }
+  return parseFrozenCampaign(projection.experiment, sourceOf(path));
+}
+
+function sourceOf(path: string): string {
+  return `campaign.json at ${path}`;
+}
+
+/** Publish campaign.json last from the exact durable registered receipt. */
+export function publishFrozenCampaign(args: {
+  campaignDir: string;
+  experiment: Experiment;
+  registered: CommittedTransition;
+}): void {
+  const experiment = parseFrozenCampaign(
+    args.experiment,
+    'registration output',
+  );
+  const registered = args.registered.transition;
+  if (
+    args.registered.sequence !== 1 ||
+    registered.type !== 'registered' ||
+    registered.payload.campaign_id !== experiment.campaign_id ||
+    registered.payload.input_digest !== experiment.input_digest
+  ) {
+    throw new CampaignDocumentError(
+      'campaign publication requires the first durable registered transition for this exact experiment',
+    );
+  }
+  const target = join(args.campaignDir, 'campaign.json');
+  if (existsSync(target)) {
+    throw new CampaignDocumentError(
+      `campaign.json already exists at ${target}`,
+    );
+  }
+  const stage = join(args.campaignDir, `campaign.json.stage.${process.pid}`);
+  const bytes = Buffer.from(`${JSON.stringify(experiment, null, 2)}\n`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(stage, 'wx', 0o600);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset);
+      if (written <= 0) throw new Error('campaign document short write');
+      offset += written;
+    }
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(stage, target);
+    const dirFd = openSync(args.campaignDir, 'r');
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      unlinkSync(stage);
+    } catch {
+      /* The stage may already have been renamed or never created. */
+    }
+    throw new CampaignDocumentError(
+      `campaign.json publication failed at ${target}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }

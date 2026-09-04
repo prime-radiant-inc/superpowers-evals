@@ -37,7 +37,7 @@ import type { Credential } from '../contracts/credential.ts';
 import type { RunErrorStage } from '../contracts/verdict.ts';
 import { getEnv } from '../env.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
-import { loadFrozenCampaign } from './campaign-document.ts';
+import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
 import type { ContainerStopper } from './container-spawner.ts';
 import {

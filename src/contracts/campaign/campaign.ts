@@ -6,7 +6,7 @@ import {
   EnvVarNameSchema,
 } from '../credential.ts';
 import { FiniteNumberSchema } from '../finite.ts';
-import { CELL_CLASSES, ID_COMPONENT_RE, SuiteSchema } from './suite.ts';
+import { BudgetedSuiteSchema, CELL_CLASSES, ID_COMPONENT_RE } from './suite.ts';
 
 // Round-4 S-11 ID-component grammar (defined in suite.ts, the leaf of the
 // suite<-campaign import edge) is re-exported here: the spec names
@@ -183,7 +183,7 @@ export const CampaignSchema = z
   .object({
     schema_version: z.literal(1),
     campaign_id: z.string().min(1),
-    suite: SuiteSchema,
+    suite: BudgetedSuiteSchema,
     refs: z
       .object({
         superpowers_by_arm: z.record(

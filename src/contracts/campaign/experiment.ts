@@ -7,65 +7,15 @@ import {
   EstimateSchema,
   ExecutionSurfaceArmSchema,
 } from './campaign.ts';
-import { ID_COMPONENT_RE, TIER_SELECTOR_RE } from './suite.ts';
+import { ID_COMPONENT_RE, SuiteSchema } from './suite.ts';
+
+export type { Suite } from './suite.ts';
+export { SuiteSchema } from './suite.ts';
 
 export const IdSchema = z.string().min(1);
 export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 export const TimestampSchema = z.string().datetime({ offset: true });
 const NameSchema = z.string().regex(ID_COMPONENT_RE);
-const SelectorSchema = z.union([
-  z.array(NameSchema).min(1),
-  z.string().regex(TIER_SELECTOR_RE),
-]);
-const comparisonFields = {
-  scenarios: SelectorSchema,
-  n: z.number().int().positive(),
-  cells: z
-    .record(NameSchema, z.object({ n: z.number().int().positive() }).strict())
-    .optional(),
-};
-export const SuiteSchema = z
-  .object({
-    schema_version: z.literal(2),
-    name: z.string().regex(/^[a-z0-9][a-z0-9_]*$/),
-    comparisons: z
-      .array(
-        z.union([
-          z
-            .object({
-              baseline: NameSchema,
-              treatment: NameSchema,
-              ...comparisonFields,
-            })
-            .strict(),
-          z.object({ arm: NameSchema, ...comparisonFields }).strict(),
-        ]),
-      )
-      .min(1),
-    reserve: z.number().int().nonnegative(),
-    max_exposure_skew: FiniteNumberSchema.positive(),
-    attempt_bounds: z
-      .object({
-        max_attempts: z.number().int().positive(),
-        max_time_s: FiniteNumberSchema.positive(),
-      })
-      .strict(),
-  })
-  .strict()
-  .superRefine((suite, ctx) => {
-    for (const comparison of suite.comparisons) {
-      if (
-        'baseline' in comparison &&
-        comparison.baseline === comparison.treatment
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'comparison arms must be distinct',
-        });
-      }
-    }
-  });
-export type Suite = z.infer<typeof SuiteSchema>;
 export const ExperimentIdentitySchema = z
   .object({ campaign_id: IdSchema, input_digest: Sha256Schema })
   .strict();

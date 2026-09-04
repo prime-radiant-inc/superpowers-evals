@@ -57,7 +57,7 @@ import {
 } from '../scheduler/clock.ts';
 import { removeAttemptStage } from './attempt-projection.ts';
 import { AttemptPublishError, publishAttempt } from './attempt-publish.ts';
-import { loadFrozenCampaign } from './campaign-document.ts';
+import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
 import {
   AttemptContainerSpawnError,
@@ -92,6 +92,7 @@ import {
   realProcessIdentityProbe,
 } from './locks.ts';
 import { attemptIdOf, rerunInstanceId } from './registration.ts';
+import { blockDemandVector } from './resource-policy.ts';
 import { resolveCampaignResultsRoot } from './results-root.ts';
 import {
   auditExposure,
@@ -133,42 +134,25 @@ export class DispatcherError extends Error {
 
 export const SPAWN_FAILURE_HALT_N = 3;
 
-/** R-DSP-1 + R-DSP-8: a block's demand vector is PER SAMPLE — 1 slot in
- *  the sample-arm's subject pool + 1 slot in the REAL registered grader
- *  credential's pool key + 1 global slot (Decision D-1) — aggregated by
- *  pool key (a two-arm block on one credential demands 2 slots from one
- *  subject pool). The grader pool is the registered credential's own key,
- *  never the simulator-reserved '__grader__' abstraction. */
-export function blockDemandVector(args: {
-  block: Block;
-  sampleArmCredentialPool: (sampleId: string) => string;
-  graderPool: string;
-}): Map<string, number> {
-  const demand = new Map<string, number>();
-  for (const sampleId of args.block.sample_ids) {
-    const subject = args.sampleArmCredentialPool(sampleId);
-    demand.set(subject, (demand.get(subject) ?? 0) + 1);
-    demand.set(args.graderPool, (demand.get(args.graderPool) ?? 0) + 1);
-    demand.set(GLOBAL_POOL, (demand.get(GLOBAL_POOL) ?? 0) + 1);
-  }
-  return demand;
-}
+export { blockDemandVector } from './resource-policy.ts';
 
 /** R-DSP-2: dispatch priority = the MAX expected duration across the
  *  block's samples (a two-arm block is as long as its longest arm).
- *  Fail-closed: estimates must be finite and non-negative — a NaN or
- *  negative estimate must never silently order a block. */
+ *  A missing optional estimate uses the experiment's frozen attempt
+ *  deadline. Explicit estimates must be finite and non-negative. */
 export function blockPrioritySeconds(args: {
   block: Block;
-  sampleEstimateSeconds: (sampleId: string) => number;
+  sampleEstimateSeconds: (sampleId: string) => number | undefined;
+  attemptDeadlineSeconds?: number;
 }): number {
   if (args.block.sample_ids.length === 0) {
     throw new DispatcherError('blockPrioritySeconds: block has no samples');
   }
   let max = 0;
   for (const sampleId of args.block.sample_ids) {
-    const seconds = args.sampleEstimateSeconds(sampleId);
-    if (!Number.isFinite(seconds) || seconds < 0) {
+    const estimate = args.sampleEstimateSeconds(sampleId);
+    const seconds = estimate ?? args.attemptDeadlineSeconds;
+    if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) {
       throw new DispatcherError(
         `blockPrioritySeconds: invalid estimate for sample ${sampleId}: ${seconds}`,
       );

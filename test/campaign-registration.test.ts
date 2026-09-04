@@ -1,14 +1,18 @@
 import { expect, test } from 'bun:test';
 import {
+  assertCredentialAuthority,
   assertIdComponent,
   attemptIdOf,
   cellKeyOf,
   comparisonId,
-  prepareRegistration,
+  credentialAuthorityDigest,
+  type RegistrationInput as ExperimentRegistrationInput,
+  prepareRegistration as prepareExperimentRegistration,
+  prepareBudgetedRegistration as prepareRegistration,
   primaryBlockId,
   primarySampleId,
   RegistrationError,
-  type RegistrationInput,
+  type BudgetedRegistrationInput as RegistrationInput,
   rerunInstanceId,
   reserveBlockId,
   reserveSampleId,
@@ -16,9 +20,170 @@ import {
   SURCHARGE_FORMULA_VERSION,
 } from '../src/campaign/registration.ts';
 import type { Arm } from '../src/contracts/campaign/arm.ts';
-import type { Suite } from '../src/contracts/campaign/suite.ts';
+import { experimentDigest } from '../src/contracts/campaign/experiment-digest.ts';
+import type { BudgetedSuite as Suite } from '../src/contracts/campaign/suite.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import type { EstimatesArtifact } from '../src/contracts/estimates.ts';
+
+function experimentInput(
+  overrides: Partial<ExperimentRegistrationInput> = {},
+): ExperimentRegistrationInput {
+  return {
+    suite: {
+      schema_version: 2,
+      name: 'finite_comparison',
+      comparisons: [
+        {
+          baseline: 'arm_a',
+          treatment: 'arm_b',
+          scenarios: ['scn-a'],
+          n: 1,
+        },
+      ],
+      reserve: 1,
+      max_exposure_skew: 30,
+      attempt_bounds: { max_attempts: 2, max_time_s: 300 },
+    },
+    arms: {
+      arm_a: arm('arm_a'),
+      arm_b: arm('arm_b', { credential: 'cred_b' }),
+    },
+    credentials: {
+      cred_a: credential({
+        max_concurrency: 8,
+        api_key_env: 'DEFINITELY_UNSET_SECRET_A',
+      }),
+      cred_b: credential({
+        max_concurrency: 8,
+        api_key_env: 'DEFINITELY_UNSET_SECRET_B',
+      }),
+    },
+    grader: { credential: 'cred_a', model: 'grader-model' },
+    refs: {
+      superpowers_by_arm: { arm_a: null, arm_b: null },
+      evals: 'a'.repeat(40),
+      gauntlet: 'b'.repeat(40),
+    },
+    scenarios: [scenario('scn-a')],
+    capability: () => ({ ref: true, none: true }),
+    agentOsSupport: () => ['linux'],
+    agentFamily: () => 'claude',
+    campaignOs: 'linux',
+    globalCap: 8,
+    contention: {
+      host_fingerprint: {
+        cpu_model: 'fixture',
+        cpu_cores: 8,
+        mem_bytes: 16 * 2 ** 30,
+        disk_total_bytes: 100 * 2 ** 30,
+      },
+      global_run_cap: 8,
+      thresholds: [{ metric: 'load', source: 'host', op: 'gt', value: 4 }],
+      cadence_ms: 1000,
+      sustain_k: 2,
+      coverage_n: 2,
+      mem_tolerance_pct: 10,
+      disk_tolerance_pct: 10,
+    },
+    registeredAt: '2026-09-04T12:00:00.000Z',
+    registeredBy: 'test',
+    ...overrides,
+  };
+}
+
+test('V2 preparation is price independent and reserve does not expand planned samples', () => {
+  const prepared = prepareExperimentRegistration(experimentInput());
+
+  expect(prepared.planned_slots.map((slot) => slot.sample_id)).toEqual([
+    'c1:scn-a:arm_a:r1',
+    'c1:scn-a:arm_b:r1',
+  ]);
+  expect(prepared.reserve_slots).toEqual([
+    { reserve_id: 'c1:scn-a:x1', comparison_id: 'c1', scenario: 'scn-a' },
+  ]);
+  expect(prepared.estimates).toBeUndefined();
+});
+
+test('V2 configuration validation does not require secret values', () => {
+  expect(() => prepareExperimentRegistration(experimentInput())).not.toThrow();
+});
+
+test('V2 credential authority is order-independent and rejects public mutation', () => {
+  const input = experimentInput({
+    credentials: {
+      cred_a: credential({ quota_pool: 'shared', max_concurrency: 8 }),
+      cred_b: credential({ max_concurrency: 8 }),
+      shared_alias: credential({ quota_pool: 'shared', max_concurrency: 6 }),
+    },
+  });
+  const prepared = prepareExperimentRegistration(input);
+  const experiment = {
+    ...prepared,
+    campaign_id: 'campaign',
+    input_digest: '0'.repeat(64),
+    registered_at: input.registeredAt,
+    registered_by: input.registeredBy,
+  };
+  const reversed = Object.fromEntries(
+    Object.entries(input.credentials).reverse(),
+  );
+
+  expect(credentialAuthorityDigest(reversed, ['cred_b', 'cred_a'])).toBe(
+    prepared.credential_authority_digest,
+  );
+  expect(() => assertCredentialAuthority(reversed, experiment)).not.toThrow();
+  expect(() =>
+    assertCredentialAuthority(
+      {
+        ...input.credentials,
+        shared_alias: credential({ quota_pool: 'shared', max_concurrency: 5 }),
+      },
+      experiment,
+    ),
+  ).toThrow(/public credential authority changed/);
+});
+
+test('V2 preparation requires an authenticated source ref for each ref arm', () => {
+  const base = experimentInput();
+  const input = experimentInput({
+    arms: {
+      ...base.arms,
+      arm_a: arm('arm_a', { superpowers: 'release-ref' }),
+    },
+    refs: {
+      ...base.refs,
+      superpowers_by_arm: { arm_b: null },
+    },
+  });
+
+  expect(() => prepareExperimentRegistration(input)).toThrow(
+    /arm arm_a.*resolved superpowers source ref/,
+  );
+});
+
+test('V2 preparation freezes supplied scheduling estimates in its input digest', () => {
+  const without = prepareExperimentRegistration(experimentInput());
+  const withEstimate = prepareExperimentRegistration(
+    experimentInput({
+      estimates: {
+        'scn-a': {
+          arm_a: { duration_s: 20, cost_usd: 0, confidence: 'low' },
+        },
+      },
+    }),
+  );
+  const stamp = (prepared: typeof without) => ({
+    ...prepared,
+    campaign_id: 'campaign',
+    input_digest: '0'.repeat(64),
+    registered_at: '2026-09-04T12:00:00.000Z',
+    registered_by: 'test',
+  });
+
+  expect(experimentDigest(stamp(withEstimate))).not.toBe(
+    experimentDigest(stamp(without)),
+  );
+});
 
 test('the pinned ID derivation table', () => {
   const cmp = comparisonId(1);
@@ -1365,14 +1530,18 @@ import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../src/agents/command-runner.ts';
+import { loadFrozenCampaign as loadExperiment } from '../src/campaign/campaign-document.ts';
+import { readProjection } from '../src/campaign/execution-journal.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
 import { type JournalFsOps, openJournalRead } from '../src/campaign/journal.ts';
 import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
 import {
+  type RegisterArgs as ExperimentRegisterArgs,
   MINIMUM_CHILD_CONTRACT_SHA,
-  type RegisterArgs,
-  type RegisterResult,
-  registerCampaign,
+  type BudgetedRegisterArgs as RegisterArgs,
+  type BudgetedRegisterResult as RegisterResult,
+  registerBudgetedCampaign as registerCampaign,
+  registerCampaign as registerExperimentCampaign,
 } from '../src/campaign/registration.ts';
 import type { PricingOverride } from '../src/contracts/campaign/campaign.ts';
 import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
@@ -1421,12 +1590,14 @@ function evalsRepo(): { dir: string; sha: string } {
       '  api: anthropic',
       '  auth: api-key',
       '  api_key_env: TEST_KEY',
+      '  max_concurrency: 8',
       'cred_b:',
       '  model: test-model',
       '  harnesses: [claude]',
       '  api: anthropic',
       '  auth: api-key',
       '  api_key_env: TEST_KEY_B',
+      '  max_concurrency: 8',
       '',
     ].join('\n'),
   );
@@ -1490,6 +1661,61 @@ function evalsRepo(): { dir: string; sha: string } {
   commitWithLockfile(dir); // the snapshot's bun install --frozen-lockfile needs a committed lockfile
   return { dir, sha: git(dir, ['rev-parse', 'HEAD']) };
 }
+
+const EXPERIMENT_SUITE_RAW = [
+  'schema_version: 2',
+  'name: finite_comparison',
+  'reserve: 1',
+  'max_exposure_skew: 30',
+  'attempt_bounds: { max_attempts: 2, max_time_s: 300 }',
+  'grader: { credential: cred_a, model: grader-model }',
+  'comparisons:',
+  '  - baseline: arm_a',
+  '    treatment: arm_b',
+  '    scenarios: [scn-a]',
+  '    n: 1',
+  '',
+].join('\n');
+
+function experimentRegisterArgs(
+  overrides: Partial<ExperimentRegisterArgs> = {},
+): ExperimentRegisterArgs {
+  const evals = evalsRepo();
+  const gauntlet = gauntletRepo();
+  return {
+    suitePath: 'suites/finite_comparison.yaml',
+    suiteRaw: EXPERIMENT_SUITE_RAW,
+    campaignsRoot: mkdtempSync(join(tmpdir(), 'experiment-campaigns-')),
+    globalCap: 8,
+    evalsCheckout: evals.dir,
+    evalsRef: evals.sha,
+    gauntletCheckout: gauntlet.dir,
+    gauntletRef: gauntlet.sha,
+    superpowersCheckout: mkdtempSync(join(tmpdir(), 'sp-')),
+    runner: probeRunner(0),
+    clock: new FakeClock(1),
+    identity: LOCAL_IDENTITY,
+    probe: FAKE_PROBE,
+    registeredBy: 'test',
+    nowMs: Date.parse('2026-09-04T12:00:00Z'),
+    ...overrides,
+  };
+}
+
+test('V2 registrations of identical inputs publish distinct IDs with equal input digests', () => {
+  const args = experimentRegisterArgs();
+  const first = registerExperimentCampaign(args);
+  const second = registerExperimentCampaign(args);
+
+  expect(first.experiment.campaign_id).not.toBe(second.experiment.campaign_id);
+  expect(first.experiment.input_digest).toBe(second.experiment.input_digest);
+  expect(first.campaignDir).not.toBe(second.campaignDir);
+  expect(existsSync(join(first.campaignDir, '.ballast'))).toBe(true);
+  expect(loadExperiment(first.campaignDir)).toEqual(first.experiment);
+  const projection = readProjection(first.campaignDir);
+  expect(projection.registered).toBe(true);
+  expect(projection.experiment.campaign_id).toBe(first.experiment.campaign_id);
+}, 60_000);
 
 /** Give a fixture repo a dependency-less package.json + lockfile and commit
  *  everything — materializeEvalsSnapshot runs `bun install

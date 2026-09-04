@@ -21,14 +21,14 @@ const NAME_RE = /^[a-z0-9_]+$/;
  *  re-exported by campaign.ts — the spec's two declared homes.) */
 export const ID_COMPONENT_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
-export const CellOverrideSchema = z
+export const BudgetedCellOverrideSchema = z
   .object({
     n: z.number().int().positive().optional(),
     class: z.enum(CELL_CLASSES).optional(),
     tripwire_expect: z.enum(['pass', 'fail']).optional(),
   })
   .strict();
-export type CellOverride = z.infer<typeof CellOverrideSchema>;
+export type BudgetedCellOverride = z.infer<typeof BudgetedCellOverrideSchema>;
 
 /** Explicit scenario list, or a tier token registration expands (D3). The
  *  Campaign document always stores the expanded form. */
@@ -37,34 +37,34 @@ const ScenarioSelectorSchema = z.union([
   z.string().regex(TIER_SELECTOR_RE),
 ]);
 
-export const TwoArmComparisonSchema = z
+export const BudgetedTwoArmComparisonSchema = z
   .object({
     baseline: z.string().min(1),
     treatment: z.string().min(1),
     scenarios: ScenarioSelectorSchema,
     n: z.number().int().positive(),
-    cells: z.record(z.string(), CellOverrideSchema).optional(),
+    cells: z.record(z.string(), BudgetedCellOverrideSchema).optional(),
   })
   .strict();
 
-export const SingleArmComparisonSchema = z
+export const BudgetedSingleArmComparisonSchema = z
   .object({
     arm: z.string().min(1),
     scenarios: ScenarioSelectorSchema,
     n: z.number().int().positive(),
-    cells: z.record(z.string(), CellOverrideSchema).optional(),
+    cells: z.record(z.string(), BudgetedCellOverrideSchema).optional(),
   })
   .strict();
 
 /** k-arm comparisons are out by parent non-goal: the shapes structurally
  *  admit exactly one or two arms. */
-export const ComparisonSchema = z.union([
-  TwoArmComparisonSchema,
-  SingleArmComparisonSchema,
+export const BudgetedComparisonSchema = z.union([
+  BudgetedTwoArmComparisonSchema,
+  BudgetedSingleArmComparisonSchema,
 ]);
-export type Comparison = z.infer<typeof ComparisonSchema>;
+export type BudgetedComparison = z.infer<typeof BudgetedComparisonSchema>;
 
-export const SuiteSchema = z
+export const BudgetedSuiteSchema = z
   .object({
     schema_version: z.literal(1),
     // Suite names satisfy BOTH NAME_RE and the campaign ID-component
@@ -105,7 +105,7 @@ export const SuiteSchema = z
           .strict(),
       )
       .optional(),
-    comparisons: z.array(ComparisonSchema).min(1),
+    comparisons: z.array(BudgetedComparisonSchema).min(1),
   })
   .strict()
   .superRefine((suite, ctx) => {
@@ -171,6 +171,77 @@ export const SuiteSchema = z
               'gating tripwire cells must declare tripwire_expect (the v1 firing criterion)',
           });
         }
+      }
+    });
+  });
+export type BudgetedSuite = z.infer<typeof BudgetedSuiteSchema>;
+
+export const CellOverrideSchema = z
+  .object({ n: z.number().int().positive().optional() })
+  .strict();
+export type CellOverride = z.infer<typeof CellOverrideSchema>;
+
+const ScenarioSelectorSchemaV2 = z.union([
+  z.array(z.string().regex(ID_COMPONENT_RE)).min(1),
+  z.string().regex(TIER_SELECTOR_RE),
+]);
+
+const comparisonFieldsV2 = {
+  scenarios: ScenarioSelectorSchemaV2,
+  n: z.number().int().positive(),
+  cells: z
+    .record(z.string().regex(ID_COMPONENT_RE), CellOverrideSchema)
+    .optional(),
+};
+
+export const TwoArmComparisonSchema = z
+  .object({
+    baseline: z.string().regex(ID_COMPONENT_RE),
+    treatment: z.string().regex(ID_COMPONENT_RE),
+    ...comparisonFieldsV2,
+  })
+  .strict();
+
+export const SingleArmComparisonSchema = z
+  .object({
+    arm: z.string().regex(ID_COMPONENT_RE),
+    ...comparisonFieldsV2,
+  })
+  .strict();
+
+export const ComparisonSchema = z.union([
+  TwoArmComparisonSchema,
+  SingleArmComparisonSchema,
+]);
+export type Comparison = z.infer<typeof ComparisonSchema>;
+
+/** The finite V2 experiment declaration. Pricing and release policy are not inputs. */
+export const SuiteSchema = z
+  .object({
+    schema_version: z.literal(2),
+    name: z.string().regex(/^[a-z0-9][a-z0-9_]*$/),
+    comparisons: z.array(ComparisonSchema).min(1),
+    reserve: z.number().int().nonnegative(),
+    max_exposure_skew: FiniteNumberSchema.positive(),
+    attempt_bounds: z
+      .object({
+        max_attempts: z.number().int().positive(),
+        max_time_s: FiniteNumberSchema.positive(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((suite, ctx) => {
+    suite.comparisons.forEach((comparison, index) => {
+      if (
+        'baseline' in comparison &&
+        comparison.baseline === comparison.treatment
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['comparisons', index],
+          message: 'comparison arms must be distinct',
+        });
       }
     });
   });

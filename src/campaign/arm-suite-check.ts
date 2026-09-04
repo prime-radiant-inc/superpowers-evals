@@ -14,7 +14,12 @@ import {
 } from '../contracts/agent-config.ts';
 import { type Arm, ArmSchema } from '../contracts/campaign/arm.ts';
 import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
-import { type Suite, SuiteSchema } from '../contracts/campaign/suite.ts';
+import {
+  type BudgetedSuite,
+  BudgetedSuiteSchema,
+  type Suite,
+  SuiteSchema,
+} from '../contracts/campaign/suite.ts';
 import {
   type Credential,
   parseCredentialsFile,
@@ -30,6 +35,13 @@ export interface ArmSuiteCheckResult {
   readonly ok: boolean;
   readonly errors: string[];
   readonly warnings: string[];
+}
+
+type CheckedSuite = BudgetedSuite | Suite;
+
+function parseCheckedSuite(raw: Record<string, unknown>): CheckedSuite {
+  if (raw['schema_version'] === 1) return BudgetedSuiteSchema.parse(raw);
+  return SuiteSchema.parse(raw);
 }
 
 function yamlFiles(dir: string): string[] {
@@ -115,7 +127,7 @@ export function checkArmSuiteFiles(
 
   for (const file of yamlFiles(join(opts.repoRoot, 'suites'))) {
     const path = join(opts.repoRoot, 'suites', file);
-    let suite: Suite;
+    let suite: CheckedSuite;
     try {
       const raw = parseYaml(readFileSync(path, 'utf8')) as Record<
         string,
@@ -144,7 +156,7 @@ export function checkArmSuiteFiles(
         );
       }
       const { grader: _stripped, ...suiteFields } = raw ?? {};
-      suite = SuiteSchema.parse(suiteFields);
+      suite = parseCheckedSuite(suiteFields);
       if (
         credentials !== undefined &&
         graderRaw !== undefined &&
@@ -167,7 +179,7 @@ export function checkArmSuiteFiles(
       );
       continue;
     }
-    if (suite.profile !== undefined) {
+    if (suite.schema_version === 1 && suite.profile !== undefined) {
       const schema = profileParamsSchema(suite.profile);
       if (schema === undefined) {
         errors.push(`suites/${file}: unknown profile '${suite.profile}'`);
@@ -183,7 +195,10 @@ export function checkArmSuiteFiles(
           );
         }
       }
-    } else if (suite.profile_params !== undefined) {
+    } else if (
+      suite.schema_version === 1 &&
+      suite.profile_params !== undefined
+    ) {
       errors.push(
         `suites/${file}: profile_params set without a profile (suite.profile is unset)`,
       );

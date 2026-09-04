@@ -9,11 +9,14 @@
 // materialized tree -> final-path init (journal + campaign_opened + sidecar +
 // ballast) -> campaign.json staged + renamed LAST. Dry-run and print-and-exit
 // perform no writes at all. Resume authority = campaign.json + the snapshot.
+
+import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -40,6 +43,7 @@ import {
   type Cell,
   type ContentionDeclaration,
   type ContentionThreshold,
+  type ExecutionSurfaceArm,
   type HostFingerprint,
   ID_COMPONENT_RE,
   type PricingOverride,
@@ -47,18 +51,28 @@ import {
 } from '../contracts/campaign/campaign.ts';
 import {
   campaignDigest,
+  jcsCanonicalize,
   type PreDigestCampaign,
+  sha256Hex,
 } from '../contracts/campaign/digest.ts';
+import {
+  type Experiment,
+  ExperimentSchema,
+} from '../contracts/campaign/experiment.ts';
+import { experimentDigest } from '../contracts/campaign/experiment-digest.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
 import { couplingDefaultFrom } from '../contracts/campaign/scenario-meta.ts';
 import {
-  type Suite,
-  SuiteSchema,
+  type Suite as ExperimentSuite,
+  SuiteSchema as ExperimentSuiteSchema,
+  type BudgetedSuite as Suite,
+  BudgetedSuiteSchema as SuiteSchema,
   TIER_SELECTOR_RE,
 } from '../contracts/campaign/suite.ts';
 import {
   type Credential,
+  CredentialSchema,
   parseCredentialsFile,
 } from '../contracts/credential.ts';
 import type { EstimatesArtifact } from '../contracts/estimates.ts';
@@ -69,7 +83,13 @@ import {
   quorumTierFromStory,
   requiresSuperpowersFromStory,
 } from '../story-meta.ts';
+import { publishFrozenCampaign } from './campaign-document.ts';
 import { type EstimateLookup, lookupEstimate } from './estimates.ts';
+import {
+  type CommittedTransition,
+  ExecutionJournalWriter,
+  initExecutionJournal,
+} from './execution-journal.ts';
 import {
   clockNowMs,
   type HostStatsProbe,
@@ -88,6 +108,11 @@ import {
   verifyBallast,
 } from './journal.ts';
 import { acquireLease, type ProcessIdentityProbe } from './locks.ts';
+import {
+  assertFeasible,
+  blockDemandVector,
+  compileResourcePolicy,
+} from './resource-policy.ts';
 import { materializeCampaignSnapshot, repairDriftedTrees } from './snapshot.ts';
 
 export class RegistrationError extends Error {
@@ -243,7 +268,7 @@ export interface ScenarioIntake {
   readonly coding_agents: readonly string[] | undefined;
 }
 
-export interface RegistrationInput {
+export interface BudgetedRegistrationInput {
   readonly suite: Suite;
   readonly arms: Readonly<Record<string, Arm>>;
   readonly credentials: Readonly<Record<string, Credential>>;
@@ -265,7 +290,7 @@ export interface RegistrationInput {
   readonly pricingOverrides?: readonly PricingOverride[];
 }
 
-export interface PreparedRegistration {
+export interface BudgetedPreparedRegistration {
   readonly comparisons: Campaign['comparisons'];
   readonly cells: Cell[];
   readonly samples: Sample[];
@@ -330,14 +355,14 @@ function priceArm(
  *  bundle): comparisons in suite order -> cells by scenario sort order ->
  *  arms in comparison order -> replicate ascending. Consumes the snapshot
  *  intake as INPUTS only — it never reads the mutable host checkout (C2). */
-export function prepareRegistration(
-  input: RegistrationInput,
-): PreparedRegistration {
+export function prepareBudgetedRegistration(
+  input: BudgetedRegistrationInput,
+): BudgetedPreparedRegistration {
   const { suite, arms, grader, estimates } = input;
   const gating = suite.kind === 'gating';
   const excluded_cells: { cell: string; reason: string }[] = [];
   const warnings: string[] = [];
-  const comparisons: PreparedRegistration['comparisons'] = [];
+  const comparisons: BudgetedPreparedRegistration['comparisons'] = [];
   const cells: Cell[] = [];
   const samples: Sample[] = [];
   const blocks: Block[] = [];
@@ -544,9 +569,432 @@ export function prepareRegistration(
   };
 }
 
+export interface RegistrationInput {
+  readonly suite: ExperimentSuite;
+  readonly arms: Readonly<Record<string, Arm>>;
+  readonly credentials: Readonly<Record<string, Credential>>;
+  readonly grader: Experiment['grader'];
+  readonly refs: Experiment['refs'];
+  readonly scenarios: readonly ScenarioIntake[];
+  readonly capability: (family: string) => { ref: boolean; none: boolean };
+  readonly agentOsSupport: (agent: string) => readonly string[] | undefined;
+  readonly agentFamily: (agent: string) => string;
+  readonly campaignOs: string;
+  readonly globalCap: number;
+  readonly contention: ContentionDeclaration;
+  readonly registeredAt: string;
+  readonly registeredBy: string;
+  readonly estimates?: Experiment['estimates'];
+}
+
+export type PreparedRegistration = Omit<
+  Experiment,
+  'campaign_id' | 'input_digest' | 'registered_at' | 'registered_by'
+>;
+
+interface CredentialAuthorityProjection {
+  readonly schema: 'quorum.credential-authority/v1';
+  readonly pool_identity: 'campaign-pool-key/v1';
+  readonly credentials: readonly (readonly [string, Credential])[];
+}
+
+function credentialAuthorityProjection(
+  registry: Readonly<Record<string, Credential>>,
+  activeCredentialNames: readonly string[],
+): CredentialAuthorityProjection {
+  const activePools = new Set(
+    activeCredentialNames.map((name) => {
+      const credential = registry[name];
+      if (credential === undefined) {
+        throw new RegistrationError(
+          `active credential ${name} is absent from credentials.yaml`,
+        );
+      }
+      return poolKey(credential, name);
+    }),
+  );
+  const credentials = Object.entries(registry)
+    .filter(([name, credential]) => activePools.has(poolKey(credential, name)))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(
+      ([name, credential]) =>
+        [name, CredentialSchema.parse(credential)] as const,
+    );
+  return {
+    schema: 'quorum.credential-authority/v1',
+    pool_identity: 'campaign-pool-key/v1',
+    credentials,
+  };
+}
+
+/** Digest only the strict public registry projection needed to prepare attempts. */
+export function credentialAuthorityDigest(
+  registry: Readonly<Record<string, Credential>>,
+  activeCredentialNames: readonly string[],
+): string {
+  return sha256Hex(
+    jcsCanonicalize(
+      credentialAuthorityProjection(registry, activeCredentialNames),
+    ),
+  );
+}
+
+/** Refuse a changed public credential authority before a new attempt starts. */
+export function assertCredentialAuthority(
+  registry: Readonly<Record<string, Credential>>,
+  experiment: Pick<
+    Experiment,
+    'execution_surface' | 'grader' | 'credential_authority_digest'
+  >,
+): void {
+  const observed = credentialAuthorityDigest(
+    registry,
+    credentialNamesForExperiment(experiment),
+  );
+  if (observed !== experiment.credential_authority_digest) {
+    throw new RegistrationError(
+      `public credential authority changed (${observed} != ${experiment.credential_authority_digest}); refusing a new start`,
+    );
+  }
+}
+
+/** Credentials whose public aliases define the frozen campaign pool authority. */
+export function credentialNamesForExperiment(
+  experiment: Pick<Experiment, 'execution_surface' | 'grader'>,
+): string[] {
+  return [
+    ...new Set([
+      ...experiment.execution_surface.map((arm) => arm.credential),
+      experiment.grader.credential,
+    ]),
+  ].sort();
+}
+
+function expandExperimentSelector(
+  selector: readonly string[] | string,
+  scenarios: readonly ScenarioIntake[],
+): string[] {
+  if (typeof selector !== 'string') return [...selector].sort();
+  const match = TIER_SELECTOR_RE.exec(selector);
+  if (match === null) {
+    throw new RegistrationError(`bad scenario selector ${selector}`);
+  }
+  return scenarios
+    .filter((scenario) => scenario.tier === match[1])
+    .map((scenario) => scenario.name)
+    .sort();
+}
+
+function experimentCellRejection(
+  input: RegistrationInput,
+  scenario: ScenarioIntake,
+  armNames: readonly string[],
+): string | null {
+  if (
+    scenario.requires_superpowers &&
+    armNames.some((name) => input.arms[name]?.superpowers === 'none')
+  ) {
+    return 'scenario requires_superpowers conflicts with a superpowers: none arm';
+  }
+  for (const armName of armNames) {
+    const arm = input.arms[armName];
+    if (arm === undefined) return `arm ${armName} is absent from arms/`;
+    const credential = input.credentials[arm.credential];
+    if (credential === undefined) {
+      return `credential ${arm.credential} for arm ${armName} is absent from credentials.yaml`;
+    }
+    const family = input.agentFamily(arm.agent);
+    if (!credential.harnesses.includes(family)) {
+      return `credential ${arm.credential} does not support harness ${family}`;
+    }
+    if (arm.os === 'windows')
+      return `arm ${armName} targets unsupported windows`;
+    const os = arm.os ?? input.campaignOs;
+    const agentOs = input.agentOsSupport(arm.agent);
+    if (agentOs !== undefined && !agentOs.includes(os)) {
+      return `arm ${armName} os ${os} is unsupported by agent ${arm.agent}`;
+    }
+    if (
+      credential.os_support !== undefined &&
+      !credential.os_support.includes(os)
+    ) {
+      return `arm ${armName} os ${os} is unsupported by credential ${arm.credential}`;
+    }
+    if (scenario.os !== undefined && !scenario.os.includes(os)) {
+      return `arm ${armName} os ${os} is unsupported by scenario ${scenario.name}`;
+    }
+    if (
+      scenario.coding_agents !== undefined &&
+      !scenario.coding_agents.includes(arm.agent)
+    ) {
+      return `agent ${arm.agent} is outside scenario ${scenario.name}'s coding-agents directive`;
+    }
+    const capability = input.capability(family);
+    if (arm.superpowers === 'none' ? !capability.none : !capability.ref) {
+      return `arm ${armName} superpowers mode ${arm.superpowers} lacks adapter capability`;
+    }
+  }
+  return null;
+}
+
+/** Compile one strict, finite, price-independent V2 experiment input. */
+export function prepareRegistration(
+  rawInput: RegistrationInput,
+): PreparedRegistration {
+  const suite = ExperimentSuiteSchema.parse(rawInput.suite);
+  const input = { ...rawInput, suite };
+  if (input.globalCap !== input.contention.global_run_cap) {
+    throw new RegistrationError(
+      `global capacity ${input.globalCap} differs from contention declaration ${input.contention.global_run_cap}`,
+    );
+  }
+  const graderCredential = input.credentials[input.grader.credential];
+  if (graderCredential === undefined) {
+    throw new RegistrationError(
+      `grader credential ${input.grader.credential} is absent from credentials.yaml`,
+    );
+  }
+
+  const scenarioByName = new Map(
+    input.scenarios.map((item) => [item.name, item]),
+  );
+  const normalizedComparisons: ExperimentSuite['comparisons'] = [];
+  const comparisons: Experiment['comparisons'] = [];
+  const cells: Experiment['cells'] = [];
+  const excludedCells: Experiment['excluded_cells'] = [];
+  const plannedSlots: Experiment['planned_slots'] = [];
+  const reserveSlots: Experiment['reserve_slots'] = [];
+  const referencedArmNames = new Set<string>();
+
+  suite.comparisons.forEach((comparison, comparisonIndex) => {
+    const comparison_id = comparisonId(comparisonIndex + 1);
+    const armNames =
+      'arm' in comparison
+        ? [comparison.arm]
+        : [comparison.baseline, comparison.treatment];
+    for (const name of armNames) referencedArmNames.add(name);
+    const scenarios = expandExperimentSelector(
+      comparison.scenarios,
+      input.scenarios,
+    );
+    normalizedComparisons.push({ ...comparison, scenarios });
+    comparisons.push(
+      'arm' in comparison
+        ? { comparison_id, arm: comparison.arm }
+        : {
+            comparison_id,
+            baseline: comparison.baseline,
+            treatment: comparison.treatment,
+          },
+    );
+  });
+
+  const referencedArms = [...referencedArmNames].sort().map((name) => {
+    const arm = input.arms[name];
+    if (arm === undefined) {
+      throw new RegistrationError(`arm ${name} is absent from arms/`);
+    }
+    const resolvedRef = input.refs.superpowers_by_arm[name];
+    if (arm.superpowers === 'none') {
+      if (resolvedRef !== null) {
+        throw new RegistrationError(
+          `arm ${name} with superpowers: none requires an explicit null source ref`,
+        );
+      }
+    } else if (typeof resolvedRef !== 'string') {
+      throw new RegistrationError(
+        `arm ${name} requires a resolved superpowers source ref`,
+      );
+    }
+    return arm;
+  });
+  const activeCredentialNames = [
+    ...new Set([
+      ...referencedArms.map((arm) => arm.credential),
+      input.grader.credential,
+    ]),
+  ].sort();
+  const policy = compileResourcePolicy(
+    input.credentials,
+    activeCredentialNames,
+  );
+  const graderPool = poolKey(graderCredential, input.grader.credential);
+
+  normalizedComparisons.forEach((comparison, comparisonIndex) => {
+    const comparison_id = comparisonId(comparisonIndex + 1);
+    const armNames =
+      'arm' in comparison
+        ? [comparison.arm]
+        : [comparison.baseline, comparison.treatment];
+    const scenarios = comparison.scenarios;
+    if (!Array.isArray(scenarios)) {
+      throw new RegistrationError('normalized selector was not expanded');
+    }
+    for (const scenarioName of scenarios) {
+      const cellKey = cellKeyOf(comparison_id, scenarioName);
+      const scenario = scenarioByName.get(scenarioName);
+      if (scenario === undefined) {
+        excludedCells.push({
+          cell: cellKey,
+          reason: `scenario ${scenarioName} is absent from the snapshot intake`,
+        });
+        continue;
+      }
+      const rejection = experimentCellRejection(input, scenario, armNames);
+      if (rejection !== null) {
+        excludedCells.push({ cell: cellKey, reason: rejection });
+        continue;
+      }
+      const samplePoolById = new Map<string, string>();
+      for (const armName of armNames) {
+        const arm = input.arms[armName];
+        if (arm === undefined) {
+          throw new RegistrationError(`arm ${armName} is absent from arms/`);
+        }
+        const credential = input.credentials[arm.credential];
+        if (credential === undefined) {
+          throw new RegistrationError(
+            `credential ${arm.credential} for arm ${armName} is absent from credentials.yaml`,
+          );
+        }
+        samplePoolById.set(armName, poolKey(credential, arm.credential));
+      }
+      try {
+        assertFeasible(
+          blockDemandVector({
+            block: { sample_ids: armNames },
+            sampleArmCredentialPool: (sampleId) => {
+              const pool = samplePoolById.get(sampleId);
+              if (pool === undefined) {
+                throw new RegistrationError(
+                  `sample ${sampleId} has no compiled subject pool`,
+                );
+              }
+              return pool;
+            },
+            graderPool,
+          }),
+          policy,
+          input.globalCap,
+        );
+      } catch (error) {
+        excludedCells.push({
+          cell: cellKey,
+          reason: `block is infeasible: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
+
+      const n = comparison.cells?.[scenarioName]?.n ?? comparison.n;
+      cells.push({
+        scenario: scenarioName,
+        comparison_id,
+        arms: [...armNames],
+        n,
+        coupling: scenario.coupling,
+      });
+      for (let replicate = 1; replicate <= n; replicate += 1) {
+        const primary_block_id = primaryBlockId(cellKey, replicate);
+        for (const arm of armNames) {
+          plannedSlots.push({
+            sample_id: primarySampleId(cellKey, arm, replicate),
+            primary_block_id,
+            comparison_id,
+            scenario: scenarioName,
+            arm,
+            replicate,
+          });
+        }
+      }
+      for (let reserve = 1; reserve <= suite.reserve; reserve += 1) {
+        reserveSlots.push({
+          reserve_id: reserveBlockId(cellKey, reserve),
+          comparison_id,
+          scenario: scenarioName,
+        });
+      }
+    }
+  });
+  if (cells.length === 0) {
+    throw new RegistrationError(
+      `experiment has no eligible cells: ${excludedCells.map((cell) => `${cell.cell}: ${cell.reason}`).join('; ')}`,
+    );
+  }
+
+  const executionSurface: ExecutionSurfaceArm[] = referencedArms.map((arm) => {
+    const credential = input.credentials[arm.credential];
+    if (credential === undefined) {
+      throw new RegistrationError(
+        `credential ${arm.credential} for arm ${arm.name} is absent from credentials.yaml`,
+      );
+    }
+    return {
+      name: arm.name,
+      agent: arm.agent,
+      credential: arm.credential,
+      auth: credential.auth,
+      api: credential.api,
+      ...(credential.base_url === undefined
+        ? {}
+        : { base_url: credential.base_url }),
+      model: credential.model,
+      key_env_names:
+        credential.key_pool ??
+        (credential.api_key_env === undefined ? [] : [credential.api_key_env]),
+    };
+  });
+  const refs = {
+    ...input.refs,
+    superpowers_by_arm: Object.fromEntries(
+      referencedArms.map((arm) => [
+        arm.name,
+        input.refs.superpowers_by_arm[arm.name],
+      ]),
+    ),
+  };
+  const prepared = {
+    schema_version: 2 as const,
+    suite: { ...suite, comparisons: normalizedComparisons },
+    refs,
+    grader: input.grader,
+    cells,
+    excluded_cells: excludedCells,
+    comparisons,
+    planned_slots: plannedSlots,
+    reserve_slots: reserveSlots,
+    execution_surface: executionSurface,
+    credential_authority_digest: credentialAuthorityDigest(
+      input.credentials,
+      activeCredentialNames,
+    ),
+    pool_policy: [...policy.values()],
+    contention: input.contention,
+    runtime_limits: {
+      max_time_s: suite.attempt_bounds.max_time_s,
+      graceful_shutdown_s: 5 as const,
+    },
+    ...(input.estimates === undefined ? {} : { estimates: input.estimates }),
+  };
+  const validated = ExperimentSchema.parse({
+    ...prepared,
+    campaign_id: 'registration-validation',
+    input_digest: '0'.repeat(64),
+    registered_at: input.registeredAt,
+    registered_by: input.registeredBy,
+  });
+  const {
+    campaign_id: _campaignId,
+    input_digest: _inputDigest,
+    registered_at: _registeredAt,
+    registered_by: _registeredBy,
+    ...result
+  } = validated;
+  return result;
+}
+
 function expandSelector(
   selector: readonly string[] | string,
-  input: RegistrationInput,
+  input: BudgetedRegistrationInput,
 ): string[] {
   // typeof narrowing: Array.isArray cannot exclude a readonly array from
   // the union, typeof can.
@@ -567,7 +1015,7 @@ function expandSelector(
 /** The eligibility rejection matrix (R-REG-9/10/12/13/14/15/16) applied per
  *  cell; returns the first reason or null. All fail-closed, loud-recorded. */
 function rejectCell(
-  input: RegistrationInput,
+  input: BudgetedRegistrationInput,
   scen: ScenarioIntake,
   armNames: readonly string[],
 ): string | null {
@@ -754,7 +1202,7 @@ function checkCellOverrideCorrelation(suite: Suite): void {
 /** R-REG-20 grader singular: the registered grader credential must exist,
  *  mechanical, before any expansion. (The R-REG-15 api-key half was
  *  rescinded by owner ruling 2026-09-01 — see rejectCell.) */
-function checkGraderCredential(input: RegistrationInput): void {
+function checkGraderCredential(input: BudgetedRegistrationInput): void {
   const cred = input.credentials[input.grader.credential];
   if (cred === undefined) {
     throw new RegistrationError(
@@ -763,7 +1211,7 @@ function checkGraderCredential(input: RegistrationInput): void {
   }
 }
 
-function checkKeyEnvPresence(input: RegistrationInput): void {
+function checkKeyEnvPresence(input: BudgetedRegistrationInput): void {
   // R-REG-19 (registration half): every arm credential and the grader
   // credential — api_key_env (or every key_pool entry) present in the
   // environment, else registration refuses.
@@ -796,7 +1244,7 @@ function checkKeyEnvPresence(input: RegistrationInput): void {
   }
 }
 
-function checkEstimateStaleness(input: RegistrationInput): void {
+function checkEstimateStaleness(input: BudgetedRegistrationInput): void {
   // R-REG-21: the mechanical staleness rule — the newest included run is
   // >30 days older than the build; artifact.generated_at IS the newest
   // included run's finished_at (data-derived), so compare it against
@@ -815,7 +1263,7 @@ function checkEstimateStaleness(input: RegistrationInput): void {
   }
 }
 
-function graderAndPoolWarnings(input: RegistrationInput): string[] {
+function graderAndPoolWarnings(input: BudgetedRegistrationInput): string[] {
   const warnings: string[] = [];
   const gating = input.suite.kind === 'gating';
   const graderCred = input.credentials[input.grader.credential];
@@ -956,7 +1404,7 @@ function scenarioIntakeOf(
  *  via plain file reads, parsed by the same string-based readers the
  *  object-store intake uses. Records every consumed file's bytes so callers
  *  can cross-check provenance. */
-function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
+export function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
   const arms: Record<string, Arm> = {};
   const files: Record<string, string> = {};
   const armsDir = join(evalsRoot, 'arms');
@@ -1042,7 +1490,7 @@ function gitOutText(runner: CommandRunner, args: readonly string[]): string {
  *  finding 1): every parser consumes the strings directly, so dry-run and
  *  print-and-exit are write-free by construction — no scratch dir exists to
  *  leak. */
-function readSnapshotIntake(
+export function readSnapshotIntake(
   evalsCheckout: string,
   evalsSha: string,
   runner: CommandRunner,
@@ -1109,7 +1557,10 @@ function readSnapshotIntake(
  *  materialized evals tree must be byte-identical to the object-store
  *  intake for every file the grid consumed — a mismatch is corruption,
  *  never ignored (fail-closed, R-REG-5: what ships is what was digested). */
-function verifyIntakeMatch(intake: SnapshotIntake, evalsRoot: string): void {
+export function verifyIntakeMatch(
+  intake: SnapshotIntake,
+  evalsRoot: string,
+): void {
   for (const [rel, content] of Object.entries(intake.files)) {
     if (readFileSync(join(evalsRoot, rel), 'utf8') !== content) {
       throw new RegistrationError(
@@ -1119,7 +1570,7 @@ function verifyIntakeMatch(intake: SnapshotIntake, evalsRoot: string): void {
   }
 }
 
-export interface RegisterArgs {
+export interface BudgetedRegisterArgs {
   readonly suitePath: string;
   readonly suiteRaw: string;
   readonly campaignsRoot: string;
@@ -1149,7 +1600,7 @@ export interface RegisterArgs {
   readonly fsOps?: JournalFsOps;
 }
 
-export interface RegisterResult {
+export interface BudgetedRegisterResult {
   readonly campaign_id: string;
   readonly digest: string;
   /** '' until the dir exists (dry-run / print-and-exit). */
@@ -1161,7 +1612,7 @@ export interface RegisterResult {
   readonly warnings: string[];
 }
 
-interface SnapshotIntake {
+export interface SnapshotIntake {
   readonly arms: Record<string, Arm>;
   readonly credentials: Record<string, Credential>;
   readonly scenarios: ScenarioIntake[];
@@ -1173,7 +1624,10 @@ interface SnapshotIntake {
 
 /** The intake's agent config by name, parsed from the consumed bytes. A
  *  missing YAML refuses naming the intake gap (fail-closed). */
-function intakeAgentConfig(intake: SnapshotIntake, agent: string): AgentConfig {
+export function intakeAgentConfig(
+  intake: SnapshotIntake,
+  agent: string,
+): AgentConfig {
   const rel = `coding-agents/${agent}.yaml`;
   const source = intake.files[rel];
   if (source === undefined) {
@@ -1184,7 +1638,7 @@ function intakeAgentConfig(intake: SnapshotIntake, agent: string): AgentConfig {
   return parseAgentConfigForValidation(source, rel, agent);
 }
 interface ComputedRegistration {
-  readonly prepared: PreparedRegistration;
+  readonly prepared: BudgetedPreparedRegistration;
   readonly preDigest: PreDigestCampaign;
   readonly digest: string;
 }
@@ -1238,10 +1692,15 @@ function classifyCandidate(candidate: string): CandidateClass {
 /** Child-contract compatibility (REV fable I-12): the snapshot CLI probes
  *  clean and the evals SHA must contain D2's implementation merge — verified
  *  through the CommandRunner seam, rejected loudly naming the minimum. */
+interface ChildContractProbeArgs {
+  readonly runner: CommandRunner;
+  readonly evalsCheckout: string;
+}
+
 function probeChildContract(
   evalsRoot: string,
   evalsSha: string,
-  args: RegisterArgs,
+  args: ChildContractProbeArgs,
 ): void {
   const minimalEnv = minimalGitEnv();
   const version = args.runner.run(
@@ -1273,7 +1732,9 @@ function probeChildContract(
   }
 }
 
-export function registerCampaign(args: RegisterArgs): RegisterResult {
+export function registerBudgetedCampaign(
+  args: BudgetedRegisterArgs,
+): BudgetedRegisterResult {
   const printed: string[] = [];
   const emit = (line: string): void => {
     printed.push(line);
@@ -1345,7 +1806,7 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
               args.runner,
             );
     }
-    const prepared = prepareRegistration({
+    const prepared = prepareBudgetedRegistration({
       suite,
       arms: intake.arms,
       credentials: intake.credentials,
@@ -1433,7 +1894,7 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     `global_run_cap = ${args.globalCap} per-sample slots; max contemporaneous two-arm blocks = ${Math.floor(args.globalCap / 2)}`,
   );
 
-  const finishUnpublished = (): RegisterResult => ({
+  const finishUnpublished = (): BudgetedRegisterResult => ({
     campaign_id,
     digest,
     campaignDir: '',
@@ -1657,6 +2118,212 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       excluded_cells: authoritative.prepared.excluded_cells,
       warnings: authoritative.prepared.warnings,
     };
+  } finally {
+    lease.release();
+  }
+}
+
+export interface RegisterArgs {
+  readonly suitePath: string;
+  readonly suiteRaw: string;
+  readonly campaignsRoot: string;
+  readonly globalCap: number;
+  readonly evalsCheckout: string;
+  readonly gauntletCheckout: string;
+  readonly superpowersCheckout: string;
+  readonly evalsRef: string;
+  readonly gauntletRef: string;
+  readonly runner: CommandRunner;
+  readonly clock: Clock;
+  readonly identity: ProcessIdentityProbe;
+  readonly probe: HostStatsProbe;
+  readonly registeredBy: string;
+  readonly nowMs: number;
+  readonly estimates?: Experiment['estimates'];
+  readonly campaignId?: () => string;
+  readonly fsOps?: JournalFsOps;
+}
+
+export interface RegisterResult {
+  readonly experiment: Experiment;
+  readonly campaignDir: string;
+}
+
+/**
+ * Resolve, authenticate, compile, materialize and publish one independent V2
+ * campaign. Repeating identical inputs creates a new campaign identity while
+ * preserving the input digest.
+ */
+export function registerCampaign(args: RegisterArgs): RegisterResult {
+  const raw = parseYaml(args.suiteRaw);
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new RegistrationError(`${args.suitePath}: suite must be an object`);
+  }
+  const record = raw as Record<string, unknown>;
+  const graderRaw = record['grader'];
+  const graderCredential =
+    graderRaw !== null &&
+    typeof graderRaw === 'object' &&
+    !Array.isArray(graderRaw)
+      ? (graderRaw as Record<string, unknown>)['credential']
+      : undefined;
+  const graderModel =
+    graderRaw !== null &&
+    typeof graderRaw === 'object' &&
+    !Array.isArray(graderRaw)
+      ? (graderRaw as Record<string, unknown>)['model']
+      : undefined;
+  if (typeof graderCredential !== 'string' || typeof graderModel !== 'string') {
+    throw new RegistrationError(
+      `${args.suitePath}: suite must declare grader: { credential, model }`,
+    );
+  }
+  const grader = {
+    credential: graderCredential,
+    model: graderModel,
+  };
+  const { grader: _grader, ...suiteFields } = record;
+  const suite = ExperimentSuiteSchema.parse(suiteFields);
+
+  const evalsSha = resolveSuperpowersRef(
+    { path: args.evalsCheckout, remote: 'origin' },
+    args.evalsRef,
+    args.runner,
+  );
+  const gauntletSha = resolveSuperpowersRef(
+    { path: args.gauntletCheckout, remote: 'origin' },
+    args.gauntletRef,
+    args.runner,
+  );
+  const now = new Date(args.nowMs).toISOString();
+  const stats = args.probe.sample(args.nowMs);
+  const contention = buildContentionBlock({
+    fingerprint: probeFingerprint(args.probe, args.nowMs),
+    globalCap: args.globalCap,
+    thresholds: defaultContentionThresholds({
+      mem_bytes: stats.mem_total_bytes,
+      swap_total_bytes: stats.swap_total_bytes,
+      disk_total_bytes: stats.disk_total_bytes,
+    }),
+  });
+  const campaignId = (args.campaignId ?? randomUUID)();
+
+  const compile = (intake: SnapshotIntake): Experiment => {
+    const armNames = new Set<string>();
+    for (const comparison of suite.comparisons) {
+      if ('arm' in comparison) armNames.add(comparison.arm);
+      else {
+        armNames.add(comparison.baseline);
+        armNames.add(comparison.treatment);
+      }
+    }
+    const superpowers_by_arm: Record<string, string | null> = {};
+    for (const name of [...armNames].sort()) {
+      const arm = intake.arms[name];
+      if (arm === undefined) {
+        throw new RegistrationError(`arm ${name} is absent from arms/`);
+      }
+      superpowers_by_arm[name] =
+        arm.superpowers === 'none'
+          ? null
+          : resolveSuperpowersRef(
+              { path: args.superpowersCheckout, remote: 'origin' },
+              arm.superpowers,
+              args.runner,
+            );
+    }
+    const prepared = prepareRegistration({
+      suite,
+      arms: intake.arms,
+      credentials: intake.credentials,
+      grader,
+      refs: {
+        superpowers_by_arm,
+        evals: evalsSha,
+        gauntlet: gauntletSha,
+      },
+      scenarios: intake.scenarios,
+      capability: (family) => superpowersCapability(family),
+      agentOsSupport: (agent) => intakeAgentConfig(intake, agent).os_support,
+      agentFamily: (agent) =>
+        agentRuntimeFamily(intakeAgentConfig(intake, agent)),
+      campaignOs: 'linux',
+      globalCap: args.globalCap,
+      contention,
+      registeredAt: now,
+      registeredBy: args.registeredBy,
+      ...(args.estimates === undefined ? {} : { estimates: args.estimates }),
+    });
+    const draft = {
+      ...prepared,
+      campaign_id: campaignId,
+      input_digest: '0'.repeat(64),
+      registered_at: now,
+      registered_by: args.registeredBy,
+    };
+    return ExperimentSchema.parse({
+      ...draft,
+      input_digest: experimentDigest(draft),
+    });
+  };
+
+  const intake = readSnapshotIntake(args.evalsCheckout, evalsSha, args.runner);
+  const staged = compile(intake);
+  mkdirSync(args.campaignsRoot, { recursive: true });
+  const campaignsRoot = realpathSync(args.campaignsRoot);
+  const lease = acquireLease({
+    lockPath: join(campaignsRoot, 'registration.lock.d'),
+    clock: args.clock,
+    identity: args.identity,
+    label: 'registration lease',
+  });
+  try {
+    const campaignDir = join(campaignsRoot, `${campaignId}-${suite.name}`);
+    if (existsSync(campaignDir)) {
+      throw new RegistrationError(
+        `campaign identity collision: ${campaignDir} already exists`,
+      );
+    }
+    const handle = materializeCampaignSnapshot({
+      campaignDir,
+      refs: staged.refs,
+      evalsCheckout: args.evalsCheckout,
+      gauntletCheckout: args.gauntletCheckout,
+      superpowersCheckout: args.superpowersCheckout,
+      runner: args.runner,
+    });
+    verifyIntakeMatch(intake, handle.evalsRoot);
+    const experiment = compile(readIntakeFromEvalsTree(handle.evalsRoot));
+    if (experiment.input_digest !== staged.input_digest) {
+      throw new RegistrationError(
+        `materialized snapshot input digest ${experiment.input_digest} differs from object-store intake ${staged.input_digest}`,
+      );
+    }
+    probeChildContract(handle.evalsRoot, evalsSha, args);
+    createBallast(campaignDir, DEFAULT_BALLAST_BYTES, args.fsOps);
+    initExecutionJournal({ campaignDir, experiment });
+    const writer = ExecutionJournalWriter.elect({
+      campaignDir,
+      experiment,
+      clock: args.clock,
+      identity: args.identity,
+    });
+    let registered: CommittedTransition;
+    try {
+      registered = writer.commitTransition({
+        transition_id: `registered:${campaignId}`,
+        at: now,
+        type: 'registered',
+        payload: {
+          campaign_id: campaignId,
+          input_digest: experiment.input_digest,
+        },
+      });
+    } finally {
+      writer.release();
+    }
+    publishFrozenCampaign({ campaignDir, experiment, registered });
+    return { experiment, campaignDir };
   } finally {
     lease.release();
   }
