@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { delimiter, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defaultCommandRunner } from '../../src/agents/command-runner.ts';
 import type { ContainerAttemptSpawnerArgs } from '../../src/campaign/container-spawner.ts';
@@ -738,7 +738,7 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
     const registerEnv = {
       ...process.env,
       ...environment,
-      PATH: `${gitShimDir}${sep}${process.env['PATH'] ?? ''}`,
+      PATH: `${gitShimDir}${delimiter}${process.env['PATH'] ?? ''}`,
     };
     const registered = runProcess(
       'bun',
