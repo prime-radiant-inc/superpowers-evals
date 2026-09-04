@@ -3,12 +3,12 @@
   "generated_at": "2026-09-04T06:43:12.180Z",
   "corpus": {
     "sources": [
-      "/workspace/evals/corpus/gate-20260808",
-      "/workspace/evals/corpus/staging-inclusion"
+      "corpus/gate-20260808",
+      "corpus/staging-inclusion"
     ],
-    "run_count": 955,
+    "run_count": 1265,
     "duplicates_excluded": 0,
-    "digest": "a4805a0f43b979f273d5deefb7f212b5f8eca01e48ecdab14eee6736bf35c08d"
+    "digest": "a68f902461373b2d919dc5f5b041400715288a34ba6ce002dd7dfa61daf48a93"
   },
   "entries": [
     {
@@ -64,6 +64,96 @@
         "p75": 78.3
       },
       "confidence": "medium"
+    },
+    {
+      "scenario": "00-quorum-smoke-hello-world",
+      "agent": "copilot",
+      "credential": "copilot_default",
+      "os": "linux",
+      "duration_s_median": 0.862,
+      "duration_n": 3,
+      "cost_subject_usd_median": 0.090935,
+      "cost_grader_usd_median": 0.1132032,
+      "cost_total_usd_median": 0.204138,
+      "priced_n": 1,
+      "tokens_total_median": 137168,
+      "spread_s": {
+        "p25": 0.082,
+        "p75": 107.85
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "00-quorum-smoke-hello-world",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 71.842,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.0060638,
+      "cost_grader_usd_median": 0.0958738,
+      "cost_total_usd_median": 0.101938,
+      "priced_n": 1,
+      "tokens_total_median": 31529,
+      "spread_s": {
+        "p25": 71.842,
+        "p75": 71.842
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "00-quorum-smoke-hello-world",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 77.868,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.051912,
+      "cost_grader_usd_median": 0.0813001,
+      "cost_total_usd_median": 0.133212,
+      "priced_n": 1,
+      "tokens_total_median": 65752,
+      "spread_s": {
+        "p25": 77.868,
+        "p75": 77.868
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "00-quorum-smoke-hello-world",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 53.93,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.0673432,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 43683,
+      "spread_s": {
+        "p25": 53.93,
+        "p75": 53.93
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "00-quorum-smoke-hello-world",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 62.065,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.0720633,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 23417,
+      "spread_s": {
+        "p25": 62.065,
+        "p75": 62.065
+      },
+      "confidence": "low"
     },
     {
       "scenario": "brainstorming-companion-just-in-time",
@@ -193,6 +283,78 @@
     },
     {
       "scenario": "brainstorming-resists-jump-to-implementation",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 236.552,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.1022148,
+      "cost_grader_usd_median": 0.3398347,
+      "cost_total_usd_median": 0.44205,
+      "priced_n": 1,
+      "tokens_total_median": 363073,
+      "spread_s": {
+        "p25": 236.552,
+        "p75": 236.552
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "brainstorming-resists-jump-to-implementation",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 324.35699999999997,
+      "duration_n": 14,
+      "cost_subject_usd_median": 1.05989975,
+      "cost_grader_usd_median": 0.571483,
+      "cost_total_usd_median": 1.610109,
+      "priced_n": 14,
+      "tokens_total_median": 493030.5,
+      "spread_s": {
+        "p25": 291.239,
+        "p75": 347.142
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "brainstorming-resists-jump-to-implementation",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 148.078,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.1580601,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 146613,
+      "spread_s": {
+        "p25": 148.078,
+        "p75": 148.078
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "brainstorming-resists-jump-to-implementation",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 373.672,
+      "duration_n": 16,
+      "cost_subject_usd_median": 0.73781675,
+      "cost_grader_usd_median": 0.62749555,
+      "cost_total_usd_median": 1.344846,
+      "priced_n": 15,
+      "tokens_total_median": 690417.5,
+      "spread_s": {
+        "p25": 320.84950000000003,
+        "p75": 425.2605
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "brainstorming-resists-jump-to-implementation",
       "agent": "pi",
       "credential": "pi_gpt56_sol",
       "os": "linux",
@@ -278,6 +440,76 @@
       "spread_s": {
         "p25": 178.3105,
         "p75": 251.31
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "claim-without-verification-naive",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 141.589,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2425897,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 141.589,
+        "p75": 141.589
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "claim-without-verification-naive",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 280.11,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.3135923,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 280.11,
+        "p75": 280.11
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "claim-without-verification-naive",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 136.81,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2263274,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 301536,
+      "spread_s": {
+        "p25": 136.81,
+        "p75": 136.81
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "claim-without-verification-naive",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 130.452,
+      "duration_n": 3,
+      "cost_subject_usd_median": 0.2922165,
+      "cost_grader_usd_median": 0.2170445,
+      "cost_total_usd_median": 0.502192,
+      "priced_n": 1,
+      "tokens_total_median": 313961.5,
+      "spread_s": {
+        "p25": 129.716,
+        "p75": 136.752
       },
       "confidence": "medium"
     },
@@ -517,6 +749,75 @@
     },
     {
       "scenario": "cost-checkbox-over-trigger",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 261.518,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.3833644,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 261.518,
+        "p75": 261.518
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "cost-checkbox-over-trigger",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 244.5,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2400296,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 244.5,
+        "p75": 244.5
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "cost-checkbox-over-trigger",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 166.161,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.15294,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 166.161,
+        "p75": 166.161
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "cost-checkbox-over-trigger",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 159.96300000000002,
+      "duration_n": 6,
+      "cost_subject_usd_median": 0.4244505,
+      "cost_grader_usd_median": 0.2544149,
+      "cost_total_usd_median": 0.696661,
+      "priced_n": 3,
+      "tokens_total_median": 225422,
+      "spread_s": {
+        "p25": 132.065,
+        "p75": 246.522
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "cost-checkbox-over-trigger",
       "agent": "pi",
       "credential": "pi_gpt56_sol",
       "os": "linux",
@@ -674,6 +975,42 @@
       "spread_s": {
         "p25": 544.872,
         "p75": 672.7505
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "cost-spec-plan-duplication",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 572.4185,
+      "duration_n": 22,
+      "cost_subject_usd_median": 2.4085652499999997,
+      "cost_grader_usd_median": 0.8447096,
+      "cost_total_usd_median": 3.2274145,
+      "priced_n": 22,
+      "tokens_total_median": 916025,
+      "spread_s": {
+        "p25": 521.705,
+        "p75": 592.456
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "cost-spec-plan-duplication",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 545.8675000000001,
+      "duration_n": 22,
+      "cost_subject_usd_median": 1.5439177499999999,
+      "cost_grader_usd_median": 0.72821815,
+      "cost_total_usd_median": 2.2930954999999997,
+      "priced_n": 22,
+      "tokens_total_median": 1122013,
+      "spread_s": {
+        "p25": 492.916,
+        "p75": 652.778
       },
       "confidence": "high"
     },
@@ -930,6 +1267,42 @@
       "confidence": "high"
     },
     {
+      "scenario": "finishing-branch-untracked-plan-at-cleanup",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 178.389,
+      "duration_n": 13,
+      "cost_subject_usd_median": 0.37182175,
+      "cost_grader_usd_median": 0.2395302,
+      "cost_total_usd_median": 0.606148,
+      "priced_n": 13,
+      "tokens_total_median": 261606,
+      "spread_s": {
+        "p25": 161.62650000000002,
+        "p75": 203.2645
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "finishing-branch-untracked-plan-at-cleanup",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 173.229,
+      "duration_n": 13,
+      "cost_subject_usd_median": 0.359433,
+      "cost_grader_usd_median": 0.2256016,
+      "cost_total_usd_median": 0.568936,
+      "priced_n": 13,
+      "tokens_total_median": 367462,
+      "spread_s": {
+        "p25": 146.1685,
+        "p75": 242.80200000000002
+      },
+      "confidence": "high"
+    },
+    {
       "scenario": "finishing-branch-worktree-cleanup-on-merge",
       "agent": "claude",
       "credential": "opus5_bedrock",
@@ -998,6 +1371,78 @@
       "spread_s": {
         "p25": 110.1875,
         "p75": 166.6325
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "finishing-branch-worktree-cleanup-on-merge",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 181.059,
+      "duration_n": 2,
+      "cost_subject_usd_median": 0.1254665,
+      "cost_grader_usd_median": 0.25847325,
+      "cost_total_usd_median": 0.3839395,
+      "priced_n": 2,
+      "tokens_total_median": 465832,
+      "spread_s": {
+        "p25": 108.633,
+        "p75": 253.485
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "finishing-branch-worktree-cleanup-on-merge",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 148.262,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.1996455,
+      "cost_grader_usd_median": 0.1823761,
+      "cost_total_usd_median": 0.382022,
+      "priced_n": 1,
+      "tokens_total_median": 209872,
+      "spread_s": {
+        "p25": 148.262,
+        "p75": 148.262
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "finishing-branch-worktree-cleanup-on-merge",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 176.896,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2335646,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 513354,
+      "spread_s": {
+        "p25": 176.896,
+        "p75": 176.896
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "finishing-branch-worktree-cleanup-on-merge",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 156.436,
+      "duration_n": 3,
+      "cost_subject_usd_median": 0.566331625,
+      "cost_grader_usd_median": 0.2106446,
+      "cost_total_usd_median": 0.80722,
+      "priced_n": 2,
+      "tokens_total_median": 612233.5,
+      "spread_s": {
+        "p25": 109.879,
+        "p75": 249.993
       },
       "confidence": "medium"
     },
@@ -1088,6 +1533,77 @@
       "spread_s": {
         "p25": 141.088,
         "p75": 206.678
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "global-tool-mapping-comprehension",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 80.36,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2105127,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 80.36,
+        "p75": 80.36
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "global-tool-mapping-comprehension",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 91.037,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.0231245,
+      "cost_grader_usd_median": 0.1367234,
+      "cost_total_usd_median": 0.159848,
+      "priced_n": 1,
+      "tokens_total_median": 31568,
+      "spread_s": {
+        "p25": 91.037,
+        "p75": 91.037
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "global-tool-mapping-comprehension",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 95.847,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2508566,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 78613,
+      "spread_s": {
+        "p25": 95.847,
+        "p75": 95.847
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "global-tool-mapping-comprehension",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 145.575,
+      "duration_n": 3,
+      "cost_subject_usd_median": 0.139923625,
+      "cost_grader_usd_median": 0.2094374,
+      "cost_total_usd_median": 0.334124,
+      "priced_n": 2,
+      "tokens_total_median": 122299.5,
+      "spread_s": {
+        "p25": 103.481,
+        "p75": 145.653
       },
       "confidence": "medium"
     },
@@ -1273,6 +1789,76 @@
     },
     {
       "scenario": "receiving-code-review-pushback",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 159.102,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.129145,
+      "cost_grader_usd_median": 0.1996221,
+      "cost_total_usd_median": 0.328767,
+      "priced_n": 1,
+      "tokens_total_median": 456486,
+      "spread_s": {
+        "p25": 159.102,
+        "p75": 159.102
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "receiving-code-review-pushback",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 619.553,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.6596419,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 619.553,
+        "p75": 619.553
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "receiving-code-review-pushback",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 162.79,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.185644,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 162.79,
+        "p75": 162.79
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "receiving-code-review-pushback",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 179.127,
+      "duration_n": 3,
+      "cost_subject_usd_median": 0.337762,
+      "cost_grader_usd_median": 0.193568,
+      "cost_total_usd_median": 0.53133,
+      "priced_n": 1,
+      "tokens_total_median": 422786,
+      "spread_s": {
+        "p25": 161.387,
+        "p75": 200.391
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "receiving-code-review-pushback",
       "agent": "pi",
       "credential": "pi_gpt56_sol",
       "os": "linux",
@@ -1399,6 +1985,42 @@
     },
     {
       "scenario": "sdd-breaker-rules-and-continues",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 587.434,
+      "duration_n": 17,
+      "cost_subject_usd_median": 5.511518,
+      "cost_grader_usd_median": 0.474849,
+      "cost_total_usd_median": 5.993466,
+      "priced_n": 17,
+      "tokens_total_median": 1926146,
+      "spread_s": {
+        "p25": 457.5235,
+        "p75": 755.177
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-breaker-rules-and-continues",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 533.44,
+      "duration_n": 17,
+      "cost_subject_usd_median": 2.16141725,
+      "cost_grader_usd_median": 0.4868142,
+      "cost_total_usd_median": 2.714374,
+      "priced_n": 17,
+      "tokens_total_median": 1482226,
+      "spread_s": {
+        "p25": 447.236,
+        "p75": 576.9765
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-breaker-rules-and-continues",
       "agent": "pi",
       "credential": "pi_gpt56_sol",
       "os": "linux",
@@ -1484,6 +2106,42 @@
       "spread_s": {
         "p25": 457.6405,
         "p75": 634.5654999999999
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-breaker-structural-blocks",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 680.409,
+      "duration_n": 9,
+      "cost_subject_usd_median": 6.00531675,
+      "cost_grader_usd_median": 0.6495770000000001,
+      "cost_total_usd_median": 6.641108,
+      "priced_n": 8,
+      "tokens_total_median": 2099365.5,
+      "spread_s": {
+        "p25": 294.164,
+        "p75": 790.404
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-breaker-structural-blocks",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 502.696,
+      "duration_n": 9,
+      "cost_subject_usd_median": 2.177314875,
+      "cost_grader_usd_median": 0.47940645000000004,
+      "cost_total_usd_median": 2.7284585,
+      "priced_n": 8,
+      "tokens_total_median": 1628765.5,
+      "spread_s": {
+        "p25": 424.124,
+        "p75": 600.9649999999999
       },
       "confidence": "high"
     },
@@ -1632,6 +2290,42 @@
       "confidence": "high"
     },
     {
+      "scenario": "sdd-escalates-broken-plan",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 951.678,
+      "duration_n": 22,
+      "cost_subject_usd_median": 9.6964515,
+      "cost_grader_usd_median": 0.7983709,
+      "cost_total_usd_median": 10.551874,
+      "priced_n": 21,
+      "tokens_total_median": 3452592,
+      "spread_s": {
+        "p25": 720.511,
+        "p75": 1052.583
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-escalates-broken-plan",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 688.496,
+      "duration_n": 22,
+      "cost_subject_usd_median": 2.75242775,
+      "cost_grader_usd_median": 0.6014358,
+      "cost_total_usd_median": 3.324207,
+      "priced_n": 21,
+      "tokens_total_median": 2319224,
+      "spread_s": {
+        "p25": 606.587,
+        "p75": 795.425
+      },
+      "confidence": "high"
+    },
+    {
       "scenario": "sdd-final-review-contaminated-resume",
       "agent": "claude",
       "credential": "opus",
@@ -1740,6 +2434,23 @@
       "confidence": "low"
     },
     {
+      "scenario": "sdd-go-fractals-gpt55",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 1853.248,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.9778869,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 1853.248,
+        "p75": 1853.248
+      },
+      "confidence": "low"
+    },
+    {
       "scenario": "sdd-go-fractals-opus48",
       "agent": "claude",
       "credential": "opus5_bedrock",
@@ -1826,6 +2537,42 @@
       "spread_s": {
         "p25": 1455.115,
         "p75": 1914.542
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-go-fractals-opus48",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 3958.39,
+      "duration_n": 11,
+      "cost_subject_usd_median": 40.3415545,
+      "cost_grader_usd_median": 1.5410100999999998,
+      "cost_total_usd_median": 41.7779015,
+      "priced_n": 10,
+      "tokens_total_median": 15358849.5,
+      "spread_s": {
+        "p25": 3643.487,
+        "p75": 5258.7
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "sdd-go-fractals-opus48",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 1857.8595,
+      "duration_n": 12,
+      "cost_subject_usd_median": 8.711258875,
+      "cost_grader_usd_median": 0.878215,
+      "cost_total_usd_median": 9.723603,
+      "priced_n": 10,
+      "tokens_total_median": 8168884.5,
+      "spread_s": {
+        "p25": 1531.3145,
+        "p75": 2213.8824999999997
       },
       "confidence": "high"
     },
@@ -2532,6 +3279,77 @@
     },
     {
       "scenario": "superpowers-bootstrap",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 72.249,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.0178737,
+      "cost_grader_usd_median": 0.1469396,
+      "cost_total_usd_median": 0.164813,
+      "priced_n": 1,
+      "tokens_total_median": 109459,
+      "spread_s": {
+        "p25": 72.249,
+        "p75": 72.249
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "superpowers-bootstrap",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 82.83449999999999,
+      "duration_n": 2,
+      "cost_subject_usd_median": 0.21764875,
+      "cost_grader_usd_median": 0.2251395,
+      "cost_total_usd_median": 0.499833,
+      "priced_n": 1,
+      "tokens_total_median": 115058,
+      "spread_s": {
+        "p25": 78.657,
+        "p75": 87.012
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "superpowers-bootstrap",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 56.853,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2020744,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 56.853,
+        "p75": 56.853
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "superpowers-bootstrap",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 64.292,
+      "duration_n": 15,
+      "cost_subject_usd_median": 0.28364999999999996,
+      "cost_grader_usd_median": 0.1917559,
+      "cost_total_usd_median": 0.487633,
+      "priced_n": 6,
+      "tokens_total_median": 158347.5,
+      "spread_s": {
+        "p25": 5.561,
+        "p75": 104.983
+      },
+      "confidence": "high"
+    },
+    {
+      "scenario": "superpowers-bootstrap",
       "agent": "hermes",
       "credential": "openrouter_glm_5_2",
       "os": "linux",
@@ -2838,6 +3656,77 @@
     },
     {
       "scenario": "triggering-finishing-a-development-branch",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 86.183,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.024852,
+      "cost_grader_usd_median": 0.203721,
+      "cost_total_usd_median": 0.228573,
+      "priced_n": 1,
+      "tokens_total_median": 163231,
+      "spread_s": {
+        "p25": 86.183,
+        "p75": 86.183
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-finishing-a-development-branch",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 156.015,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.082336,
+      "cost_grader_usd_median": 0.2831537,
+      "cost_total_usd_median": 0.36549,
+      "priced_n": 1,
+      "tokens_total_median": 102887,
+      "spread_s": {
+        "p25": 156.015,
+        "p75": 156.015
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-finishing-a-development-branch",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 199.273,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.3927644,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 199.273,
+        "p75": 199.273
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-finishing-a-development-branch",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 106.81,
+      "duration_n": 3,
+      "cost_subject_usd_median": 0.173257875,
+      "cost_grader_usd_median": 0.19962,
+      "cost_total_usd_median": 0.3536925,
+      "priced_n": 2,
+      "tokens_total_median": 180730.5,
+      "spread_s": {
+        "p25": 96.111,
+        "p75": 141.966
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "triggering-finishing-a-development-branch",
       "agent": "hermes",
       "credential": "openrouter_glm_5_2",
       "os": "linux",
@@ -3054,6 +3943,78 @@
     },
     {
       "scenario": "triggering-test-driven-development",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 241.408,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.2003862,
+      "cost_grader_usd_median": 0.3492176,
+      "cost_total_usd_median": 0.549604,
+      "priced_n": 1,
+      "tokens_total_median": 760546,
+      "spread_s": {
+        "p25": 241.408,
+        "p75": 241.408
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-test-driven-development",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 436.38149999999996,
+      "duration_n": 2,
+      "cost_subject_usd_median": 1.529822,
+      "cost_grader_usd_median": 0.93615375,
+      "cost_total_usd_median": 1.899893,
+      "priced_n": 1,
+      "tokens_total_median": 926411,
+      "spread_s": {
+        "p25": 226.415,
+        "p75": 646.348
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-test-driven-development",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 148.313,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2549576,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "tokens_total_median": 375920,
+      "spread_s": {
+        "p25": 148.313,
+        "p75": 148.313
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-test-driven-development",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 164.61,
+      "duration_n": 4,
+      "cost_subject_usd_median": 0.47791025,
+      "cost_grader_usd_median": 0.2736536,
+      "cost_total_usd_median": 0.636503,
+      "priced_n": 3,
+      "tokens_total_median": 564555.5,
+      "spread_s": {
+        "p25": 109.0545,
+        "p75": 327.6355
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "triggering-test-driven-development",
       "agent": "hermes",
       "credential": "openrouter_glm_5_2",
       "os": "linux",
@@ -3157,6 +4118,76 @@
       "spread_s": {
         "p25": 145.53050000000002,
         "p75": 301.19050000000004
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "triggering-writing-plans",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 93.001,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2045167,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 93.001,
+        "p75": 93.001
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-writing-plans",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 116.003,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.1568465,
+      "cost_grader_usd_median": 0.2795148,
+      "cost_total_usd_median": 0.436361,
+      "priced_n": 1,
+      "tokens_total_median": 134884,
+      "spread_s": {
+        "p25": 116.003,
+        "p75": 116.003
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-writing-plans",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 79.407,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2062752,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 79.407,
+        "p75": 79.407
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "triggering-writing-plans",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 85.9795,
+      "duration_n": 4,
+      "cost_subject_usd_median": 0.204557125,
+      "cost_grader_usd_median": 0.16269994999999998,
+      "cost_total_usd_median": 0.36604749999999997,
+      "priced_n": 2,
+      "tokens_total_median": 104888.5,
+      "spread_s": {
+        "p25": 66.99799999999999,
+        "p75": 112.36600000000001
       },
       "confidence": "medium"
     },
@@ -3720,6 +4751,77 @@
     },
     {
       "scenario": "verification-phantom-completion",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_luna",
+      "os": "linux",
+      "duration_s_median": 126.854,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.0826932,
+      "cost_grader_usd_median": 0.253795,
+      "cost_total_usd_median": 0.336488,
+      "priced_n": 1,
+      "tokens_total_median": 325017,
+      "spread_s": {
+        "p25": 126.854,
+        "p75": 126.854
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "verification-phantom-completion",
+      "agent": "copilot",
+      "credential": "copilot_gpt56_sol",
+      "os": "linux",
+      "duration_s_median": 209.442,
+      "duration_n": 1,
+      "cost_subject_usd_median": 0.793416,
+      "cost_grader_usd_median": 0.3142103,
+      "cost_total_usd_median": 1.107626,
+      "priced_n": 1,
+      "tokens_total_median": 575716,
+      "spread_s": {
+        "p25": 209.442,
+        "p75": 209.442
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "verification-phantom-completion",
+      "agent": "copilot",
+      "credential": "copilot_mai_flash",
+      "os": "linux",
+      "duration_s_median": 134.484,
+      "duration_n": 1,
+      "cost_subject_usd_median": null,
+      "cost_grader_usd_median": 0.2331683,
+      "cost_total_usd_median": null,
+      "priced_n": 0,
+      "spread_s": {
+        "p25": 134.484,
+        "p75": 134.484
+      },
+      "confidence": "low"
+    },
+    {
+      "scenario": "verification-phantom-completion",
+      "agent": "copilot",
+      "credential": "copilot_opus5",
+      "os": "linux",
+      "duration_s_median": 114.33600000000001,
+      "duration_n": 4,
+      "cost_subject_usd_median": 0.201649125,
+      "cost_grader_usd_median": 0.18962415,
+      "cost_total_usd_median": 0.3799,
+      "priced_n": 2,
+      "tokens_total_median": 206439,
+      "spread_s": {
+        "p25": 111.422,
+        "p75": 117.548
+      },
+      "confidence": "medium"
+    },
+    {
+      "scenario": "verification-phantom-completion",
       "agent": "pi",
       "credential": "pi_gpt56_sol",
       "os": "linux",
@@ -4258,6 +5360,22 @@
         "confidence": "medium"
       },
       {
+        "scenario": "00-quorum-smoke-hello-world",
+        "agent": "copilot",
+        "duration_s_median": 62.065,
+        "duration_n": 7,
+        "cost_subject_usd_median": 0.051912,
+        "cost_grader_usd_median": 0.0813001,
+        "cost_total_usd_median": 0.133212,
+        "priced_n": 3,
+        "tokens_total_median": 43683,
+        "spread_s": {
+          "p25": 0.862,
+          "p75": 77.868
+        },
+        "confidence": "medium"
+      },
+      {
         "scenario": "brainstorming-companion-just-in-time",
         "agent": "codex",
         "duration_s_median": 283.96,
@@ -4307,6 +5425,22 @@
       },
       {
         "scenario": "brainstorming-resists-jump-to-implementation",
+        "agent": "copilot",
+        "duration_s_median": 337.418,
+        "duration_n": 32,
+        "cost_subject_usd_median": 0.82164825,
+        "cost_grader_usd_median": 0.571483,
+        "cost_total_usd_median": 1.42481,
+        "priced_n": 30,
+        "tokens_total_median": 548450.5,
+        "spread_s": {
+          "p25": 290.7485,
+          "p75": 396.4655
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "brainstorming-resists-jump-to-implementation",
         "agent": "pi",
         "duration_s_median": 341.696,
         "duration_n": 3,
@@ -4350,6 +5484,22 @@
         "spread_s": {
           "p25": 165.319,
           "p75": 251.31
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "claim-without-verification-naive",
+        "agent": "copilot",
+        "duration_s_median": 136.781,
+        "duration_n": 6,
+        "cost_subject_usd_median": 0.2922165,
+        "cost_grader_usd_median": 0.23445855,
+        "cost_total_usd_median": 0.502192,
+        "priced_n": 1,
+        "tokens_total_median": 301536,
+        "spread_s": {
+          "p25": 130.452,
+          "p75": 141.589
         },
         "confidence": "medium"
       },
@@ -4451,6 +5601,22 @@
       },
       {
         "scenario": "cost-checkbox-over-trigger",
+        "agent": "copilot",
+        "duration_s_median": 166.573,
+        "duration_n": 9,
+        "cost_subject_usd_median": 0.4244505,
+        "cost_grader_usd_median": 0.2400296,
+        "cost_total_usd_median": 0.696661,
+        "priced_n": 3,
+        "tokens_total_median": 225422,
+        "spread_s": {
+          "p25": 142.709,
+          "p75": 254.01999999999998
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "cost-checkbox-over-trigger",
         "agent": "pi",
         "duration_s_median": 174.688,
         "duration_n": 3,
@@ -4526,6 +5692,22 @@
         "spread_s": {
           "p25": 420.862,
           "p75": 592.831
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "cost-spec-plan-duplication",
+        "agent": "copilot",
+        "duration_s_median": 565.3544999999999,
+        "duration_n": 44,
+        "cost_subject_usd_median": 2.0651122500000003,
+        "cost_grader_usd_median": 0.75522645,
+        "cost_total_usd_median": 2.86045,
+        "priced_n": 44,
+        "tokens_total_median": 979089.5,
+        "spread_s": {
+          "p25": 515.683,
+          "p75": 611.44
         },
         "confidence": "high"
       },
@@ -4658,6 +5840,22 @@
         "confidence": "high"
       },
       {
+        "scenario": "finishing-branch-untracked-plan-at-cleanup",
+        "agent": "copilot",
+        "duration_s_median": 177.039,
+        "duration_n": 26,
+        "cost_subject_usd_median": 0.360469125,
+        "cost_grader_usd_median": 0.23358489999999998,
+        "cost_total_usd_median": 0.6046875,
+        "priced_n": 26,
+        "tokens_total_median": 334411,
+        "spread_s": {
+          "p25": 158.151,
+          "p75": 203.264
+        },
+        "confidence": "high"
+      },
+      {
         "scenario": "finishing-branch-worktree-cleanup-on-merge",
         "agent": "claude",
         "duration_s_median": 170.3355,
@@ -4686,6 +5884,22 @@
         "spread_s": {
           "p25": 110.1875,
           "p75": 166.6325
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "finishing-branch-worktree-cleanup-on-merge",
+        "agent": "copilot",
+        "duration_s_median": 156.436,
+        "duration_n": 7,
+        "cost_subject_usd_median": 0.2182318,
+        "cost_grader_usd_median": 0.2106446,
+        "cost_total_usd_median": 0.527949,
+        "priced_n": 5,
+        "tokens_total_median": 465223,
+        "spread_s": {
+          "p25": 109.879,
+          "p75": 249.993
         },
         "confidence": "medium"
       },
@@ -4734,6 +5948,22 @@
         "spread_s": {
           "p25": 101.082,
           "p75": 206.678
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "global-tool-mapping-comprehension",
+        "agent": "copilot",
+        "duration_s_median": 99.66399999999999,
+        "duration_n": 6,
+        "cost_subject_usd_median": 0.1000425,
+        "cost_grader_usd_median": 0.20997505,
+        "cost_total_usd_median": 0.279006,
+        "priced_n": 3,
+        "tokens_total_median": 96730.5,
+        "spread_s": {
+          "p25": 91.037,
+          "p75": 145.575
         },
         "confidence": "medium"
       },
@@ -4835,6 +6065,22 @@
       },
       {
         "scenario": "receiving-code-review-pushback",
+        "agent": "copilot",
+        "duration_s_median": 170.95850000000002,
+        "duration_n": 6,
+        "cost_subject_usd_median": 0.2334535,
+        "cost_grader_usd_median": 0.19659505,
+        "cost_total_usd_median": 0.43004849999999994,
+        "priced_n": 2,
+        "tokens_total_median": 456486,
+        "spread_s": {
+          "p25": 161.387,
+          "p75": 200.391
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "receiving-code-review-pushback",
         "agent": "pi",
         "duration_s_median": 265.28,
         "duration_n": 3,
@@ -4915,6 +6161,22 @@
       },
       {
         "scenario": "sdd-breaker-rules-and-continues",
+        "agent": "copilot",
+        "duration_s_median": 551.5355,
+        "duration_n": 34,
+        "cost_subject_usd_median": 2.408745875,
+        "cost_grader_usd_median": 0.47889145,
+        "cost_total_usd_median": 3.1129205000000004,
+        "priced_n": 34,
+        "tokens_total_median": 1719489,
+        "spread_s": {
+          "p25": 452.988,
+          "p75": 669.243
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "sdd-breaker-rules-and-continues",
         "agent": "pi",
         "duration_s_median": 468.024,
         "duration_n": 3,
@@ -4958,6 +6220,22 @@
         "spread_s": {
           "p25": 383.41700000000003,
           "p75": 578.2465
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "sdd-breaker-structural-blocks",
+        "agent": "copilot",
+        "duration_s_median": 572.2135,
+        "duration_n": 18,
+        "cost_subject_usd_median": 2.54300675,
+        "cost_grader_usd_median": 0.5905532,
+        "cost_total_usd_median": 3.061686,
+        "priced_n": 16,
+        "tokens_total_median": 1832984.5,
+        "spread_s": {
+          "p25": 458.114,
+          "p75": 680.409
         },
         "confidence": "high"
       },
@@ -5022,6 +6300,22 @@
         "spread_s": {
           "p25": 550.1379999999999,
           "p75": 687.4545
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "sdd-escalates-broken-plan",
+        "agent": "copilot",
+        "duration_s_median": 769.1925,
+        "duration_n": 44,
+        "cost_subject_usd_median": 4.629490375,
+        "cost_grader_usd_median": 0.7135664500000001,
+        "cost_total_usd_median": 5.481565,
+        "priced_n": 42,
+        "tokens_total_median": 2891840,
+        "spread_s": {
+          "p25": 673.097,
+          "p75": 961.609
         },
         "confidence": "high"
       },
@@ -5106,6 +6400,21 @@
         "confidence": "low"
       },
       {
+        "scenario": "sdd-go-fractals-gpt55",
+        "agent": "copilot",
+        "duration_s_median": 1853.248,
+        "duration_n": 1,
+        "cost_subject_usd_median": null,
+        "cost_grader_usd_median": 0.9778869,
+        "cost_total_usd_median": null,
+        "priced_n": 0,
+        "spread_s": {
+          "p25": 1853.248,
+          "p75": 1853.248
+        },
+        "confidence": "low"
+      },
+      {
         "scenario": "sdd-go-fractals-opus48",
         "agent": "claude",
         "duration_s_median": 2480.9425,
@@ -5134,6 +6443,22 @@
         "spread_s": {
           "p25": 1303.26,
           "p75": 1762.665
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "sdd-go-fractals-opus48",
+        "agent": "copilot",
+        "duration_s_median": 2310.056,
+        "duration_n": 23,
+        "cost_subject_usd_median": 11.86113675,
+        "cost_grader_usd_median": 1.1131682,
+        "cost_total_usd_median": 12.8635625,
+        "priced_n": 20,
+        "tokens_total_median": 12080004,
+        "spread_s": {
+          "p25": 1542.073,
+          "p75": 3958.39
         },
         "confidence": "high"
       },
@@ -5474,6 +6799,22 @@
       },
       {
         "scenario": "superpowers-bootstrap",
+        "agent": "copilot",
+        "duration_s_median": 72.249,
+        "duration_n": 19,
+        "cost_subject_usd_median": 0.269342875,
+        "cost_grader_usd_median": 0.1917559,
+        "cost_total_usd_median": 0.4817965,
+        "priced_n": 8,
+        "tokens_total_median": 142974,
+        "spread_s": {
+          "p25": 5.7,
+          "p75": 90.526
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "superpowers-bootstrap",
         "agent": "hermes",
         "duration_s_median": 60.738,
         "duration_n": 4,
@@ -5650,6 +6991,22 @@
       },
       {
         "scenario": "triggering-finishing-a-development-branch",
+        "agent": "copilot",
+        "duration_s_median": 124.388,
+        "duration_n": 6,
+        "cost_subject_usd_median": 0.09387200000000001,
+        "cost_grader_usd_median": 0.2020894,
+        "cost_total_usd_median": 0.33567800000000003,
+        "priced_n": 4,
+        "tokens_total_median": 154089.5,
+        "spread_s": {
+          "p25": 96.111,
+          "p75": 156.015
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "triggering-finishing-a-development-branch",
         "agent": "hermes",
         "duration_s_median": 218.177,
         "duration_n": 1,
@@ -5778,6 +7135,22 @@
       },
       {
         "scenario": "triggering-test-driven-development",
+        "agent": "copilot",
+        "duration_s_median": 218.56099999999998,
+        "duration_n": 8,
+        "cost_subject_usd_median": 0.47791025,
+        "cost_grader_usd_median": 0.336324,
+        "cost_total_usd_median": 0.636503,
+        "priced_n": 5,
+        "tokens_total_median": 598653,
+        "spread_s": {
+          "p25": 133.413,
+          "p75": 342.986
+        },
+        "confidence": "high"
+      },
+      {
+        "scenario": "triggering-test-driven-development",
         "agent": "hermes",
         "duration_s_median": 58.573,
         "duration_n": 1,
@@ -5837,6 +7210,22 @@
         "spread_s": {
           "p25": 145.53050000000002,
           "p75": 301.19050000000004
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "triggering-writing-plans",
+        "agent": "copilot",
+        "duration_s_median": 93.001,
+        "duration_n": 7,
+        "cost_subject_usd_median": 0.1745575,
+        "cost_grader_usd_median": 0.2045167,
+        "cost_total_usd_median": 0.398542,
+        "priced_n": 3,
+        "tokens_total_median": 105191,
+        "spread_s": {
+          "p25": 74.782,
+          "p75": 116.003
         },
         "confidence": "medium"
       },
@@ -6098,6 +7487,22 @@
       },
       {
         "scenario": "verification-phantom-completion",
+        "agent": "copilot",
+        "duration_s_median": 119.035,
+        "duration_n": 7,
+        "cost_subject_usd_median": 0.201649125,
+        "cost_grader_usd_median": 0.2028255,
+        "cost_total_usd_median": 0.39017100000000005,
+        "priced_n": 4,
+        "tokens_total_median": 269744.5,
+        "spread_s": {
+          "p25": 112.611,
+          "p75": 134.484
+        },
+        "confidence": "medium"
+      },
+      {
+        "scenario": "verification-phantom-completion",
         "agent": "pi",
         "duration_s_median": 204.832,
         "duration_n": 3,
@@ -6340,18 +7745,18 @@
     "scenario": [
       {
         "scenario": "00-quorum-smoke-hello-world",
-        "duration_s_median": 77.819,
-        "duration_n": 7,
-        "cost_subject_usd_median": 0.1608025,
-        "cost_grader_usd_median": 0.13948665,
-        "cost_total_usd_median": 0.318438,
-        "priced_n": 3,
-        "tokens_total_median": 56216,
+        "duration_s_median": 66.95349999999999,
+        "duration_n": 14,
+        "cost_subject_usd_median": 0.0854725,
+        "cost_grader_usd_median": 0.0958738,
+        "cost_total_usd_median": 0.202743,
+        "priced_n": 6,
+        "tokens_total_median": 45128,
         "spread_s": {
-          "p25": 0.279,
-          "p75": 118.136
+          "p25": 0.503,
+          "p75": 78.3
         },
-        "confidence": "medium"
+        "confidence": "high"
       },
       {
         "scenario": "brainstorming-companion-just-in-time",
@@ -6370,31 +7775,31 @@
       },
       {
         "scenario": "brainstorming-resists-jump-to-implementation",
-        "duration_s_median": 390.666,
-        "duration_n": 48,
-        "cost_subject_usd_median": 0.41476,
-        "cost_grader_usd_median": 0.3693436,
-        "cost_total_usd_median": 0.830523,
-        "priced_n": 47,
-        "tokens_total_median": 346994.5,
+        "duration_s_median": 349.59450000000004,
+        "duration_n": 80,
+        "cost_subject_usd_median": 0.71904475,
+        "cost_grader_usd_median": 0.4419612,
+        "cost_total_usd_median": 1.193147,
+        "priced_n": 77,
+        "tokens_total_median": 446779,
         "spread_s": {
-          "p25": 270.132,
-          "p75": 457.6075
+          "p25": 282.74,
+          "p75": 429.51
         },
         "confidence": "high"
       },
       {
         "scenario": "claim-without-verification-naive",
-        "duration_s_median": 182.48899999999998,
-        "duration_n": 24,
-        "cost_subject_usd_median": 0.49298075,
-        "cost_grader_usd_median": 0.1656055,
-        "cost_total_usd_median": 0.687482,
-        "priced_n": 23,
-        "tokens_total_median": 471831,
+        "duration_s_median": 177.405,
+        "duration_n": 30,
+        "cost_subject_usd_median": 0.47916162500000004,
+        "cost_grader_usd_median": 0.18018005,
+        "cost_total_usd_median": 0.6630024999999999,
+        "priced_n": 24,
+        "tokens_total_median": 465715,
         "spread_s": {
-          "p25": 170.0235,
-          "p75": 220.8885
+          "p25": 141.589,
+          "p75": 217.267
         },
         "confidence": "high"
       },
@@ -6445,16 +7850,16 @@
       },
       {
         "scenario": "cost-checkbox-over-trigger",
-        "duration_s_median": 165.90800000000002,
-        "duration_n": 24,
-        "cost_subject_usd_median": 0.303071,
-        "cost_grader_usd_median": 0.20964095,
-        "cost_total_usd_median": 0.509111,
-        "priced_n": 23,
-        "tokens_total_median": 222943.5,
+        "duration_s_median": 166.573,
+        "duration_n": 33,
+        "cost_subject_usd_median": 0.30659125,
+        "cost_grader_usd_median": 0.2167378,
+        "cost_total_usd_median": 0.515876,
+        "priced_n": 26,
+        "tokens_total_median": 225422,
         "spread_s": {
           "p25": 139.6095,
-          "p75": 202.221
+          "p75": 237.28300000000002
         },
         "confidence": "high"
       },
@@ -6490,15 +7895,15 @@
       },
       {
         "scenario": "cost-spec-plan-duplication",
-        "duration_s_median": 495.67600000000004,
-        "duration_n": 62,
-        "cost_subject_usd_median": 0.8494135,
-        "cost_grader_usd_median": 0.38263715,
-        "cost_total_usd_median": 1.234387,
-        "priced_n": 61,
-        "tokens_total_median": 603873.5,
+        "duration_s_median": 537.501,
+        "duration_n": 106,
+        "cost_subject_usd_median": 1.0280145,
+        "cost_grader_usd_median": 0.52456585,
+        "cost_total_usd_median": 1.591107,
+        "priced_n": 105,
+        "tokens_total_median": 697888,
         "spread_s": {
-          "p25": 425.886,
+          "p25": 449.005,
           "p75": 612.012
         },
         "confidence": "high"
@@ -6580,46 +7985,46 @@
       },
       {
         "scenario": "finishing-branch-untracked-plan-at-cleanup",
-        "duration_s_median": 208.055,
-        "duration_n": 36,
-        "cost_subject_usd_median": 0.28181100000000003,
-        "cost_grader_usd_median": 0.2209461,
-        "cost_total_usd_median": 0.4985975,
-        "priced_n": 36,
-        "tokens_total_median": 230353.5,
+        "duration_s_median": 185.495,
+        "duration_n": 62,
+        "cost_subject_usd_median": 0.338235125,
+        "cost_grader_usd_median": 0.2266206,
+        "cost_total_usd_median": 0.5633155,
+        "priced_n": 62,
+        "tokens_total_median": 277088,
         "spread_s": {
-          "p25": 177.284,
-          "p75": 258.055
+          "p25": 165.058,
+          "p75": 234.85
         },
         "confidence": "high"
       },
       {
         "scenario": "finishing-branch-worktree-cleanup-on-merge",
-        "duration_s_median": 158.34449999999998,
-        "duration_n": 24,
-        "cost_subject_usd_median": 0.4568285,
-        "cost_grader_usd_median": 0.1631291,
-        "cost_total_usd_median": 0.607101,
-        "priced_n": 23,
-        "tokens_total_median": 381265.5,
+        "duration_s_median": 156.436,
+        "duration_n": 31,
+        "cost_subject_usd_median": 0.428238125,
+        "cost_grader_usd_median": 0.1734001,
+        "cost_total_usd_median": 0.599657,
+        "priced_n": 28,
+        "tokens_total_median": 413734.5,
         "spread_s": {
-          "p25": 128.1225,
-          "p75": 183.61450000000002
+          "p25": 127.043,
+          "p75": 186.232
         },
         "confidence": "high"
       },
       {
         "scenario": "global-tool-mapping-comprehension",
-        "duration_s_median": 154.14600000000002,
-        "duration_n": 24,
-        "cost_subject_usd_median": 0.30819375,
-        "cost_grader_usd_median": 0.2313504,
-        "cost_total_usd_median": 0.498075,
-        "priced_n": 23,
-        "tokens_total_median": 118303.5,
+        "duration_s_median": 146.793,
+        "duration_n": 30,
+        "cost_subject_usd_median": 0.281744875,
+        "cost_grader_usd_median": 0.222906,
+        "cost_total_usd_median": 0.488425,
+        "priced_n": 26,
+        "tokens_total_median": 110610,
         "spread_s": {
-          "p25": 115.8,
-          "p75": 235.63150000000002
+          "p25": 110.207,
+          "p75": 220.765
         },
         "confidence": "high"
       },
@@ -6655,16 +8060,16 @@
       },
       {
         "scenario": "receiving-code-review-pushback",
-        "duration_s_median": 308.166,
-        "duration_n": 24,
-        "cost_subject_usd_median": 0.6756215,
-        "cost_grader_usd_median": 0.22211714999999999,
-        "cost_total_usd_median": 0.910409,
-        "priced_n": 23,
-        "tokens_total_median": 677804,
+        "duration_s_median": 299.479,
+        "duration_n": 30,
+        "cost_subject_usd_median": 0.6647945,
+        "cost_grader_usd_median": 0.2118372,
+        "cost_total_usd_median": 0.882374,
+        "priced_n": 25,
+        "tokens_total_median": 657869,
         "spread_s": {
-          "p25": 277.78099999999995,
-          "p75": 381.28549999999996
+          "p25": 242.107,
+          "p75": 377.342
         },
         "confidence": "high"
       },
@@ -6685,31 +8090,31 @@
       },
       {
         "scenario": "sdd-breaker-rules-and-continues",
-        "duration_s_median": 528.2070000000001,
-        "duration_n": 86,
-        "cost_subject_usd_median": 1.57224915,
-        "cost_grader_usd_median": 0.34181195,
-        "cost_total_usd_median": 1.9165174999999999,
-        "priced_n": 86,
-        "tokens_total_median": 1704029,
+        "duration_s_median": 540.1265000000001,
+        "duration_n": 120,
+        "cost_subject_usd_median": 1.8656796,
+        "cost_grader_usd_median": 0.37837335000000005,
+        "cost_total_usd_median": 2.2085585,
+        "priced_n": 120,
+        "tokens_total_median": 1719489,
         "spread_s": {
-          "p25": 463.018,
-          "p75": 753.657
+          "p25": 462.8265,
+          "p75": 708.8430000000001
         },
         "confidence": "high"
       },
       {
         "scenario": "sdd-breaker-structural-blocks",
-        "duration_s_median": 481.1325,
-        "duration_n": 26,
-        "cost_subject_usd_median": 1.53731885,
-        "cost_grader_usd_median": 0.3235327,
-        "cost_total_usd_median": 1.825106,
-        "priced_n": 26,
-        "tokens_total_median": 1658947.5,
+        "duration_s_median": 506.39300000000003,
+        "duration_n": 44,
+        "cost_subject_usd_median": 1.73662785,
+        "cost_grader_usd_median": 0.38482505,
+        "cost_total_usd_median": 2.03716,
+        "priced_n": 42,
+        "tokens_total_median": 1691662.5,
         "spread_s": {
-          "p25": 384.297,
-          "p75": 637.193
+          "p25": 384.4905,
+          "p75": 644.021
         },
         "confidence": "high"
       },
@@ -6745,16 +8150,16 @@
       },
       {
         "scenario": "sdd-escalates-broken-plan",
-        "duration_s_median": 653.295,
-        "duration_n": 71,
-        "cost_subject_usd_median": 2.159211075,
-        "cost_grader_usd_median": 0.3643339,
-        "cost_total_usd_median": 2.508572,
-        "priced_n": 69,
-        "tokens_total_median": 2768351,
+        "duration_s_median": 686.525,
+        "duration_n": 115,
+        "cost_subject_usd_median": 2.634370675,
+        "cost_grader_usd_median": 0.4305497,
+        "cost_total_usd_median": 2.999763,
+        "priced_n": 111,
+        "tokens_total_median": 2834653,
         "spread_s": {
-          "p25": 577.064,
-          "p75": 763.322
+          "p25": 585.697,
+          "p75": 857.417
         },
         "confidence": "high"
       },
@@ -6805,31 +8210,31 @@
       },
       {
         "scenario": "sdd-go-fractals-gpt55",
-        "duration_s_median": 1722.4985,
-        "duration_n": 2,
+        "duration_s_median": 1769.466,
+        "duration_n": 3,
         "cost_subject_usd_median": 13.275714,
-        "cost_grader_usd_median": 0.5508058499999999,
+        "cost_grader_usd_median": 0.5859327,
         "cost_total_usd_median": null,
         "priced_n": 0,
         "tokens_total_median": 7585134.5,
         "spread_s": {
           "p25": 1675.531,
-          "p75": 1769.466
+          "p75": 1853.248
         },
-        "confidence": "low"
+        "confidence": "medium"
       },
       {
         "scenario": "sdd-go-fractals-opus48",
-        "duration_s_median": 1498.782,
-        "duration_n": 42,
-        "cost_subject_usd_median": 7.04421855,
-        "cost_grader_usd_median": 0.65174385,
-        "cost_total_usd_median": 7.4277940000000005,
-        "priced_n": 40,
-        "tokens_total_median": 10211358.5,
+        "duration_s_median": 1746.737,
+        "duration_n": 65,
+        "cost_subject_usd_median": 7.7605105,
+        "cost_grader_usd_median": 0.7582625,
+        "cost_total_usd_median": 8.431001,
+        "priced_n": 60,
+        "tokens_total_median": 10455167.5,
         "spread_s": {
-          "p25": 1317.184,
-          "p75": 2176.879
+          "p25": 1350.435,
+          "p75": 3687.7290000000003
         },
         "confidence": "high"
       },
@@ -7060,16 +8465,16 @@
       },
       {
         "scenario": "superpowers-bootstrap",
-        "duration_s_median": 112.44149999999999,
-        "duration_n": 38,
-        "cost_subject_usd_median": 0.247035,
-        "cost_grader_usd_median": 0.1563493,
-        "cost_total_usd_median": 0.41277600000000003,
-        "priced_n": 34,
-        "tokens_total_median": 135068,
+        "duration_s_median": 104.983,
+        "duration_n": 57,
+        "cost_subject_usd_median": 0.25397325,
+        "cost_grader_usd_median": 0.1628707,
+        "cost_total_usd_median": 0.4268285,
+        "priced_n": 42,
+        "tokens_total_median": 135282,
         "spread_s": {
-          "p25": 100.18,
-          "p75": 124.745
+          "p25": 68.2705,
+          "p75": 120.803
         },
         "confidence": "high"
       },
@@ -7150,16 +8555,16 @@
       },
       {
         "scenario": "triggering-finishing-a-development-branch",
-        "duration_s_median": 160.093,
-        "duration_n": 29,
-        "cost_subject_usd_median": 0.35719650000000003,
-        "cost_grader_usd_median": 0.1921275,
-        "cost_total_usd_median": 0.5496515,
-        "priced_n": 28,
-        "tokens_total_median": 275933,
+        "duration_s_median": 155.022,
+        "duration_n": 35,
+        "cost_subject_usd_median": 0.35092500000000004,
+        "cost_grader_usd_median": 0.1993041,
+        "cost_total_usd_median": 0.536706,
+        "priced_n": 32,
+        "tokens_total_median": 269410,
         "spread_s": {
-          "p25": 135.924,
-          "p75": 176.59199999999998
+          "p25": 129.386,
+          "p75": 175.024
         },
         "confidence": "high"
       },
@@ -7195,31 +8600,31 @@
       },
       {
         "scenario": "triggering-test-driven-development",
-        "duration_s_median": 196.233,
-        "duration_n": 29,
-        "cost_subject_usd_median": 0.498318175,
-        "cost_grader_usd_median": 0.1614908,
-        "cost_total_usd_median": 0.690348,
-        "priced_n": 28,
-        "tokens_total_median": 517432,
+        "duration_s_median": 196.375,
+        "duration_n": 37,
+        "cost_subject_usd_median": 0.47791025,
+        "cost_grader_usd_median": 0.1689157,
+        "cost_total_usd_median": 0.636503,
+        "priced_n": 33,
+        "tokens_total_median": 564555.5,
         "spread_s": {
-          "p25": 172.409,
-          "p75": 241.824
+          "p25": 165.674,
+          "p75": 248.17149999999998
         },
         "confidence": "high"
       },
       {
         "scenario": "triggering-writing-plans",
-        "duration_s_median": 215.89,
-        "duration_n": 28,
-        "cost_subject_usd_median": 0.5336925,
-        "cost_grader_usd_median": 0.21515964999999998,
-        "cost_total_usd_median": 0.764676,
-        "priced_n": 27,
-        "tokens_total_median": 256220,
+        "duration_s_median": 202.845,
+        "duration_n": 35,
+        "cost_subject_usd_median": 0.522691875,
+        "cost_grader_usd_median": 0.2091608,
+        "cost_total_usd_median": 0.7188085,
+        "priced_n": 30,
+        "tokens_total_median": 227862,
         "spread_s": {
-          "p25": 168.0165,
-          "p75": 278.2075
+          "p25": 125.198,
+          "p75": 234.786
         },
         "confidence": "high"
       },
@@ -7405,16 +8810,16 @@
       },
       {
         "scenario": "verification-phantom-completion",
-        "duration_s_median": 184.615,
-        "duration_n": 28,
-        "cost_subject_usd_median": 0.46608425,
-        "cost_grader_usd_median": 0.17054085,
-        "cost_total_usd_median": 0.642318,
-        "priced_n": 27,
-        "tokens_total_median": 423777.5,
+        "duration_s_median": 180.106,
+        "duration_n": 35,
+        "cost_subject_usd_median": 0.448259,
+        "cost_grader_usd_median": 0.1726068,
+        "cost_total_usd_median": 0.636428,
+        "priced_n": 31,
+        "tokens_total_median": 416259,
         "spread_s": {
-          "p25": 169.11950000000002,
-          "p75": 203.5475
+          "p25": 155.683,
+          "p75": 202.263
         },
         "confidence": "high"
       },
@@ -7600,9 +9005,9 @@
       }
     ],
     "corpus_median": {
-      "duration_s": 303.989,
-      "cost_total_usd": 0.838554,
-      "tokens_total_median": 539101
+      "duration_s": 323.376,
+      "cost_total_usd": 1.0877155,
+      "tokens_total_median": 622582
     }
   }
 }
