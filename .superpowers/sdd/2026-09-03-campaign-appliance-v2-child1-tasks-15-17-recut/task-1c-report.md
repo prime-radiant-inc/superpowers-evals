@@ -306,7 +306,10 @@ host connections.
   `stdout.log`/`stderr.log` files and any files under the run's
   `gauntlet-agent/results` tree into the fixture temp directory before
   teardown. It appends bounded tails to assertion failures, and a failure in
-  the diagnostic collector itself is rendered without bypassing cleanup.
+  the diagnostic collector itself is rendered without bypassing cleanup. On
+  an early campaign failure it also enumerates campaign-labeled retained
+  containers into the exact-ID cleanup set before teardown; Docker enumeration
+  failures are surfaced while provider and filesystem cleanup still runs.
 - All five gated integration tests now use an explicit `180_000` ms timeout.
 - `synthetic-checkout.ts` removes the local-only absolute `node_modules` link
   and runs `bun install --frozen-lockfile` in the synthetic copy. The generated

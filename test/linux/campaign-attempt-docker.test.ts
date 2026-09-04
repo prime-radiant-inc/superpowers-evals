@@ -1090,6 +1090,15 @@ function captureFailureDiagnostics(fixture: DockerFixture): string {
   }
 }
 
+function captureRetainedContainers(fixture: DockerFixture): string | undefined {
+  try {
+    fixture.captureContainers(containerIdsForCampaign(fixture.campaignId));
+    return undefined;
+  } catch (error) {
+    return `retained-container enumeration failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 function enrichFailure(error: unknown, diagnostics: string): Error {
   const message = `${error instanceof Error ? error.message : String(error)}\n\n${diagnostics}`;
   if (error instanceof Error) {
@@ -1115,7 +1124,9 @@ async function withFailureDiagnostics<T>(
   }
 
   const diagnostics = actionFailed
-    ? captureFailureDiagnostics(fixture)
+    ? [captureRetainedContainers(fixture), captureFailureDiagnostics(fixture)]
+        .filter((line): line is string => line !== undefined)
+        .join('\n')
     : undefined;
   let cleanupError: unknown;
   try {
