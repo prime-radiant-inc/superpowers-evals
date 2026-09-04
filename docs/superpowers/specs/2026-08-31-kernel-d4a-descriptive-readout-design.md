@@ -1,6 +1,8 @@
 # Kernel Deliverable 4a — Descriptive Readout (seal act + report engine): Design
 
-**Date:** 2026-08-31 (revision 2, post round-1 four-seat review)
+**Date:** 2026-08-31 (revision 3, 2026-09-04: post-implementation scope
+amendment per PAR revision 3 — the revision-2 implementation stamp is
+untouched)
 **Status:** implemented (main @ `3cbb8d6`; exit runs recorded in
 `docs/experiments/2026-08-31-kernel-d4a-implementation-validation.md`)
 **Review record:** `docs/experiments/2026-08-31-kernel-d4a-spec-review.md`
@@ -87,6 +89,20 @@ bar (Decision D-5).
   exploratory campaigns fastest; it is NOT a shortcut to qualification (D-7).
   The parent named deliverable 4 as one unit; the split is recorded here per
   the program's sequencing convention (cf. the `budget_raise` deferral, D3PR).
+
+  Amendment (revision 3, 2026-09-04, per PAR revision 3): D4b trims to
+  the decision core — the gating seal path (gating campaigns seal as
+  exploratory ones do; the D4a refusal is deleted), a fold branch
+  computing the pre-registered grid (Fisher, floors, MDE, the tripwire
+  table), tripwire ruling as one append-only journal event with a
+  journaled superseding re-render, and the `campaign list`/`status`
+  verbs. Cut as speculative: the general supersedes/errata apparatus (no
+  errata event has ever occurred; corrections land in the experiment
+  log), tags/declared-metrics aggregation (no consumer; D-9's deferred
+  report section is deleted, not landed), and the second live Fisher
+  implementation (independently generated golden tables carry the
+  cross-check). The verdict remains a computed readout; it binds no
+  release (PAR revision 3).
 
 - **D-2 — All statistics defer to D4b.** Ratified (Drew, 2026-08-31). D4a
   renders rates and signed deltas only; per-cell Fisher exact (PAR §"Report
@@ -470,6 +486,11 @@ items), and the D3 spec status stamp. Item 1 closes via exit run 2 (D-5).
 
 ## Hand-off to D4b
 
+**Trimmed (revision 3, 2026-09-04):** the enumeration below is the
+pre-reframe hand-off, kept as the record. What D4b actually ships is the
+decision core listed in D-1's revision-3 amendment; the errata chain,
+tags/declared-metrics, and the `budget_raise` surface do not transfer.
+
 D4b (`release_gate_v1` — a separate spec) plugs into seams D4a establishes:
 
 - **Profile dispatch seam** in the report fold: the descriptive branch is one
@@ -507,3 +528,7 @@ D4b (`release_gate_v1` — a separate spec) plugs into seams D4a establishes:
   profile/single-arm rendering); tags/deferred via D-9; minors fixed
   (per-host byte-stability wording, 20+1 event attribution, CLI citations,
   "matched determinate cells" vocabulary).
+- **Revision 3** (2026-09-04): post-implementation scope amendment per PAR
+  revision 3 — D4b trimmed to the decision core (D-1 amendment, §Hand-off
+  trim note); release-binding framing retired. No change to what D4a built
+  or to the revision-2 implementation stamp.

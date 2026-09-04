@@ -1,11 +1,28 @@
 # Quorum campaign platform: comparative evals as configuration
 
-**Date:** 2026-08-17 (revision 2, same day)
+**Date:** 2026-08-17 (revision 3, 2026-09-04)
 **Status:** APPROVED (Drew, 2026-08-17) — the governing plan for
 PRI-2874. Revision 2 incorporates the seven-seat, two-round adversarial
 review of revision 1 (record:
 `docs/experiments/2026-08-17-platform-spec-adversarial-review.md`; zero
 convergent findings vetoed, all folded in) plus two verification passes.
+**Revision 3 (2026-09-04, Drew)** retires the release-binding framing.
+Nothing the platform emits binds a release: a decision profile's verdict
+is a pre-registered, machine-computed readout, and the release decision
+stays a human call over that evidence — as it has been for every release
+to date, the 2026-08-09 gate included ("this gate is one input",
+`docs/experiments/2026-08-09-fresh-release-gate-readout.md`). The
+**qualification campaign is retired as a formal prerequisite**: the
+engine reliability it existed to buy has since been demonstrated by use
+(two sealed live campaigns, 286 runs, zero instrument failures,
+2026-09-02/03), and the 2026-08-09 hand readout from the immutable run
+dirs proved the downside of a platform hole is bounded at re-analysis
+cost. Its one genuinely unexercised surface — skew exclusion and reserve
+draw under a gating profile — is accepted as known risk: the first
+gating campaign starts small as ordinary practice, not as a program
+gate, and a discredited gate now costs a re-run, never a wrong release,
+because no verdict binds one. Contract and profile identifiers
+(`release_gate_v1`, SHIP/NO-SHIP) are code-facing names and unchanged.
 **Tracking:** PRI-2874 (umbrella; child stubs PRI-2875/PRI-2876 to be
 re-scoped at kernel-build kickoff)
 **Supersedes:** `2026-08-12-quorum-overhaul-program-design.md` — see
@@ -287,6 +304,9 @@ this is the one required runner change, `src/cli/run-command.ts` /
   inline-CORRECTION convention, mechanized. (The last two published
   corrections were instrument blindness, not arithmetic; sealing does not
   retire that class, so the platform must accommodate honest correction.)
+  Revision 3: the principle stands; the general mechanism is built on
+  first need, not before. The only sanctioned supersede path in v1 is
+  D4b's single-purpose tripwire-ruling re-render.
 
 ### Checks: adopting smevals' check-result extensions
 
@@ -324,6 +344,12 @@ campaign-time extension. (The adversarial review was unanimous here: a
 closed grammar rich enough for the real gate is a statistics package
 authored in YAML, which is how hand-computed statistics return.)
 
+**Framing (revision 3):** the verdict a profile emits is a computed,
+pre-registered readout — it binds nothing. A human reads the report and
+decides; the profile exists so the evidence under that judgment is
+tamper-evident and cheap to re-check. SHIP/NO-SHIP name readout values,
+not platform acts.
+
 v1 ships two profiles:
 
 - **`release_gate_v1`** — scope: a campaign of two-arm comparisons.
@@ -339,7 +365,8 @@ v1 ships two profiles:
   (never silently false). **The profile mints `investigate` at seal**: a
   fired tripwire seals the campaign with the verdict
   UNDERPOWERED-or-INVESTIGATE; SHIP can appear only in a superseding
-  report (the erratum/supersedes chain) after a recorded append-only
+  report (a journaled superseding re-render, not a general errata
+  apparatus — revision 3) after a recorded append-only
   **adjudication entry** — a journal event distinct from amendments —
   resolves the fire. The human step is visible in the journal, never
   laundered, and never blocks sealing. The sealed verdict is
@@ -438,8 +465,8 @@ never same-moment and is not claimed.
   global concurrency are registered; a resource-floor preflight gates
   launch; campaign-level CPU/mem/swap/PID/disk telemetry is recorded with
   declared invalidation thresholds. Per-run cgroup classes return only if
-  qualification shows contention-induced drift or a campaign studies
-  resources deliberately.
+  a campaign shows contention-induced drift or a campaign studies
+  resources deliberately (revision 3: was "if qualification shows...").
 - Cancellation (SIGINT/SIGTERM/SIGHUP) kills the process group, marks
   in-flight blocks aborted; `campaign run` is the idempotent resume verb
   and reruns them whole.
@@ -483,8 +510,9 @@ machine; registration builds in a staging dir and publishes
 `quorum campaign report` reads the journal **plus the referenced
 immutable run dirs** and is deterministic over those inputs (per-host
 byte-stability; golden-oracle tests over synthetic journal + run-dir
-fixtures; the Fisher implementation cross-checked against an independent
-implementation; rounding and key order specified in Appendix B). The
+fixtures; the Fisher implementation checked against independently
+generated golden tables — no second live implementation (revision 3);
+rounding and key order specified in Appendix B). The
 descriptive vocabulary is fixed and closed:
 
 1. Per-comparison pass-rate deltas — per-cell Fisher exact (two-sided)
@@ -584,22 +612,30 @@ predicted makespans and per-pool critical paths as a checked-in
 experiment entry. Phase 0 also emits the **estimate artifact** (per
 scenario×agent durations and costs, with a refresh rule) that
 registration consumes, and informs the skew bound's achievable floor.
-What simulation cannot prove is validated live by the qualification
-campaign and the first real gate.
+What simulation cannot prove is validated live by the first real gate
+(revision 3: the qualification campaign is retired).
 
 ## Qualification before the first gate
 
-Between kernel completion and the first release-blocking 388-sample
-gate, a **bounded qualification campaign** (~⅓ gate scale, registered
-like any gating campaign but not release-binding) exercises every arm
-kind (ref, `none`), every credential/pool including the grader, the
-slow-cell families, replacement and reserve draw, skew measurement and
-exclusion, model readback, the contention guard, provider 429 handling,
-cancellation, and crash-resume — and must clear the <5% indeterminate
-bar and the planted-negative proofs. It does not prove the 8-hour
-makespan (the 388 is that proof); it proves the instrument is safe
-enough to buy the 388. The $650 discredited gate followed by the $850
-re-gate is the receipt for exactly this sequencing.
+**Retired (revision 3, 2026-09-04) — rationale in the status block.**
+The qualification campaign is no longer a prerequisite to the first
+gating campaign; the first gating campaign simply starts small. The
+original requirement is kept below as the record of the reasoning that
+produced it — its motivating receipt (a discredited $650 gate, an $850
+re-gate) remains the argument for pre-registration and fail-closed
+evidence, both of which revision 3 keeps.
+
+> Between kernel completion and the first release-blocking 388-sample
+> gate, a **bounded qualification campaign** (~⅓ gate scale, registered
+> like any gating campaign but not release-binding) exercises every arm
+> kind (ref, `none`), every credential/pool including the grader, the
+> slow-cell families, replacement and reserve draw, skew measurement and
+> exclusion, model readback, the contention guard, provider 429 handling,
+> cancellation, and crash-resume — and must clear the <5% indeterminate
+> bar and the planted-negative proofs. It does not prove the 8-hour
+> makespan (the 388 is that proof); it proves the instrument is safe
+> enough to buy the 388. The $650 discredited gate followed by the $850
+> re-gate is the receipt for exactly this sequencing.
 
 ## Coexistence and sequencing
 
@@ -641,8 +677,9 @@ decided after Phase 0 and the first gate, from measurements.
    typed-failure scope): contracts appendix schemas → provisioning +
    instrument snapshot → dispatcher + journal + locks → profiles + report
    engine. TDD throughout.
-4. **Qualification campaign**, then the **first registered gating
-   campaign** — the live validation and first ≤8h attempt.
+4. The **first registered gating campaign** — the live validation and
+   first ≤8h attempt, starting small (revision 3: the qualification
+   prerequisite is retired).
 5. The **ranked backlog**, gated on **kernel shipped + first campaign
    sealed** (not the ≤8h pass — the daily-driver lane needs the
    dispatcher, not the throughput proof): scrub-at-capture + long-lived
