@@ -1,0 +1,46 @@
+# Multiharness signature — a descriptive readout of codex, kimi, and pi against
+# a claude baseline on superpowers main: the sentinel tier at n=3 (the cheap
+# cells, where sample size buys resolution) plus the workhorse SDD cell at n=3.
+# Exploratory on purpose: a signature sketch, not a gate. Each harness rides an
+# api-key credential present in the appliance's blessed bundle (the local
+# OAuth/subscription defaults cannot run there): codex on
+# openai_responses_56sol, kimi on kimi_k3, pi on pi_gpt56_sol, baseline claude
+# on opus5_bedrock (Mantle). The grader rides sonnet5_bedrock so the grading
+# instrument matches the 2026-09-02 opus5_signature corpus and sits in its own
+# pool. The budget is a runaway tripwire (~3x the expected spend), not a
+# constraint the campaign should ever meet; budget_raise exists if it binds.
+schema_version: 1
+name: multiharness_signature
+kind: exploratory
+budget_usd: 1000
+grader:
+  credential: sonnet5_bedrock
+  model: anthropic.claude-sonnet-5
+comparisons:
+  - baseline: claude_opus5_bedrock_main
+    treatment: codex_gpt56sol_openai_main
+    scenarios: tier=sentinel
+    n: 3
+  - baseline: claude_opus5_bedrock_main
+    treatment: kimi_k3_main
+    scenarios: tier=sentinel
+    n: 3
+  - baseline: claude_opus5_bedrock_main
+    treatment: pi_gpt56sol_openai_main
+    scenarios: tier=sentinel
+    n: 3
+  - baseline: claude_opus5_bedrock_main
+    treatment: codex_gpt56sol_openai_main
+    scenarios:
+      - sdd-breaker-rules-and-continues
+    n: 3
+  - baseline: claude_opus5_bedrock_main
+    treatment: kimi_k3_main
+    scenarios:
+      - sdd-breaker-rules-and-continues
+    n: 3
+  - baseline: claude_opus5_bedrock_main
+    treatment: pi_gpt56sol_openai_main
+    scenarios:
+      - sdd-breaker-rules-and-continues
+    n: 3

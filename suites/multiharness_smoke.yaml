@@ -1,0 +1,29 @@
+# Multiharness smoke — one cheap sentinel cell (superpowers-bootstrap) per
+# pairwise comparison, n=1. This is the multiharness de-risk gate: the campaign
+# platform sealed 136/136 on claude (2026-09-02, launch 417f45dd), but no
+# campaign has ever dispatched codex, kimi, or pi subjects. Six runs prove
+# per-harness provisioning, credential projection, grading, and pricing through
+# the campaign path before the full grid spends. Exploratory (no reserves).
+schema_version: 1
+name: multiharness_smoke
+kind: exploratory
+budget_usd: 50
+grader:
+  credential: sonnet5_bedrock
+  model: anthropic.claude-sonnet-5
+comparisons:
+  - baseline: claude_opus5_bedrock_main
+    treatment: codex_gpt56sol_openai_main
+    scenarios:
+      - superpowers-bootstrap
+    n: 1
+  - baseline: claude_opus5_bedrock_main
+    treatment: kimi_k3_main
+    scenarios:
+      - superpowers-bootstrap
+    n: 1
+  - baseline: claude_opus5_bedrock_main
+    treatment: pi_gpt56sol_openai_main
+    scenarios:
+      - superpowers-bootstrap
+    n: 1
