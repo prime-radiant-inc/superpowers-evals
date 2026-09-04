@@ -401,6 +401,16 @@ let SUPERPOWERS_CAPABILITY: Readonly<Record<string, SuperpowersCapability>> = {
   //   00-quorum-smoke-hello-world-pi-pi_gpt56_sol-linux-20260904T032231Z-2758
   //   (pass; null rev).
   pi: { ref: true, none: true },
+  // copilot (copilot_default = claude-opus-5 via api.githubcopilot.com):
+  // flipped 2026-09-04 by the two-mode 00-quorum-smoke-hello-world smoke on
+  // quorum-appliance at evals c89d6e2b / superpowers b36e0829 (v6.3.0) /
+  // gauntlet fb34bcd. ref
+  //   00-quorum-smoke-hello-world-copilot-copilot_default-linux-20260904T164429Z-5009
+  //   (pass; plugins/superpowers staged under .copilot; provenance
+  //   superpowers_resolved_sha b36e0829), none
+  //   00-quorum-smoke-hello-world-copilot-copilot_default-linux-20260904T165452Z-84d7
+  //   (pass; no plugins dir staged; verdict provenance superpowers_rev null).
+  copilot: { ref: true, none: true },
 };
 
 /** Registry lookup keyed by `runtime_family ?? name` exactly as resolveAgent()

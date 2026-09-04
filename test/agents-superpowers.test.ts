@@ -192,6 +192,11 @@ test('superpowersCapability: codex/kimi/pi flagged by the 2026-09-04 multiharnes
   expect(superpowersCapability('pi')).toEqual({ ref: true, none: true });
 });
 
+test('superpowersCapability: copilot flagged by the 2026-09-04 two-mode smoke', () => {
+  // Evidence runs are recorded on the registry entry in src/agents/index.ts.
+  expect(superpowersCapability('copilot')).toEqual({ ref: true, none: true });
+});
+
 test('superpowersCapability: keyed by runtime_family ?? name', () => {
   // Seed one entry so key selection is OBSERVABLE: when both candidate keys
   // are undeclared both arms return the identical default-deny value, so an
