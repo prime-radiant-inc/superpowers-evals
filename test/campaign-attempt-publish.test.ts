@@ -471,14 +471,19 @@ test('V2 publication authenticates full identity and returns immutable byte refe
     stopped,
     resultsRoot: paths.resultsRoot,
   });
+  for (const ref of published.artifacts) {
+    const bytes = readFileSync(join(paths.resultsRoot, ref.path));
+    expect(bytes.length).toBe(ref.bytes);
+    expect(sha(bytes.toString())).toBe(ref.sha256);
+  }
   expect(published.runId).toBe('run-v2');
   expect(published.artifacts).toContainEqual({
-    path: 'results/run-v2/verdict.json',
+    path: 'run-v2/verdict.json',
     sha256: sha('{"final":"pass"}\n'),
     bytes: 17,
   });
   expect(
-    published.artifacts.some((a) => a.path === 'results/run-v2/manifest.json'),
+    published.artifacts.some((a) => a.path === 'run-v2/manifest.json'),
   ).toBe(true);
   clean(paths);
 });

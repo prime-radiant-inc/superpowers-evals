@@ -322,7 +322,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
 }
 
 /** V2 publication consumes runtime-produced death proof and authenticates every
- * campaign identity field before returning immutable campaign-relative refs. */
+ * campaign identity field before returning immutable results-root-relative refs. */
 export function publishExecution(args: {
   bound: BoundExecution;
   stopped: VerifiedStopped;
@@ -366,12 +366,12 @@ export function publishExecution(args: {
     ...published,
     artifacts: [
       ...manifest.files.map((file) => ({
-        path: `results/${runId}/${file.path}`,
+        path: `${runId}/${file.path}`,
         sha256: file.sha256,
         bytes: file.size,
       })),
       {
-        path: `results/${runId}/manifest.json`,
+        path: `${runId}/manifest.json`,
         sha256: createHash('sha256').update(body).digest('hex'),
         bytes: Buffer.byteLength(body),
       },
