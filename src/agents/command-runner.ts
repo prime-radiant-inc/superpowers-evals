@@ -37,12 +37,13 @@ export interface CommandRunner {
 }
 
 export class CommandClientTimeoutError extends Error {
-  constructor(
-    readonly command: string,
-    readonly timeoutMs: number,
-  ) {
+  readonly command: string;
+  readonly timeoutMs: number;
+  constructor(command: string, timeoutMs: number) {
     super(`${command} client timed out after ${timeoutMs}ms`);
     this.name = 'CommandClientTimeoutError';
+    this.command = command;
+    this.timeoutMs = timeoutMs;
   }
 }
 
@@ -70,9 +71,10 @@ export class SpawnCommandRunner implements CommandRunner {
       killSignal: 'SIGKILL',
     });
     if (
+      timeoutMs !== undefined &&
       (proc.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
     ) {
-      throw new CommandClientTimeoutError(command, timeoutMs!);
+      throw new CommandClientTimeoutError(command, timeoutMs);
     }
     return {
       status: proc.status,

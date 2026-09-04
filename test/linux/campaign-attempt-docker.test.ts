@@ -1395,3 +1395,372 @@ it('gives parallel attempts the same tmux path and separate backing mounts', asy
     async () => awaitRunAndCleanup(run, fixture.cleanup),
   );
 }, 180_000);
+
+import {
+  CommandClientTimeoutError,
+  type CommandRunner,
+  SpawnCommandRunner,
+} from '../../src/agents/command-runner.ts';
+// Task 5 runtime gates. These require the actual Linux daemon and the exact
+// built image, and are intentionally not evidence from the portable suite.
+import {
+  ContainerAttemptRuntime,
+  containerNameForAttempt,
+} from '../../src/campaign/container-spawner.ts';
+import {
+  jcsCanonicalize,
+  sha256Hex,
+} from '../../src/contracts/campaign/digest.ts';
+import type {
+  BoundExecution,
+  PreparedExecution,
+} from '../../src/contracts/campaign/execution.ts';
+import {
+  blockActivation,
+  twoArmExperiment,
+} from '../fixtures/core-comparison/factory.ts';
+
+function deadlineFixture(body: string, maxTime = 1) {
+  const image = process.env['QUORUM_DOCKER_IMAGE_DIGEST'];
+  if (!image || !IMAGE_DIGEST_RE.test(image))
+    throw new Error(
+      'set QUORUM_DOCKER_IMAGE_DIGEST to the exact built Task 5 image ID',
+    );
+  const root = mkdtempSync(join(tmpdir(), 'quorum-deadline-'));
+  chmodSync(root, 0o755);
+  const output = join(root, 'output');
+  mkdirSync(output);
+  chmodSync(output, 0o777);
+  const script = join(root, 'probe.sh');
+  writeFileSync(script, `#!/usr/bin/env bash\nset -eu\n${body}\n`, {
+    mode: 0o555,
+  });
+  const authority = join(root, 'authority.json');
+  writeFileSync(authority, '{}\n', { mode: 0o444 });
+  const intent = blockActivation(twoArmExperiment()).attempts[0]!;
+  intent.identity.campaign_id = randomUUID();
+  intent.output_root = output;
+  intent.container_name = containerNameForAttempt(
+    intent.identity.campaign_id,
+    intent.identity.execution_attempt_id,
+  );
+  const spec = intent.runtime_spec;
+  spec.image_digest = image;
+  spec.command = script;
+  spec.args = [];
+  spec.entrypoint = ['/usr/bin/timeout'];
+  spec.cwd = output;
+  spec.user = {
+    uid: process.getuid?.() || 1000,
+    gid: process.getgid?.() || 1000,
+  };
+  spec.labels = {
+    ...spec.labels,
+    'quorum.campaign_id': intent.identity.campaign_id,
+    'quorum.image_digest': image,
+  };
+  spec.mounts = [
+    { source: output, target: output, mode: 'rw' },
+    { source: script, target: script, mode: 'ro' },
+    {
+      source: authority,
+      target: '/run/quorum/attempt-authority.json',
+      mode: 'ro',
+    },
+  ];
+  spec.public_env = {
+    ...spec.public_env,
+    HOME: join(output, 'home'),
+    XDG_CONFIG_HOME: join(output, 'home/.config'),
+    XDG_CACHE_HOME: join(output, 'home/.cache'),
+    XDG_STATE_HOME: join(output, 'home/.local/state'),
+    QUORUM_ATTEMPT_DIR: output,
+    QUORUM_ATTEMPT_AUTHORITY_FILE: '/run/quorum/attempt-authority.json',
+  };
+  spec.max_time_s = maxTime;
+  spec.tmpfs_bytes = 1024 * 1024;
+  intent.runtime_spec_digest = sha256Hex(jcsCanonicalize(spec));
+  const prepared: PreparedExecution = { intent };
+  let bound: BoundExecution | undefined;
+  let committed = false;
+  const options = {
+    runner: defaultCommandRunner,
+    assertCreateAuthorized: () => {},
+    assertStartAuthorized: () => {
+      if (!committed) throw new Error('binding not committed');
+    },
+    startSettlement: () => 'uncertain' as const,
+  };
+  const runtime = new ContainerAttemptRuntime(options);
+  return {
+    root,
+    output,
+    prepared,
+    runtime,
+    options,
+    async create() {
+      bound = await runtime.create(prepared);
+      return bound;
+    },
+    commit() {
+      committed = true;
+    },
+    cleanup() {
+      if (bound)
+        defaultCommandRunner.run(
+          'docker',
+          ['rm', '--force', bound.container_id],
+          { timeoutMs: 10000 },
+        );
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+async function awaitFile(path: string, timeoutMs = 10000): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() > until) throw new Error(`timed out waiting for ${path}`);
+    await Bun.sleep(20);
+  }
+}
+async function namespaceDeadline(body: string, maxTime = 1) {
+  const f = deadlineFixture(body, maxTime);
+  try {
+    const bound = await f.create();
+    f.commit();
+    const started = Date.now();
+    const monitor = await f.runtime.start(bound);
+    const stopped = await new Promise((resolve, reject) => {
+      monitor.onStopped(resolve);
+      monitor.onMonitorFailure((reason) => reject(new Error(reason)));
+    });
+    expect(stopped).toMatchObject({
+      container_id: bound.container_id,
+      proof: 'inspected_stopped',
+    });
+    const inspect = JSON.parse(
+      defaultCommandRunner.run('docker', ['inspect', bound.container_id], {
+        timeoutMs: 10000,
+      }).stdout,
+    )[0];
+    expect(inspect.State.Pid).toBe(0);
+    expect(inspect.State.Running).toBe(false);
+    expect(Date.now() - started).toBeLessThan((maxTime + 10) * 1000);
+    return {
+      exitCode: inspect.State.ExitCode,
+      probe: existsSync(join(f.output, 'probe'))
+        ? readFileSync(join(f.output, 'probe'), 'utf8')
+        : '',
+    };
+  } finally {
+    f.cleanup();
+  }
+}
+
+it('V2 Linux deadline normal exit preserves namespace-death proof', async () => {
+  const result = await namespaceDeadline(
+    'printf normal > "$QUORUM_ATTEMPT_DIR/probe"; exit 0',
+  );
+  expect(result).toEqual({ exitCode: 0, probe: 'normal' });
+}, 20000);
+
+it('V2 Linux deadline delivers TERM to a handling attempt', async () => {
+  const result = await namespaceDeadline(
+    'trap \'printf term > "$QUORUM_ATTEMPT_DIR/probe"; exit 0\' TERM\nwhile :; do sleep 0.1; done',
+  );
+  expect(result).toEqual({ exitCode: 124, probe: 'term' });
+}, 20000);
+
+it('V2 Linux deadline kills setsid TERM-ignoring descendants through PID namespace teardown', async () => {
+  const f = deadlineFixture(
+    'trap "" TERM\nsetsid bash -c \'trap "" TERM; while :; do sleep 0.1; done\' quorum-deadline-descendant &\nprintf ready > "$QUORUM_ATTEMPT_DIR/ready"\nwait',
+    2,
+  );
+  try {
+    const bound = await f.create();
+    f.commit();
+    const monitor = await f.runtime.start(bound);
+    await awaitFile(join(f.output, 'ready'));
+    const top = defaultCommandRunner.run(
+      'docker',
+      ['top', bound.container_id, '-eo', 'pid,args'],
+      { timeoutMs: 10000 },
+    );
+    expect(top.status).toBe(0);
+    const descendant = top.stdout
+      .split('\n')
+      .find((line) => line.includes('quorum-deadline-descendant'))
+      ?.trim()
+      .split(/\s+/)[0];
+    expect(descendant).toMatch(/^\d+$/);
+    expect(existsSync(`/proc/${descendant}`)).toBe(true);
+    await new Promise((resolve, reject) => {
+      monitor.onStopped(resolve);
+      monitor.onMonitorFailure((reason) => reject(new Error(reason)));
+    });
+    expect(existsSync(`/proc/${descendant}`)).toBe(false);
+  } finally {
+    f.cleanup();
+  }
+}, 20000);
+
+it('V2 Linux create-before-bind never starts a process and remains discoverable for cancellation', async () => {
+  const f = deadlineFixture('touch "$QUORUM_ATTEMPT_DIR/launched"');
+  try {
+    const bound = await f.create();
+    await expect(f.runtime.start(bound)).rejects.toThrow(
+      'binding not committed',
+    );
+    expect(existsSync(join(f.output, 'launched'))).toBe(false);
+    expect(
+      await new ContainerAttemptRuntime(f.options).inspectOwned(f.prepared),
+    ).toMatchObject({
+      kind: 'matching-created',
+      container_id: bound.container_id,
+    });
+  } finally {
+    f.cleanup();
+  }
+}, 20000);
+
+it('V2 Linux deadline survives a killed controller without a replacement', async () => {
+  const f = deadlineFixture(
+    'trap "" TERM\nprintf ready > "$QUORUM_ATTEMPT_DIR/ready"\nwhile :; do sleep 0.1; done',
+    1,
+  );
+  const receipt = join(f.root, 'bound.json');
+  const module = pathToFileURL(
+    resolve('src/campaign/container-spawner.ts'),
+  ).href;
+  const runnerModule = pathToFileURL(
+    resolve('src/agents/command-runner.ts'),
+  ).href;
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `
+    import {ContainerAttemptRuntime} from ${JSON.stringify(module)};
+    import {defaultCommandRunner} from ${JSON.stringify(runnerModule)};
+    import {writeFileSync} from 'node:fs';
+    const runtime=new ContainerAttemptRuntime({runner:defaultCommandRunner,assertCreateAuthorized(){},assertStartAuthorized(){},startSettlement(){return 'uncertain';},dockerWait:()=>new Promise(()=>{})});
+    const bound=await runtime.create(${JSON.stringify(f.prepared)});
+    writeFileSync(${JSON.stringify(receipt)},JSON.stringify(bound));
+    await runtime.start(bound);setInterval(()=>{},1000);
+  `,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  );
+  let bound: BoundExecution | undefined;
+  try {
+    await awaitFile(receipt);
+    bound = JSON.parse(readFileSync(receipt, 'utf8')) as BoundExecution;
+    await awaitFile(join(f.output, 'ready'));
+    child.kill('SIGKILL');
+    await child.exited;
+    await Bun.sleep(7500);
+    expect(
+      (await new ContainerAttemptRuntime(f.options).inspectOwned(f.prepared))
+        .kind,
+    ).toBe('matching-stopped');
+    expect(
+      (await new ContainerAttemptRuntime(f.options).stop(bound, 1)).kind,
+    ).toBe('unresolved');
+  } finally {
+    child.kill('SIGKILL');
+    await child.exited;
+    if (bound)
+      defaultCommandRunner.run(
+        'docker',
+        ['rm', '--force', bound.container_id],
+        { timeoutMs: 10000 },
+      );
+    f.cleanup();
+  }
+}, 20000);
+
+it('V2 Linux Docker client timeout forcibly ends a stalled client without claiming daemon state', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'quorum-client-timeout-'));
+  const socket = join(root, 'docker.sock');
+  const ready = join(root, 'ready');
+  const server = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `
+    import net from 'node:net';import {writeFileSync} from 'node:fs';
+    net.createServer(socket=>socket.on('data',()=>{})).listen(${JSON.stringify(socket)},()=>writeFileSync(${JSON.stringify(ready)},''));
+  `,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  );
+  try {
+    await awaitFile(ready);
+    expect(() =>
+      new SpawnCommandRunner().run(
+        'docker',
+        ['--host', `unix://${socket}`, 'inspect', 'a'.repeat(64)],
+        { timeoutMs: 100 },
+      ),
+    ).toThrow(CommandClientTimeoutError);
+  } finally {
+    server.kill('SIGKILL');
+    await server.exited;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 20000);
+
+it('V2 Linux delayed daemon start after a stopped snapshot stays unresolved until an operation receipt', async () => {
+  const f = deadlineFixture(
+    'printf late > "$QUORUM_ATTEMPT_DIR/late"; sleep 10',
+    10,
+  );
+  let bound: BoundExecution | undefined;
+  let delayed: ReturnType<typeof Bun.spawn> | undefined;
+  const receipt = join(f.root, 'start-receipt');
+  const runner: CommandRunner = {
+    run(command, args, options) {
+      if (args[0] === 'start') {
+        delayed = Bun.spawn(
+          [
+            process.execPath,
+            '-e',
+            `await Bun.sleep(500);const child=Bun.spawn(['docker','start',${JSON.stringify(args[1])}],{stdout:'ignore',stderr:'ignore'});if(await child.exited===0)await Bun.write(${JSON.stringify(receipt)},'docker_start_succeeded');`,
+          ],
+          { stdout: 'ignore', stderr: 'ignore' },
+        );
+        throw new CommandClientTimeoutError('docker', 1);
+      }
+      return defaultCommandRunner.run(command, args, options);
+    },
+  };
+  const runtime = new ContainerAttemptRuntime({ ...f.options, runner });
+  try {
+    bound = await runtime.create(f.prepared);
+    f.commit();
+    await expect(runtime.start(bound)).rejects.toThrow(
+      CommandClientTimeoutError,
+    );
+    expect((await runtime.stop(bound, 1)).kind).toBe('unresolved');
+    await awaitFile(join(f.output, 'late'));
+    await awaitFile(receipt);
+    expect((await runtime.stop(bound, 1)).kind).toBe('unresolved');
+    const cancellation = new ContainerAttemptRuntime({
+      ...f.options,
+      startSettlement: () =>
+        readFileSync(receipt, 'utf8') === 'docker_start_succeeded'
+          ? 'settled'
+          : 'uncertain',
+    });
+    expect((await cancellation.stop(bound, 1)).kind).toBe('dead');
+  } finally {
+    if (delayed) await delayed.exited;
+    if (bound)
+      defaultCommandRunner.run(
+        'docker',
+        ['rm', '--force', bound.container_id],
+        { timeoutMs: 10000 },
+      );
+    f.cleanup();
+  }
+}, 25000);

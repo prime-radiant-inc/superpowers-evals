@@ -1,7 +1,6 @@
 import { fchmodSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  agentEnvBody,
   assertDistinctFromGraderAuth,
   assertPinnedDirectoryNamed,
   buildSupervisorEnv,
@@ -17,6 +16,8 @@ import {
   selectAgentEnv,
   writePinnedFile,
 } from '../appliance/credential-scope.ts';
+import { type Grader, GraderSchema } from '../contracts/campaign/experiment.ts';
+import { loadCredentialsFile, mantleBaseUrl } from '../credentials/index.ts';
 import { resolveCredentialSelection } from '../credentials/scope.ts';
 
 export class AttemptProjectionError extends Error {
@@ -49,6 +50,7 @@ export interface PrepareAttemptStageArgs {
   readonly bundleDir: string;
   readonly uid: number;
   readonly gid: number;
+  readonly grader?: Grader;
 }
 
 const STAGE_ENTRIES = new Set(['subject.env', 'grader.env', 'passwd', 'group']);
@@ -123,6 +125,39 @@ export function prepareAttemptStage(
     }
   })();
   const scope = resolved.scope;
+  const selectedGrader =
+    args.grader === undefined
+      ? undefined
+      : (() => {
+          const grader = GraderSchema.parse(args.grader);
+          const credential = loadCredentialsFile(
+            join(args.evalsRoot, 'credentials.yaml'),
+          ).credentials[grader.credential];
+          if (credential === undefined || credential.model !== grader.model)
+            throw refuse(
+              args.attemptId,
+              'selected grader credential/model mismatch',
+            );
+          if (
+            !(
+              (credential.api === 'anthropic' &&
+                credential.auth === 'api-key') ||
+              (credential.api === 'mantle' &&
+                credential.auth === 'bedrock-bearer')
+            ) ||
+            credential.key_pool !== undefined
+          )
+            throw refuse(
+              args.attemptId,
+              'unsupported grader credential projection',
+            );
+          if (credential.api_key_env === undefined)
+            throw refuse(
+              args.attemptId,
+              'grader credential requires exact api_key_env',
+            );
+          return credential;
+        })();
   if (resolved.auth !== 'api-key' && resolved.auth !== 'bedrock-bearer') {
     throw refuse(
       args.attemptId,
@@ -135,6 +170,8 @@ export function prepareAttemptStage(
     for (const source of projection.sourceNames) names.add(source);
   }
   names.add('GEMINI_AUTH_TYPE');
+  if (selectedGrader?.api_key_env !== undefined)
+    names.add(selectedGrader.api_key_env);
   // This is the same complete source set used by Phase 1 staging: grader
   // aliases plus routing/TLS names and Copilot-specific routing aliases.
   for (const name of Object.values(GRADER_SOURCE_ENV_BY_RUNTIME_NAME)) {
@@ -149,7 +186,31 @@ export function prepareAttemptStage(
   try {
     bundleEnv = readBundleEnvForProjection(args.bundleDir, [...names]);
     const agent = selectAgentEnv(scope, bundleEnv);
-    const supervisor = buildSupervisorEnv(scope, bundleEnv);
+    const supervisor =
+      selectedGrader === undefined
+        ? buildSupervisorEnv(scope, bundleEnv)
+        : (() => {
+            const value = bundleEnv.get(selectedGrader.api_key_env ?? '');
+            if (value === undefined || value === '')
+              throw refuse(args.attemptId, 'selected grader secret is missing');
+            const lines = [
+              'QUORUM_GRADER_SOURCE_MODE=appliance-scoped',
+              `QUORUM_GRADER_ANTHROPIC_API_KEY=${value}`,
+            ];
+            const baseUrl =
+              selectedGrader.api === 'mantle'
+                ? mantleBaseUrl(selectedGrader.region ?? '')
+                : selectedGrader.base_url;
+            if (selectedGrader.api === 'mantle' && !selectedGrader.region)
+              throw refuse(args.attemptId, 'grader region is missing');
+            if (baseUrl !== undefined)
+              lines.push(`QUORUM_GRADER_ANTHROPIC_BASE_URL=${baseUrl}`);
+            for (const name of SUPERVISOR_NETWORK_ENV_NAMES) {
+              const routing = bundleEnv.get(name);
+              if (routing !== undefined) lines.push(`${name}=${routing}`);
+            }
+            return { lines, graderAuthValues: [value] };
+          })();
     // Base URLs and routing values are not authentication secrets. The
     // shared helper compares every selected subject secret to every grader
     // authentication value in memory, before any stage directory exists.
@@ -217,7 +278,7 @@ export function prepareAttemptStage(
     writePinnedFile(
       stagePin,
       ['subject.env'],
-      agentEnvBody(agent.entries),
+      `${agent.entries.map(([name, value]) => `${name}=${value}`).join('\n')}\n`,
       'subject env',
       0o400,
     );

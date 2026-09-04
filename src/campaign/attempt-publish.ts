@@ -9,6 +9,15 @@ import {
   renameSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
+import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
+import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
+import {
+  type ArtifactRef,
+  type BoundExecution,
+  type VerifiedStopped,
+  VerifiedStoppedSchema,
+} from '../contracts/campaign/execution.ts';
 import { parseAttemptManifest } from '../runner/manifest.ts';
 
 export class AttemptPublishError extends Error {
@@ -22,6 +31,7 @@ export interface PublishAttemptArgs {
   readonly attemptDir: string;
   readonly resultsRoot: string;
   readonly expectedAttemptId: string;
+  readonly expectedIdentity?: CampaignIdentity;
   /** Journaled allocation, when observed; checked before the rename. */
   readonly expectedRunId?: string | undefined;
   /** Test seam for the post-rename durability cut; production uses fs. */
@@ -209,6 +219,14 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
     );
   }
 
+  if (
+    args.expectedIdentity !== undefined &&
+    jcsCanonicalize(manifest.campaign) !==
+      jcsCanonicalize(args.expectedIdentity)
+  ) {
+    throw refusal('manifest campaign identity mismatch');
+  }
+
   for (const file of manifest.files) {
     const components = file.path.split('/');
     let fullPath = runDir;
@@ -301,4 +319,62 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   }
 
   return { runId };
+}
+
+/** V2 publication consumes runtime-produced death proof and authenticates every
+ * campaign identity field before returning immutable campaign-relative refs. */
+export function publishExecution(args: {
+  bound: BoundExecution;
+  stopped: VerifiedStopped;
+  resultsRoot: string;
+  expectedRunId?: string;
+}): { runId: string; artifacts: ArtifactRef[] } {
+  const stopped = VerifiedStoppedSchema.parse(args.stopped);
+  const intent = args.bound.intent;
+  if (
+    stopped.container_id !== args.bound.container_id ||
+    stopped.execution_attempt_id !== intent.identity.execution_attempt_id ||
+    stopped.proof !== 'inspected_stopped'
+  )
+    throw refusal('publication requires exact inspected namespace death');
+  const staging = join(intent.output_root, 'staging');
+  const entries = readdirSync(staging);
+  if (entries.length !== 1 || entries[0] === undefined)
+    throw refusal('publication requires one runner-minted run');
+  const runId = entries[0];
+  const body = readPinnedNoFollowFile(
+    staging,
+    [runId, 'manifest.json'],
+    'attempt manifest',
+    true,
+  );
+  if (body === null) throw refusal('attempt manifest missing');
+  const manifest = parseAttemptManifest(body);
+  if (
+    manifest.run_id !== runId ||
+    jcsCanonicalize(manifest.campaign) !== jcsCanonicalize(intent.identity)
+  )
+    throw refusal('manifest campaign identity mismatch');
+  const published = publishAttempt({
+    attemptDir: intent.output_root,
+    resultsRoot: args.resultsRoot,
+    expectedAttemptId: intent.identity.execution_attempt_id,
+    expectedIdentity: intent.identity,
+    expectedRunId: args.expectedRunId,
+  });
+  return {
+    ...published,
+    artifacts: [
+      ...manifest.files.map((file) => ({
+        path: `results/${runId}/${file.path}`,
+        sha256: file.sha256,
+        bytes: file.size,
+      })),
+      {
+        path: `results/${runId}/manifest.json`,
+        sha256: createHash('sha256').update(body).digest('hex'),
+        bytes: Buffer.byteLength(body),
+      },
+    ],
+  };
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Campaign Appliance V2 attempt entrypoint. Ships in the frozen evals
 # snapshot; the container's command is this script followed by the
-# dispatcher's argv. PID 1 is Docker's bundled init; after the exec below
-# the tree is init -> bun (Quorum).
+# dispatcher's argv. The whole-attempt clock covers preparation and capture:
+# the process tree is Docker init -> GNU timeout -> bun (Quorum).
 set -euo pipefail
 
 umask 077
@@ -47,15 +47,34 @@ done
 # entrypoint only appends, never creates or truncates.
 exec >> "$stdout_log" 2>> "$stderr_log"
 
-# Deliveries are controller-written NAME=value files, mode 0400. Shell
-# sourcing is the deliberate child-1 model (the Phase 1 shim does the same
-# with /run/evals/credentials.env); child 4 replaces it with non-shell
-# parsing.
+# Deliveries contain literal NAME=value records, never shell programs. Collect
+# values without changing this shell's parser, paths, or private runtime authority.
+delivery_entries=()
+seen_names='|'
 for delivery in "$subject_file" "$grader_file"; do
-  set -a
-  # shellcheck disable=SC1090
-  source "$delivery"
-  set +a
+  if IFS= read -r -d '' nul_probe < "$delivery"; then
+    printf 'credential delivery contains NUL bytes\n' >&2
+    exit 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ ! "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= || "$line" =~ [[:cntrl:]] ]]; then
+      printf 'credential delivery contains an invalid record\n' >&2
+      exit 1
+    fi
+    name=${line%%=*}
+    case "$name" in
+      QUORUM_GRADER_SOURCE_MODE|QUORUM_GRADER_ANTHROPIC_API_KEY|QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN|QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN|QUORUM_GRADER_ANTHROPIC_BASE_URL) ;;
+      QUORUM_*|HOME|PATH|TMPDIR|TMUX_TMPDIR|XDG_*|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|IFS|LD_*|DYLD_*|NODE_OPTIONS|BUN_OPTIONS)
+        printf 'credential delivery overrides protected runtime environment\n' >&2
+        exit 1 ;;
+    esac
+    if [[ "$seen_names" == *"|$name|"* ]]; then
+      printf 'credential delivery contains a duplicate name\n' >&2
+      exit 1
+    fi
+    seen_names="$seen_names$name|"
+    delivery_entries+=("$line")
+  done < "$delivery"
 done
 
-exec bun "$@"
+exec env "${delivery_entries[@]}" bun "$@"

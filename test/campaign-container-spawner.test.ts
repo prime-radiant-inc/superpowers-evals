@@ -999,3 +999,353 @@ test('stop reports alive when a successful KILL still leaves the exact container
   expect(runner.killCount).toBe(1);
   expect(writes.join('')).toMatch(/verify-death FAILED/);
 });
+
+import { ContainerAttemptRuntime } from '../src/campaign/container-spawner.ts';
+import {
+  jcsCanonicalize,
+  sha256Hex,
+} from '../src/contracts/campaign/digest.ts';
+import type { PreparedExecution } from '../src/contracts/campaign/execution.ts';
+import {
+  blockActivation,
+  twoArmExperiment,
+} from './fixtures/core-comparison/factory.ts';
+
+function runtimeFixture() {
+  const intent = blockActivation(twoArmExperiment()).attempts[0]!;
+  const spec = intent.runtime_spec;
+  spec.command = '/snapshot/container/attempt-entrypoint.sh';
+  spec.entrypoint = ['/usr/bin/timeout'];
+  spec.public_env.QUORUM_ATTEMPT_AUTHORITY_FILE =
+    '/run/quorum/attempt-authority.json';
+  spec.mounts.push({
+    source: '/private/control/authority.json',
+    target: '/run/quorum/attempt-authority.json',
+    mode: 'ro',
+  });
+  intent.container_name = containerNameForAttempt(
+    intent.identity.campaign_id,
+    intent.identity.execution_attempt_id,
+  );
+  intent.runtime_spec_digest = sha256Hex(jcsCanonicalize(spec));
+  const prepared: PreparedExecution = { intent };
+  let committed = false;
+  let admitted = true;
+  let cancelled = false;
+  let exists = false;
+  let startError = false;
+  let unknown = false;
+  let waitResolve!: (n: number) => void;
+  let waitReject!: (e: Error) => void;
+  const wait = new Promise<number>((resolve, reject) => {
+    waitResolve = resolve;
+    waitReject = reject;
+  });
+  const observed = {
+    Id: containerId,
+    Name: `/${intent.container_name}`,
+    Image: spec.image_digest,
+    Path: '/usr/bin/timeout',
+    Args: [
+      '--signal=TERM',
+      '--kill-after=5s',
+      `${spec.max_time_s}s`,
+      spec.command,
+      ...spec.args,
+    ],
+    Config: {
+      Image: spec.image_digest,
+      Env: [
+        'PATH=/usr/bin',
+        ...Object.entries(spec.public_env).map(([k, v]) => `${k}=${v}`),
+      ],
+      Labels: { ...spec.labels, 'image.label': 'fixed' },
+      Entrypoint: ['/usr/bin/timeout'],
+      Cmd: [
+        '--signal=TERM',
+        '--kill-after=5s',
+        `${spec.max_time_s}s`,
+        spec.command,
+        ...spec.args,
+      ],
+      User: '1000:1000',
+      WorkingDir: spec.cwd,
+    },
+    HostConfig: {
+      Init: true,
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      PidMode: '',
+      IpcMode: 'private',
+      Privileged: false,
+      SecurityOpt: ['no-new-privileges'],
+      Tmpfs: {
+        '/run/quorum/attempt': `rw,noexec,nosuid,size=${spec.tmpfs_bytes}`,
+        '/tmp': `rw,size=${spec.tmpfs_bytes}`,
+      },
+      CapAdd: null,
+      CapDrop: null,
+      Devices: [],
+      DeviceRequests: null,
+      Binds: null,
+      VolumesFrom: null,
+      NetworkMode: 'default',
+      ReadonlyRootfs: false,
+    },
+    Mounts: spec.mounts.map((m) => ({
+      Type: 'bind',
+      Source: m.source,
+      Destination: m.target,
+      RW: m.mode === 'rw',
+      Propagation: 'rprivate',
+    })),
+    State: {
+      Status: 'created',
+      Running: false,
+      Pid: 0,
+      ExitCode: 0,
+      Dead: false,
+      Restarting: false,
+    },
+  };
+  const calls: string[][] = [];
+  const runner: CommandRunner = {
+    run(command, args, options) {
+      expect(command).toBe('docker');
+      expect(options?.timeoutMs).toBeGreaterThan(0);
+      calls.push([...args]);
+      if (args[0] === 'image')
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            {
+              Id: spec.image_digest,
+              Config: {
+                Env: ['PATH=/usr/bin'],
+                Labels: { 'image.label': 'fixed' },
+                Volumes: null,
+                Entrypoint: null,
+                Cmd: ['sleep', 'infinity'],
+              },
+            },
+          ]),
+          stderr: '',
+        };
+      if (args[0] === 'create') {
+        exists = true;
+        return { status: 0, stdout: containerId, stderr: '' };
+      }
+      if (args[0] === 'start') {
+        if (startError) throw new Error('client timeout');
+        observed.State.Running = true;
+        observed.State.Status = 'running';
+        observed.State.Pid = 42;
+      }
+      if (args[0] === 'stop') {
+        observed.State.Running = false;
+        observed.State.Status = 'exited';
+        observed.State.Pid = 0;
+      }
+      if (args[0] === 'inspect') {
+        if (unknown)
+          return { status: 1, stdout: '', stderr: 'daemon unavailable' };
+        if (!exists)
+          return {
+            status: 1,
+            stdout: '',
+            stderr: `Error: No such object: ${args[1]}`,
+          };
+        return { status: 0, stdout: JSON.stringify([observed]), stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  };
+  const options = {
+    runner,
+    dockerWait: () => wait,
+    assertCreateAuthorized: () => {
+      if (!admitted) throw new Error('intent not committed');
+    },
+    assertStartAuthorized: () => {
+      if (!committed) throw new Error('binding not committed');
+      if (cancelled) throw new Error('cancelled');
+    },
+    startSettlement: () => 'uncertain' as const,
+  };
+  const runtime = new ContainerAttemptRuntime(options);
+  return {
+    runtime,
+    prepared,
+    observed,
+    calls,
+    runner,
+    options,
+    commit: () => {
+      committed = true;
+    },
+    denyCreate: () => {
+      admitted = false;
+    },
+    cancel: () => {
+      cancelled = true;
+    },
+    startTimeout: () => {
+      startError = true;
+    },
+    unknown: () => {
+      unknown = true;
+    },
+    resolve: waitResolve,
+    reject: waitReject,
+  };
+}
+
+test('V2 runtime cannot create without committed intent or start without committed binding', async () => {
+  const f = runtimeFixture();
+  f.denyCreate();
+  await expect(f.runtime.create(f.prepared)).rejects.toThrow(
+    'intent not committed',
+  );
+  expect(f.calls.some((c) => c[0] === 'create')).toBe(false);
+  const g = runtimeFixture();
+  const bound = await g.runtime.create(g.prepared);
+  await expect(g.runtime.start(bound)).rejects.toThrow('binding not committed');
+  expect(g.calls.some((c) => c[0] === 'start')).toBe(false);
+  g.commit();
+  g.cancel();
+  await expect(g.runtime.start(bound)).rejects.toThrow('cancelled');
+});
+
+test('V2 runtime separates monitor failure from death and replays terminal notifications', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  f.commit();
+  const monitor = await f.runtime.start(bound);
+  f.unknown();
+  f.reject(new Error('follower failed'));
+  await new Promise((r) => setTimeout(r, 0));
+  const deaths: unknown[] = [];
+  const failures: string[] = [];
+  monitor.onStopped((s) => deaths.push(s));
+  monitor.onMonitorFailure((s) => failures.push(s));
+  expect(deaths).toHaveLength(0);
+  expect(failures).toHaveLength(1);
+  expect((await f.runtime.stop(bound, 1)).kind).toBe('unresolved');
+});
+
+test('V2 runtime never settles an uncertain start from stopped snapshots or delayed daemon start', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  f.commit();
+  f.startTimeout();
+  await expect(f.runtime.start(bound)).rejects.toThrow();
+  expect((await f.runtime.stop(bound, 1)).kind).toBe('unresolved');
+  f.observed.State.Running = true;
+  f.observed.State.Status = 'running';
+  f.observed.State.Pid = 42;
+  expect((await f.runtime.inspectOwned(f.prepared)).kind).toBe('unresolved');
+  const recovered = new ContainerAttemptRuntime(f.options);
+  expect((await recovered.stop(bound, 1)).kind).toBe('unresolved');
+});
+
+test('V2 runtime discovers create-before-binding by full exact specification', async () => {
+  const f = runtimeFixture();
+  await f.runtime.create(f.prepared);
+  const discovery = await new ContainerAttemptRuntime(f.options).inspectOwned(
+    f.prepared,
+  );
+  expect(discovery).toEqual({
+    kind: 'matching-created',
+    container_id: containerId,
+    runtime_spec_digest: f.prepared.intent.runtime_spec_digest,
+  });
+  f.observed.Config.Env.push('UNEXPECTED=secret');
+  expect((await f.runtime.inspectOwned(f.prepared)).kind).toBe('unresolved');
+});
+
+test('V2 runtime validates complete configuration and latched namespace death after settled start', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  f.commit();
+  const monitor = await f.runtime.start(bound);
+  f.observed.State.Running = false;
+  f.observed.State.Status = 'exited';
+  f.observed.State.Pid = 0;
+  f.resolve(0);
+  await new Promise((r) => setTimeout(r, 0));
+  const deaths: unknown[] = [];
+  monitor.onStopped((s) => deaths.push(s));
+  expect(deaths).toHaveLength(1);
+  expect(await f.runtime.stop(bound, 1)).toMatchObject({
+    kind: 'dead',
+    stopped: { container_id: containerId, proof: 'inspected_stopped' },
+  });
+});
+
+test('V2 runtime refuses changed hardening, argv, image defaults and extra mounts before start', async () => {
+  for (const mutate of [
+    (f: ReturnType<typeof runtimeFixture>) => {
+      f.observed.HostConfig.Init = false;
+    },
+    (f: ReturnType<typeof runtimeFixture>) => {
+      f.observed.Config.Cmd.push('extra');
+    },
+    (f: ReturnType<typeof runtimeFixture>) => {
+      f.observed.Config.Env[0] = 'PATH=/evil';
+    },
+    (f: ReturnType<typeof runtimeFixture>) => {
+      f.observed.Mounts.push({
+        Type: 'bind',
+        Source: '/evil',
+        Destination: '/evil',
+        RW: true,
+        Propagation: 'rprivate',
+      });
+    },
+  ]) {
+    const f = runtimeFixture();
+    const bound = await f.runtime.create(f.prepared);
+    f.commit();
+    mutate(f);
+    await expect(f.runtime.start(bound)).rejects.toThrow();
+    expect(f.calls.some((c) => c[0] === 'start')).toBe(false);
+  }
+});
+
+test('V2 monitor failure requests a stop without publication or slot release when inspect is unknown', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  f.commit();
+  const monitor = await f.runtime.start(bound);
+  const publications: unknown[] = [];
+  let released = 0;
+  let stop: Promise<unknown> | undefined;
+  monitor.onStopped((s) => {
+    publications.push(s);
+    released++;
+  });
+  monitor.onMonitorFailure(() => {
+    stop = f.runtime.stop(bound, 1);
+  });
+  f.unknown();
+  f.reject(new Error('lost follower'));
+  await new Promise((r) => setTimeout(r, 0));
+  await stop;
+  expect(publications).toHaveLength(0);
+  expect(released).toBe(0);
+  expect(f.calls.filter((c) => c[0] === 'stop')).toHaveLength(1);
+});
+
+test('V2 uncertain start remains unresolved when the daemon reports exact absence', async () => {
+  const f = runtimeFixture();
+  const bound = await f.runtime.create(f.prepared);
+  f.commit();
+  f.startTimeout();
+  await expect(f.runtime.start(bound)).rejects.toThrow();
+  const run = f.runner.run.bind(f.runner);
+  f.runner.run = (command, args, options) =>
+    args[0] === 'inspect'
+      ? { status: 1, stdout: '', stderr: `Error: No such object: ${args[1]}` }
+      : run(command, args, options);
+  expect((await f.runtime.inspectOwned(f.prepared)).kind).toBe('unresolved');
+  expect((await f.runtime.stop(bound, 1)).kind).toBe('unresolved');
+});

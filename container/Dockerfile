@@ -20,6 +20,11 @@ FROM ghcr.io/prime-radiant-inc/everyharness-container@sha256:de1026a0580ce2956ab
 # UV_TOOL_*, PATH, AGY_OAUTH_HOME, KIMI_OAUTH_HOME) and puts go, bun, and the
 # harness CLIs on PATH; the evals layers below rely on that inherited state.
 
+# The independent attempt deadline requires GNU timeout as init's direct child.
+# The immutable base digest pins the coreutils binary; fail the build if absent.
+RUN test -x /usr/bin/timeout \
+  && /usr/bin/timeout --version | grep -F 'timeout (GNU coreutils)'
+
 ARG SERF_REF=0a459b633629cd034aa8a800c77bcd75a76496e8
 
 RUN git clone https://github.com/prime-radiant-inc/serf.git /opt/serf-repo \

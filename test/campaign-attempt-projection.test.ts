@@ -94,7 +94,7 @@ test('projection writes exact private files and synthesized identity files', () 
       '--noprofile',
       '--norc',
       '-c',
-      'set -a; . "$1"; printf "%s" "$SUBJECT_KEY"',
+      'while IFS= read -r line; do export "$line"; done < "$1"; printf "%s" "$SUBJECT_KEY"',
       'source',
       prepared.subjectEnvFile,
     ],
@@ -262,7 +262,7 @@ test('projection supports a bedrock bearer subject beside the grader aliases', (
       '--noprofile',
       '--norc',
       '-c',
-      'set -a; . "$1"; printf "%s" "$SUBJECT_BEARER"',
+      'while IFS= read -r line; do export "$line"; done < "$1"; printf "%s" "$SUBJECT_BEARER"',
       'source',
       prepared.subjectEnvFile,
     ],
@@ -439,4 +439,105 @@ test('removal refuses an uninspectable optional stage', () => {
   } finally {
     spy.mockRestore();
   }
+});
+
+import { validatePreparedAttemptAuthority } from '../src/campaign/child-authority.ts';
+import { prepareContainerExecution } from '../src/campaign/container-spawner.ts';
+import {
+  blockActivation,
+  twoArmExperiment,
+} from './fixtures/core-comparison/factory.ts';
+
+function prepareV2(
+  fx: ReturnType<typeof projectionFixture>,
+  model = 'claude-grader',
+) {
+  return prepareContainerExecution({
+    campaignDir: fx.campaignDir,
+    attemptId: 'attempt',
+    agent: 'claude',
+    credentialName: 'cred_a',
+    evalsRoot: fx.corpus,
+    bundleDir: fx.bundleDir,
+    uid: 1000,
+    gid: 1000,
+    grader: { credential: 'grader', model },
+    identity: {
+      ...blockActivation(twoArmExperiment()).attempts[0]!.identity,
+      execution_attempt_id: 'attempt',
+    },
+    inputDigest: 'b'.repeat(64),
+    startId: 'start',
+    primaryBlockId: 'primary',
+    attemptNumber: 1,
+    imageDigest: `sha256:${'a'.repeat(64)}`,
+    evalsSha: 'e'.repeat(40),
+    maxTimeSeconds: 120,
+    gauntletRoot: join(fx.campaignDir, 'gauntlet'),
+    binRoot: join(fx.campaignDir, 'bin'),
+    superpowersTree: null,
+    scenarioDir: join(fx.corpus, 'scenarios', 'test'),
+  });
+}
+function addGrader(fx: ReturnType<typeof projectionFixture>) {
+  fs.appendFileSync(
+    join(fx.corpus, 'credentials.yaml'),
+    'grader:\n  model: claude-grader\n  api: anthropic\n  auth: api-key\n  api_key_env: SELECTED_GRADER\n  harnesses: [claude]\n',
+  );
+  fs.appendFileSync(
+    join(fx.bundleDir, 'credentials.env'),
+    "SELECTED_GRADER='selected-grader-secret'\n",
+  );
+}
+
+test('V2 preparation freezes timeout, exact grader model and authority outside writable aliases', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const prepared = prepareV2(fx);
+  const spec = prepared.intent.runtime_spec;
+  const authority = spec.mounts.find(
+    (m) => m.target === '/run/quorum/attempt-authority.json',
+  )!;
+  expect(authority.mode).toBe('ro');
+  expect(authority.source.startsWith(`${prepared.intent.output_root}/`)).toBe(
+    false,
+  );
+  const body = readFileSync(authority.source, 'utf8');
+  expect(
+    validatePreparedAttemptAuthority(prepared.intent.identity, {
+      readDocument: () => body,
+      readMountInfo: () =>
+        '1 0 0:1 / /run/quorum/attempt-authority.json ro - tmpfs tmpfs ro',
+    }).start_id,
+  ).toBe('start');
+  expect(spec.entrypoint).toEqual(['/usr/bin/timeout']);
+  expect(spec.max_time_s).toBe(120);
+  expect(spec.args[spec.args.indexOf('--grader-model') + 1]).toBe(
+    'claude-grader',
+  );
+  const grader = spec.mounts.find(
+    (m) => m.target === '/run/quorum/grader.env',
+  )!;
+  expect(readFileSync(grader.source, 'utf8')).toBe(
+    'QUORUM_GRADER_SOURCE_MODE=appliance-scoped\nQUORUM_GRADER_ANTHROPIC_API_KEY=selected-grader-secret\n',
+  );
+  expect(JSON.stringify(prepared)).not.toContain('selected-grader-secret');
+  expect(statSync(authority.source).mode & 0o777).toBe(0o400);
+});
+
+test('V2 preparation refuses selected grader model mismatch and unsupported protocol before writes', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  expect(() => prepareV2(fx, 'different')).toThrow('model');
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+  const registry = join(fx.corpus, 'credentials.yaml');
+  writeFileSync(
+    registry,
+    readFileSync(registry, 'utf8').replace(
+      'model: claude-grader\n  api: anthropic',
+      'model: claude-grader\n  api: openai-chat',
+    ),
+  );
+  expect(() => prepareV2(fx)).toThrow('grader');
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
 });

@@ -10,6 +10,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -40,7 +41,7 @@ function staged(
     campaign?: typeof identity;
   } = {},
 ): { attemptDir: string; resultsRoot: string } {
-  const attemptDir = mkdtempSync(join(tmpdir(), 'publish-'));
+  const attemptDir = realpathSync(mkdtempSync(join(tmpdir(), 'publish-')));
   const resultsRoot = mkdtempSync(join(tmpdir(), 'results-'));
   const runDir = join(attemptDir, 'staging', runId);
   mkdirSync(runDir, { recursive: true });
@@ -438,4 +439,70 @@ test('publish requires the explicit expected attempt id', () => {
   } finally {
     clean(paths);
   }
+});
+
+import { publishExecution } from '../src/campaign/attempt-publish.ts';
+import {
+  blockActivation,
+  twoArmExperiment,
+} from './fixtures/core-comparison/factory.ts';
+
+test('V2 publication authenticates full identity and returns immutable byte references only after death', () => {
+  const paths = staged('run-v2');
+  const intent = blockActivation(twoArmExperiment()).attempts[0]!;
+  intent.identity = identity;
+  intent.output_root = paths.attemptDir;
+  const bound = { intent, container_id: 'a'.repeat(64) };
+  const stopped = {
+    execution_attempt_id: identity.execution_attempt_id,
+    container_id: bound.container_id,
+    proof: 'inspected_stopped' as const,
+    observed_at: new Date().toISOString(),
+  };
+  expect(() =>
+    publishExecution({
+      bound,
+      stopped: { ...stopped, container_id: 'b'.repeat(64) },
+      resultsRoot: paths.resultsRoot,
+    }),
+  ).toThrow();
+  const published = publishExecution({
+    bound,
+    stopped,
+    resultsRoot: paths.resultsRoot,
+  });
+  expect(published.runId).toBe('run-v2');
+  expect(published.artifacts).toContainEqual({
+    path: 'results/run-v2/verdict.json',
+    sha256: sha('{"final":"pass"}\n'),
+    bytes: 17,
+  });
+  expect(
+    published.artifacts.some((a) => a.path === 'results/run-v2/manifest.json'),
+  ).toBe(true);
+  clean(paths);
+});
+
+test('V2 publication refuses a foreign campaign with a matching attempt id', () => {
+  const paths = staged('foreign', {
+    campaign: { ...identity, campaign_id: 'foreign' },
+  });
+  const intent = blockActivation(twoArmExperiment()).attempts[0]!;
+  intent.identity = identity;
+  intent.output_root = paths.attemptDir;
+  const bound = { intent, container_id: 'a'.repeat(64) };
+  expect(() =>
+    publishExecution({
+      bound,
+      stopped: {
+        execution_attempt_id: identity.execution_attempt_id,
+        container_id: bound.container_id,
+        proof: 'inspected_stopped',
+        observed_at: new Date().toISOString(),
+      },
+      resultsRoot: paths.resultsRoot,
+    }),
+  ).toThrow('identity');
+  expect(existsSync(join(paths.attemptDir, 'staging', 'foreign'))).toBe(true);
+  clean(paths);
 });
