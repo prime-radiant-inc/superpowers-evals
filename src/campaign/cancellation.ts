@@ -210,15 +210,22 @@ export function observeCampaignStatus(
       };
     if (intent) return { state: 'stopping', next_action: 'cancel' };
     if (!p.start) return { state: 'registered', next_action: 'run' };
-    if (p.controller && processes.observe(p.controller) === 'unknown')
+    const controllerState = p.controller
+      ? processes.observe(p.controller)
+      : null;
+    if (controllerState === 'unknown')
       return { state: 'unresolved', next_action: 'cancel' };
     const holder = readLiveSpendHolder(lockPath);
     if (
       p.controller &&
-      processes.observe(p.controller) === 'live' &&
+      controllerState === 'live' &&
       claim &&
-      holder?.pid === p.controller.pid &&
-      String(holder.birth_ts_ms) === p.controller.birth
+      (!holder ||
+        [p.start.launcher, p.controller].some(
+          (identity) =>
+            holder.pid === identity.pid &&
+            String(holder.birth_ts_ms) === identity.birth,
+        ))
     )
       return {
         state: 'running',
@@ -302,9 +309,8 @@ export async function cancelCampaign(
     if (!claim && (p.controller || p.attempts.size))
       throw new Error('started execution has lost its host claim');
     if (!intent) {
-      const loss = p.controller
-        ? processes.observe(p.controller) !== 'live'
-        : true;
+      const loss =
+        processes.observe(p.controller ?? p.start.launcher) === 'dead';
       intent = {
         campaign_id: p.experiment.campaign_id,
         input_digest: p.experiment.input_digest,
@@ -316,14 +322,17 @@ export async function cancelCampaign(
       publishCancelIntent(args.campaignDir, intent);
     }
     // The intent fences the pipe before any stop or attempt to become journal writer.
-    if (
-      p.controller &&
-      processes.observe(p.controller) !== 'dead' &&
-      !(await processes.stop(p.controller))
-    )
-      throw new Error('controller death unresolved');
-    if (p.controller && processes.observe(p.controller) !== 'dead')
-      throw new Error('controller death unverified');
+    const settleController = async (controller: ProcessIdentity | null) => {
+      if (
+        controller &&
+        processes.observe(controller) !== 'dead' &&
+        !(await processes.stop(controller))
+      )
+        throw new Error('controller death unresolved');
+      if (controller && processes.observe(controller) !== 'dead')
+        throw new Error('controller death unverified');
+    };
+    await settleController(p.controller);
     if (
       !launcherReleased(args, p) &&
       processes.observe(p.start.launcher) !== 'dead' &&
@@ -341,6 +350,18 @@ export async function cancelCampaign(
         kind: 'terminated',
         status: observeCampaignStatus(args, processes),
       };
+    // The launcher can bind a child while stopping. Its settled role makes
+    // this final binding stable; a closed gate alone is not proof of death.
+    const verifiedController = p.controller;
+    await settleController(verifiedController);
+    ({ p, claim, intent, lockPath } = readLifecycle(args));
+    if (p.termination && !claim)
+      return {
+        kind: 'terminated',
+        status: observeCampaignStatus(args, processes),
+      };
+    if (!same(p.controller, verifiedController))
+      throw new Error('controller binding changed after launcher settlement');
     if (!p.start || !intent)
       throw new Error('cancellation identity disappeared');
     reclaimStoppedRunLock(args.loaded, [
@@ -368,6 +389,8 @@ export async function cancelCampaign(
       identity: realProcessIdentityProbe,
     });
     p = writer.readProjection();
+    if (!same(p.controller, verifiedController))
+      throw new Error('writer controller differs from verified death identity');
     const resultsRoot = resolveCampaignResultsRoot(
       args.loaded.config.container.results_root,
     );

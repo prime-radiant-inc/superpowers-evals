@@ -6,6 +6,7 @@ import { startCampaignOnce } from '../src/appliance/campaign-run.ts';
 import {
   campaignProcesses,
   cancelCampaign,
+  observeCampaignStatus,
 } from '../src/campaign/cancellation.ts';
 import { readProjection } from '../src/campaign/execution-journal.ts';
 import {
@@ -46,21 +47,45 @@ for (const cut of [
       },
     });
     expect(result.kind).toBe('refused');
+    expect((await startCampaignOnce(f, { target: f.target })).kind).not.toBe(
+      'launched',
+    );
+    const controller = readProjection(f.campaignDir).controller;
+    if (controller) {
+      for (
+        let i = 0;
+        i < 400 && campaignProcesses.observe(controller) !== 'dead';
+        i++
+      )
+        await Bun.sleep(20);
+      expect(campaignProcesses.observe(controller)).toBe('dead');
+    }
     expect((await startCampaignOnce(f, { target: f.target })).kind).toBe(
       'refused',
     );
-    await Bun.sleep(150);
     expect(existsSync(f.marker)).toBe(false);
     expect(readProjection(f.campaignDir).start).not.toBeNull();
     expect(
       readHostClaim({ lockPath: f.loaded.config.live_spend_lock! }) !== null,
     ).toBe(cut !== 'started');
-  });
+  }, 10_000);
 }
 test('two racing invocations release one real child after durable binding', async () => {
   const f = fixture();
   const results = await Promise.all([
-    startCampaignOnce(f, { target: f.target }),
+    startCampaignOnce(f, {
+      target: f.target,
+      onBoundary: (boundary) => {
+        if (boundary === 'leases_released') {
+          expect(observeCampaignStatus(f)).toEqual({
+            state: 'running',
+            next_action: 'status',
+            progress: { prepared: 0, stopped: 0 },
+          });
+          expect(existsSync(f.marker)).toBe(false);
+        }
+      },
+    }),
     startCampaignOnce(f, { target: f.target }),
   ]);
   expect(results.filter((r) => r.kind === 'launched')).toHaveLength(1);

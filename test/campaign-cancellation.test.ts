@@ -4,6 +4,7 @@ import {
   closeSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -32,6 +33,7 @@ import {
   jcsCanonicalize,
   sha256Hex,
 } from '../src/contracts/campaign/digest.ts';
+import type { ProcessIdentity } from '../src/contracts/campaign/execution.ts';
 import { RealClock } from '../src/scheduler/clock.ts';
 import {
   blockActivation,
@@ -79,18 +81,7 @@ function started(f: ReturnType<typeof fixture>, bound = false) {
       1,
     ),
   );
-  if (bound) {
-    const lease = acquireLiveSpendLock({
-      lockPath: f.loaded.config.live_spend_lock!,
-      clock: new RealClock(),
-      identity: realProcessIdentityProbe,
-    });
-    publishHostClaim(
-      { ...w.readProjection().start!, campaign_dir: f.campaignDir },
-      { lockPath: f.loaded.config.live_spend_lock! },
-    );
-    lease.release();
-  }
+  if (bound) claimStart(f).release();
   if (bound)
     w.commitTransition(
       transition(
@@ -101,6 +92,219 @@ function started(f: ReturnType<typeof fixture>, bound = false) {
     );
   w.release();
 }
+function claimStart(f: ReturnType<typeof fixture>) {
+  const lease = acquireLiveSpendLock({
+    lockPath: f.loaded.config.live_spend_lock!,
+    clock: new RealClock(),
+    identity: realProcessIdentityProbe,
+  });
+  publishHostClaim(
+    { ...readProjection(f.campaignDir).start!, campaign_dir: f.campaignDir },
+    { lockPath: f.loaded.config.live_spend_lock! },
+  );
+  return lease;
+}
+for (const childState of ['live', 'unknown'] as const) {
+  test(`controller bound during launcher stop must settle its exact ${childState} identity before takeover`, async () => {
+    const f = fixture();
+    started(f);
+    const launcher = currentProcessIdentity();
+    const child = { ...launcher, pid: launcher.pid + 100_000, birth: '123' };
+    claimStart(f).release();
+    const writer = f.elect();
+    let launcherDead = false;
+    let childDead = false;
+    let allowChildStop = false;
+    const stopped: ProcessIdentity[] = [];
+    let runtimes = 0;
+    const deps = {
+      runtime: () => {
+        runtimes++;
+        return noRuntime();
+      },
+      processes: {
+        observe: (identity: ProcessIdentity) => {
+          if (identity.pid === launcher.pid)
+            return launcherDead ? ('dead' as const) : ('live' as const);
+          expect(identity).toEqual(child);
+          return childDead
+            ? ('dead' as const)
+            : allowChildStop
+              ? ('live' as const)
+              : childState;
+        },
+        stop: async (identity: ProcessIdentity) => {
+          stopped.push(identity);
+          if (identity.pid === launcher.pid) {
+            writer.commitTransition(
+              transition(
+                'controller_bound',
+                {
+                  start_id: 'start',
+                  controller: child,
+                },
+                2,
+              ),
+            );
+            launcherDead = true;
+            return true;
+          }
+          expect(identity).toEqual(child);
+          childDead = allowChildStop;
+          return childDead;
+        },
+      },
+    };
+    try {
+      const refused = await cancelCampaign(f, deps);
+      expect(refused.kind).toBe('unresolved');
+      expect(refused.reason).toContain('controller death');
+      expect(stopped).toEqual([launcher, child]);
+      expect(() => writer.assertCurrentOwner()).not.toThrow();
+      expect(runtimes).toBe(0);
+      expect(readProjection(f.campaignDir).termination).toBeNull();
+      expect(
+        readdirSync(f.campaignDir).filter((name) =>
+          name.startsWith('termination-processes-'),
+        ),
+      ).toEqual([]);
+      expect(
+        readHostClaim({ lockPath: f.loaded.config.live_spend_lock! }),
+      ).not.toBeNull();
+    } finally {
+      writer.release();
+    }
+    allowChildStop = true;
+    const settled = await cancelCampaign(f, deps);
+    expect(settled.kind).toBe('terminated');
+    expect(settled.status.state).toBe('cancelled');
+    expect(childDead).toBe(true);
+    expect(runtimes).toBe(1);
+    const proof = readProjection(f.campaignDir).termination!
+      .process_evidence[0]!;
+    expect(
+      JSON.parse(readFileSync(join(f.campaignDir, proof.path), 'utf8')),
+    ).toMatchObject({ controller: child, controller_dead: true });
+    expect(
+      readHostClaim({ lockPath: f.loaded.config.live_spend_lock! }),
+    ).toBeNull();
+  });
+}
+
+test('unknown first controller probe is not persisted as established loss', async () => {
+  const f = fixture();
+  started(f, true);
+  let probes = 0;
+  let stopped = false;
+  const processes = {
+    observe: () =>
+      stopped
+        ? ('dead' as const)
+        : ++probes === 1
+          ? ('unknown' as const)
+          : ('live' as const),
+    stop: async () => {
+      expect(processes.observe()).toBe('live');
+      stopped = true;
+      return true;
+    },
+  };
+  const result = await cancelCampaign(f, { processes, runtime: noRuntime });
+  expect(
+    JSON.parse(readFileSync(join(f.campaignDir, 'cancel-intent.json'), 'utf8'))
+      .controller_loss_established,
+  ).toBe(false);
+  expect(result.kind).toBe('terminated');
+  expect(result.status.state).toBe('cancelled');
+});
+
+test('conclusively dead controller preserves established loss and interrupted outcome', async () => {
+  const f = fixture();
+  started(f, true);
+  const result = await cancelCampaign(f, {
+    processes: dead,
+    runtime: noRuntime,
+  });
+  expect(
+    JSON.parse(readFileSync(join(f.campaignDir, 'cancel-intent.json'), 'utf8'))
+      .controller_loss_established,
+  ).toBe(true);
+  expect(result.kind).toBe('terminated');
+  expect(result.status.state).toBe('interrupted');
+});
+
+test('unknown launcher without a bound controller does not establish loss', async () => {
+  const f = fixture();
+  started(f);
+  const result = await cancelCampaign(f, {
+    processes: { observe: () => 'unknown', stop: async () => false },
+    runtime: noRuntime,
+  });
+  expect(result.kind).toBe('unresolved');
+  expect(
+    JSON.parse(readFileSync(join(f.campaignDir, 'cancel-intent.json'), 'utf8'))
+      .controller_loss_established,
+  ).toBe(false);
+  expect(readProjection(f.campaignDir).termination).toBeNull();
+});
+
+test('known live controller stays running through launcher lease and empty handoff gap', () => {
+  const f = fixture();
+  started(f);
+  const lease = claimStart(f);
+  const launcher = currentProcessIdentity();
+  const controller = { ...launcher, pid: launcher.pid + 100_000, birth: '123' };
+  const writer = f.elect();
+  writer.commitTransition(
+    transition('controller_bound', { start_id: 'start', controller }, 2),
+  );
+  writer.release();
+  const running = {
+    state: 'running',
+    next_action: 'status',
+    progress: { prepared: 0, stopped: 0 },
+  } as const;
+  const processes = {
+    observe: (identity: ProcessIdentity) => {
+      expect(identity).toEqual(controller);
+      return 'live' as const;
+    },
+  };
+  const lockPath = f.loaded.config.live_spend_lock!;
+  const ownerFile = readdirSync(lockPath).find((name) =>
+    name.startsWith('owner-'),
+  )!;
+  try {
+    expect(observeCampaignStatus(f, processes)).toEqual(running);
+  } finally {
+    lease.release();
+  }
+  expect(observeCampaignStatus(f, processes)).toEqual(running);
+  expect(observeCampaignStatus(f, { observe: () => 'unknown' })).toEqual({
+    state: 'unresolved',
+    next_action: 'cancel',
+  });
+  expect(observeCampaignStatus(f, dead)).toEqual({
+    state: 'interrupted',
+    next_action: 'cancel',
+  });
+  // Valid protocol tokens model the child's acquisition and a foreign holder.
+  mkdirSync(lockPath);
+  writeFileSync(
+    join(lockPath, ownerFile),
+    `${controller.pid}\n${controller.birth}\n${Date.now()}\n`,
+  );
+  expect(observeCampaignStatus(f, processes)).toEqual(running);
+  writeFileSync(
+    join(lockPath, ownerFile),
+    `${controller.pid + 1}\n123\n${Date.now()}\n`,
+  );
+  expect(observeCampaignStatus(f, processes)).toEqual({
+    state: 'interrupted',
+    next_action: 'cancel',
+  });
+});
+
 test('read-only status preserves consumed start and terminal outcome precedence', async () => {
   const f = fixture();
   expect(observeCampaignStatus(f, dead)).toMatchObject({
