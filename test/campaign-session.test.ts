@@ -897,6 +897,60 @@ test('a cancellation signal wakes a long pool spacing wait before another start'
   expect(f.started).toHaveLength(1);
 });
 
+test('final audit invalidation keeps real telemetry alive for a legal reserve', async () => {
+  const f = fixture();
+  let invalidatedAfterPositive = false;
+  const verify = f.deps.verifySnapshot;
+  f.deps.verifySnapshot = () => {
+    verify();
+    const p = f.writer.readProjection();
+    if (
+      p.blocks.get('primary')?.validity_receipt &&
+      !invalidatedAfterPositive
+    ) {
+      invalidatedAfterPositive = true;
+      const ref = p.attempts
+        .get('sample-base-1')!
+        .observation!.artifacts.find((a) =>
+          a.path.endsWith('/trajectory.json'),
+        )!;
+      writeFileSync(join(f.context.resultsRoot, ref.path), '{}');
+    }
+  };
+  const sample = f.deps.probe.sample.bind(f.deps.probe);
+  const sampledAt: number[] = [];
+  f.deps.probe.sample = (at) => {
+    sampledAt.push(at);
+    return sample(at);
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.complete(0);
+  f.complete(1);
+  for (let i = 0; i < 10 && f.started.length < 4; i++) {
+    const next = f.clock.earliestWaiter();
+    if (next !== null) f.clock.setTo(next);
+    await flush();
+  }
+  expect(invalidatedAfterPositive).toBe(true);
+  expect(f.started).toHaveLength(4);
+  f.clock.advance(0.02);
+  await flush();
+  f.complete(2);
+  f.complete(3);
+  const stoppedAt = f.clock.now() * 1000;
+  await settle(f, run);
+  const p = f.writer.readProjection();
+  expect(sampledAt.some((at) => at >= stoppedAt)).toBe(true);
+  expect(p.blocks.get('primary')?.validity_receipt).not.toBeNull();
+  expect(p.blocks.get('primary')?.excluded).toBe('exposure');
+  const selected = p.blocks.get(p.selected_blocks.get('primary')!)!;
+  expect(selected.activation.block_id).not.toBe('primary');
+  expect(selected.validity_receipt).not.toBeNull();
+  expect(selected.excluded).toBeNull();
+  expect(p.ended?.outcome).toBe('completed');
+});
+
 function publishedSensor(
   f: ReturnType<typeof fixture>,
   file: string,

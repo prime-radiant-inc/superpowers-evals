@@ -892,8 +892,6 @@ export async function runCampaignDispatch(
           );
         })
       ) {
-        await sampler.stop();
-        await samplerLoop;
         audit();
         guard();
         const final = projection();
@@ -912,6 +910,10 @@ export async function runCampaignDispatch(
           reason: 'planned comparison resolved',
           cancel_intent: null,
         });
+        // A final audit can still select a reserve. End admission durably
+        // before closing its required telemetry producer.
+        await sampler.stop();
+        await samplerLoop;
         deps.finish(runtime);
         return { outcome: 'completed', reason: 'planned comparison resolved' };
       }
