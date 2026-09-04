@@ -757,11 +757,17 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
       { cwd: checkout.root, env: registerEnv },
     );
     if (registered.status !== 0) {
+      const gitLookup = runProcess('sh', ['-c', 'command -v git'], {
+        cwd: checkout.root,
+        env: registerEnv,
+      });
+      const gitShimMode = statSync(join(gitShimDir, 'git')).mode & 0o777;
       throw new Error(
         [
           `synthetic campaign registration failed (status ${registered.status})`,
           `stdout:\n${registered.stdout.trim()}`,
           `stderr:\n${registered.stderr.trim()}`,
+          `git lookup: ${gitLookup.stdout.trim()} (status ${gitLookup.status}); shim mode ${gitShimMode.toString(8)}`,
         ].join('\n'),
       );
     }
