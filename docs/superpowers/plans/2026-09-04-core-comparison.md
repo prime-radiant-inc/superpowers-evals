@@ -332,7 +332,7 @@ current = next;
 
 **Interfaces:** `compileResourcePolicy(registry: Readonly<Record<string, Credential>>, activeCredentialNames: readonly string[]): ReadonlyMap<string, PoolPolicy>` uses the existing registry shape and campaign `poolKey`: explicit `quota_pool`, otherwise endpoint/name plus API plus model. The distinct run-all `limiterKey` remains unchanged. `prepareRegistration` returns the V2 `Experiment` inputs; `registerCampaign` publishes a new independent campaign ID and initial transition; `loadFrozenCampaign` authenticates schema 2, input digest and journal anchor. Keep existing source resolver, snapshot preparation and exact eligibility checks.
 
-- [ ] Add tests for two identical registrations yielding distinct IDs/equal digests, no secret reads for configuration validation, unknown price allowed, missing finite bounds rejected, reserve not expanding primary slots, and aliases reordered without changing policy/admission feasibility.
+- [x] Add tests for two identical registrations yielding distinct IDs/equal digests, no secret reads for configuration validation, unknown price allowed, missing finite bounds rejected, reserve not expanding primary slots, and aliases reordered without changing policy/admission feasibility.
 
 ```ts
 test('shared grader and subject consume the same compiled pool', () => {
@@ -343,7 +343,7 @@ test('shared grader and subject consume the same compiled pool', () => {
 ```
 
 Fixture helpers in this test build actual credential registry objects; `assertFeasible` is exported by `resource-policy.ts` and consumes `ReadonlyMap<string, number>` demand, the policy map, and global capacity. Reuse the existing complete demand calculation from dispatcher in this module so registration and dispatch call the same function.
-- [ ] Run `bun test test/campaign-resource-policy.test.ts test/campaign-registration.test.ts`. Implement minimum explicit concurrency and maximum declared spacing over **all registry aliases** for each active pool. Refuse an active pool with no explicit concurrency declaration; retain per-key constraints. Freeze optional scheduling estimates; missing estimates fall back to the frozen attempt deadline, with stable identity tie-breaking.
+- [x] Run `bun test test/campaign-resource-policy.test.ts test/campaign-registration.test.ts`. Implement minimum explicit concurrency and maximum declared spacing over **all registry aliases** for each active pool. Refuse an active pool with no explicit concurrency declaration; retain per-key constraints. Freeze optional scheduling estimates; missing estimates fall back to the frozen attempt deadline, with stable identity tie-breaking.
 
 ```ts
 const limits = aliases.flatMap((c) => c.max_concurrency === undefined ? [] : [c.max_concurrency]);
@@ -351,8 +351,8 @@ if (limits.length === 0) throw new RegistrationError(`pool ${poolId} needs an ex
 const capacity = Math.min(...limits);
 ```
 
-- [ ] Pin the public credential authority/projection policy digest. Reject changes before new starts; supported bundle mutation paths check host ownership. Do not embed secret bytes in experiment, claim, logs or report.
-- [ ] Verify existing declared capabilities: Claude/Codex/Pi/Copilot ref and none; Kimi ref supported and none rejected. No adapter feature expansion. Commit registration and policy changes.
+- [x] Pin the public credential authority/projection policy digest. Reject changes before new starts; supported bundle mutation paths check host ownership. Do not embed secret bytes in experiment, claim, logs or report.
+- [x] Verify existing declared capabilities: Claude/Codex/Pi/Copilot ref and none; Kimi ref supported and none rejected. No adapter feature expansion. Commit registration and policy changes.
 
 ## Task 5: Bind containers before start and enforce the independent deadline
 
@@ -544,3 +544,5 @@ This command belongs on the explicitly selected Linux environment with Docker ac
 - [x] Root self-review: every spec obligation mapped; corrected the credential registry and command-options signatures against source; verified existing task paths; scanned for unresolved placeholders. Test-local fixture helpers are specified by their scenario rather than production APIs.
 - [x] Narrow execution review: addressed the five ownership/accounting/validity findings and the scoped re-review's late-invalidation and launch-cut corrections. Uncertain daemon starts retain ownership until conclusive settlement; no stop snapshot or elapsed-time inference clears it. The report oracle's fixed denominators and literal arithmetic were independently checked.
 - [ ] Execute Tasks 1-9 locally with task-scoped review and focused tests; Task 10's environment-dependent proof remains separately identified.
+
+Task 4 checkpoint: finite registration and shared resource policy are complete at `edd5e979`. Independent task review and scoped fix review pass after rejecting non-Linux targets, requiring exact grader/credential model identity through one strict parser, and refusing the reserved global pool identity. The final focused receipt is 245 passing tests, with lint, typecheck and scenario validation passing. Runtime consumers and removal of temporary budgeted source APIs remain Tasks 5–9.
