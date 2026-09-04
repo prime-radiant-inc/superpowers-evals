@@ -181,3 +181,88 @@ The required exact rerun then passed:
 - `b6c061f9` — test: extend fake-provider readiness window
 - `111e4b8e` — test: widen fake-provider startup tolerance
 - `abf2ff42` — test: harden fake-provider loopback connections
+
+## Fix round 2/5
+
+### Failure evidence and root cause
+
+The first real Linux run exposed the fixture-construction failure described in
+the review: all five tests stopped at synthetic checkout registration because
+the generated `checks.sh` used one-line `pre() { :; }` and `post() { :; }`
+declarations. The manifest extractor rejected line 1 because its declaration
+must end at `{` and its function body must continue on later lines.
+
+After that format was corrected, the first Linux retry stopped at registration
+for a second, test-owned reason. The registration subprocess reported that the
+synthetic evals commit predated the minimum child-contract commit. Diagnostics
+showed `git lookup: /usr/bin/git (status 0); shim mode 755`. The fixture used
+`node:path`'s filesystem `sep` (`/`) when constructing the PATH list, so the
+temporary git shim was not a PATH entry. This was verified with an exec trace:
+the child-contract probe executed `/usr/bin/git` directly.
+
+### Changes
+
+- `campaign-attempt-docker.test.ts` now writes manifest-compatible multi-line
+  functions:
+  `pre() {`, `file-exists fake-coding-agent`, `}`, followed by
+  `post() {`, `file-exists subject-ran.txt`, `}`. These are the plan's two
+  minimal behavioral checks, using the bare-verb DSL.
+- `fake-coding-agent` now writes the non-secret `fake subject ran` marker to
+  `subject-ran.txt` in its current workdir, allowing the post-check to prove
+  the subject ran.
+- The registration failure now reports subprocess status, stdout, stderr,
+  the effective `git` lookup, and shim mode. This exposed the Linux-only test
+  harness defect without changing registration behavior.
+- The test now uses `path.delimiter` for the PATH shim while retaining
+  `path.sep` for filesystem-prefix comparisons.
+
+### Local verification
+
+- A direct `createSyntheticCheckout` reproduction, with no Docker integration
+  environment, failed with the exact manifest-extractor error for
+  `pre() { :; }`.
+- The corrected synthetic checkout passed
+  `bun run quorum check --update-manifests`; its generated manifest contains
+  exactly the pre `file-exists fake-coding-agent` and post
+  `file-exists subject-ran.txt` entries.
+- The fake agent marker regression changed from `subject-ran.txt is absent` to
+  `subject-ran.txt present` after the fixture change.
+- `env -u QUORUM_DOCKER_INTEGRATION bun test test/linux/campaign-attempt-docker.test.ts`:
+  0 passed, 5 skipped, 0 failed.
+- `bunx biome ci test/linux/campaign-attempt-docker.test.ts` and
+  `bunx tsc --noEmit`: pass.
+- `env -u QUORUM_DOCKER_INTEGRATION bun run quorum check`: pass; all
+  scenarios, credentials, and arms/suites validated.
+- `git diff --check`: pass.
+
+### Devbox verification
+
+The devbox was updated to each pushed commit with `git fetch origin` and
+`git reset --hard origin/drew/child1-tasks-15-17-recut`.
+
+- At `a76c07db`, the single gated test failed at registration with the
+  child-contract diagnostic and effective lookup `/usr/bin/git`.
+- At `a1499ad3`, the single gated test crossed registration and executed real
+  containers. It then failed at container inspection because the container
+  exited 1; campaign output reported `attempt staging must hold exactly one
+  run directory, found []`, `capture_failed`, and an accounting gap with no
+  readable actual cost.
+- The exact requested command
+  `GAUNTLET_ROOT=$HOME/prime-rad/gauntlet SUPERPOWERS_ROOT=$HOME/prime-rad/superpowers QUORUM_DOCKER_INTEGRATION=1 bun test test/linux/`
+  completed in 16.43 seconds with 1 passed, 4 failed, 30 expectations. The
+  SIGKILL evidence test passed; the complete, daemonized, stop, and parallel
+  tests failed, with the stop and parallel tests also reaching their 5-second
+  test timeouts. All five tests constructed fixtures and reached real campaign
+  registration/container execution before those runtime failures.
+
+No runtime capture/staging behavior was changed in this round. The remaining
+`attempt staging must hold exactly one run directory` / `capture_failed`
+failure is the next integration boundary to investigate, not a fixture-format
+fix to guess at.
+
+### Round commits
+
+- `c65ac830` — test: make fake campaign checks executable
+- `a76c07db` — test: expose synthetic registration diagnostics
+- `10de15e2` — test: diagnose Linux registration PATH
+- `a1499ad3` — test: use PATH delimiter for Linux fixture shim
