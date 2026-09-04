@@ -1,7 +1,7 @@
 # Astra and Sol through Codex: representative comparison
 
-Tracking: PRI-3088. Status: running; first repetition complete (10/30 measured
-attempts), second repetition started. Snapshot: 2026-09-04 20:30 UTC.
+Tracking: PRI-3088. Status: running; 15/30 measured attempts complete. Sol
+repetition 2 is active. Snapshot: 2026-09-04 20:50 UTC.
 
 Drew prioritized usable evals and experiments and deferred campaign recovery
 and resume. This experiment uses the supported appliance helper and existing
@@ -115,7 +115,8 @@ Both excluded planning smokes passed. Their job IDs are
 |---|---|---|---|---|
 | 1 | Sol | `job-20260904T195456Z-c989` | `batch-20260904T195511Z-4b8f` | 4 pass, 1 fail |
 | 1 | Astra | `job-20260904T201358Z-2136` | `batch-20260904T201413Z-1dc1` | 4 pass, 1 indeterminate |
-| 2 | Astra | `job-20260904T202910Z-8b0c` | Pending final collection | Running |
+| 2 | Astra | `job-20260904T202910Z-8b0c` | `batch-20260904T202926Z-1129` | 4 pass, 1 fail |
+| 2 | Sol | `job-20260904T204552Z-d6a3` | `batch-20260904T204608Z-b5c8` | Running |
 
 The first review-judgment pair differs: Sol fixed the real bug and rejected
 the wall-clock suggestion, but implemented the speculative storage abstraction.
@@ -126,12 +127,36 @@ debugging attempt has a malformed grader report and is canonically
 was saved. An independent workdir inspection confirmed the absence of a saved
 regression test. Keep that observation distinct from canonical composition.
 
-The grader failure reached Gauntlet's normal report-validation limit. There
+The grader failure reached Gauntlet's normal report-validation limit. An
+all-attempt diagnostic pass found report-format retries in 11/15 completed
+attempts: ten recovered within the frozen grader's built-in retry policy and
+one exhausted it. All captured grader starts identify `claude-sonnet-5`.
+This is common format fragility, not an isolated malformed response. There
 is no demonstrated environment or configuration fault; continuing the frozen
-slots was independently reviewed as defensible, preserving the indeterminate
-and without replacement or regrading. Reassess before further submissions if
-the malformed-output signature recurs. Do not assume the missing judgment is
-random or convert the embedded malformed `fail` into a canonical verdict.
+slots was independently reviewed as defensible. Preserve original outcomes
+and retry time/cost; do not replace or regrade attempts. Reassess before new
+submission on another exhausted validation failure. Do not assume the missing
+judgment is random or convert the embedded malformed `fail` into a canonical
+verdict.
+
+Astra repetition 2 again fixed the debugging producer defect without saving
+a regression test; this time the valid grader report and deterministic check
+both failed. Captured native Codex base instructions differ by model: Astra's
+include "do not add tests to codebases with no tests," while Sol's captured
+base does not contain that prohibition. This plausibly contributes to the
+behavior but does not establish causation. The root base fingerprints were
+stable within each arm across the first 13 completed runs inspected; main
+scenario prompts matched by scenario after whitespace normalization, and
+personality/effort settings matched. The models' native instructions are part
+of this workflow treatment. The result cannot isolate underlying model
+weights from prompts or delegation choices. Do not change those instructions
+after seeing outcomes.
+
+The Astra base SHA256 is
+`ac8ae107a0d72fe3476b430afb161ea4e67da2e446d778aefc44828160559807`;
+Sol's is `cbefa6b0bede0e332d957fca70ccacf9f12f4c0ecdf81b819e5cbe1a3b16e265`.
+Private evidence links are in
+`results/pri-3088/analysis/native-codex-instructions.md`.
 
 ## Accounting correction
 
@@ -157,14 +182,26 @@ to uncorrected amounts. This rule applies to both arms and smokes.
 
 The corrected subject estimates for the affected Sol runs are $0.6733014
 (debugging; correction -$0.0273032) and $0.554361 (phantom completion;
-correction -$0.0203324). All ten first-repetition attempts currently reconcile
+correction -$0.0203324). All fifteen completed measured attempts currently reconcile
 against available logs. These remain standard-tier token estimates; native
 tool fees and unlogged provider usage are not established invoice coverage.
 
 At this interim snapshot, measured all-attempt token estimates total
-$16.9944263, with smokes separately $2.875729. Four complete determinate pairs
+$31.3899901, with smokes separately $2.875729. Four complete determinate pairs
 contribute to comparisons; both debugging attempts remain in accounting.
 No general model ranking or completed-study conclusion is available yet.
+The second Astra SDD attempt passed with a subject estimate of $8.173847,
+compared with $3.6540152 in its first repetition; the final report must retain
+per-attempt variation rather than only averages.
+
+The dated offline analysis and its 18 contract tests are committed alongside
+this log. To regenerate from the private collected data:
+
+```sh
+python3 docs/experiments/2026-09-04-astra-sol-readout.py \
+  --data-root results/pri-3088 \
+  --output-dir results/pri-3088/analysis
+```
 
 Private collected artifacts and the reproducible readout are under the
 experiment worktree's gitignored `results/pri-3088/` directory. The frozen
