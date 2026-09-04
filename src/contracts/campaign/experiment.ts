@@ -187,6 +187,34 @@ export const ExperimentSchema = z
       ]),
     );
     const cells = new Map(experiment.cells.map((c) => [cellKey(c), c]));
+    if (experiment.comparisons.length !== experiment.suite.comparisons.length)
+      issue('comparison inventory differs from normalized suite');
+    experiment.suite.comparisons.forEach((declared, index) => {
+      const frozen = experiment.comparisons[index];
+      if (!frozen) return;
+      const declaredArms =
+        'arm' in declared
+          ? [declared.arm]
+          : [declared.baseline, declared.treatment];
+      const frozenArms =
+        'arm' in frozen ? [frozen.arm] : [frozen.baseline, frozen.treatment];
+      if (JSON.stringify(declaredArms) !== JSON.stringify(frozenArms))
+        issue('comparison arm roles differ from normalized suite');
+      if (!Array.isArray(declared.scenarios)) {
+        issue('experiment selectors must be expanded');
+        return;
+      }
+      unique(declared.scenarios, 'scenario selector');
+      for (const cell of experiment.cells.filter(
+        (c) => c.comparison_id === frozen.comparison_id,
+      )) {
+        if (
+          !declared.scenarios.includes(cell.scenario) ||
+          cell.n !== (declared.cells?.[cell.scenario]?.n ?? declared.n)
+        )
+          issue('cell differs from normalized suite');
+      }
+    });
     const blocks = new Map<string, PlannedSlot[]>();
     for (const slot of experiment.planned_slots) {
       const cell = cells.get(cellKey(slot));

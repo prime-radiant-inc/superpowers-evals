@@ -264,6 +264,19 @@ function activate(
         state.experiment.runtime_limits.max_time_s,
       'runtime deadline differs from frozen limit',
     );
+    requireCondition(
+      intent.runtime_spec.labels['quorum.campaign_id'] ===
+        identity.campaign_id &&
+        intent.runtime_spec.labels['quorum.attempt_id'] ===
+          identity.execution_attempt_id &&
+        intent.runtime_spec.labels['quorum.evals_sha'] ===
+          state.experiment.refs.evals &&
+        intent.runtime_spec.labels['quorum.image_digest'] ===
+          intent.runtime_spec.image_digest &&
+        intent.runtime_spec.public_env.QUORUM_ATTEMPT_DIR ===
+          intent.output_root,
+      'runtime specification belongs to another attempt or source',
+    );
     seen.add(slot.sample_id);
     ids.add(identity.execution_attempt_id);
     names.add(intent.container_name);

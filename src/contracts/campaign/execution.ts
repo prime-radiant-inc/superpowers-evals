@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { EnvVarNameSchema } from '../credential.ts';
 import { FiniteNumberSchema } from '../finite.ts';
 import { CampaignIdentitySchema } from './campaign.ts';
 import {
@@ -77,10 +76,35 @@ export const HostCampaignClaimSchema = ExecutionStartSchema.extend({
   campaign_dir: AbsoluteRuntimePathSchema,
 }).strict();
 export type HostCampaignClaim = z.infer<typeof HostCampaignClaimSchema>;
+export const PublicRuntimeEnvSchema = z
+  .object({
+    HOME: AbsoluteRuntimePathSchema,
+    TMPDIR: z.literal('/run/quorum/attempt'),
+    TMUX_TMPDIR: z.literal('/run/quorum/attempt'),
+    XDG_CONFIG_HOME: AbsoluteRuntimePathSchema,
+    XDG_CACHE_HOME: AbsoluteRuntimePathSchema,
+    XDG_STATE_HOME: AbsoluteRuntimePathSchema,
+    QUORUM_COVERED_BY_LIVE_SPEND_LOCK: z.literal('1'),
+    QUORUM_GRADER_SOURCE_MODE: z.literal('appliance-scoped'),
+    QUORUM_ATTEMPT_DIR: AbsoluteRuntimePathSchema,
+    QUORUM_SUBJECT_FILE: z.literal('/run/quorum/subject.env'),
+    QUORUM_GRADER_FILE: z.literal('/run/quorum/grader.env'),
+    QUORUM_ATTEMPT_AUTHORITY_FILE: AbsoluteRuntimePathSchema,
+  })
+  .strict();
 export const AttemptRuntimeSpecSchema = z
   .object({
     image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
     command: IdSchema,
+    entrypoint: z.array(z.string().min(1)),
+    labels: z
+      .object({
+        'quorum.campaign_id': IdSchema,
+        'quorum.attempt_id': IdSchema,
+        'quorum.evals_sha': z.string().regex(/^[0-9a-f]{40}$/),
+        'quorum.image_digest': z.string().regex(/^sha256:[0-9a-f]{64}$/),
+      })
+      .strict(),
     args: z.array(z.string()),
     cwd: AbsoluteRuntimePathSchema,
     user: z
@@ -98,8 +122,8 @@ export const AttemptRuntimeSpecSchema = z
         })
         .strict(),
     ),
-    // Only names are persisted. Secret projection remains an authenticated mounted file.
-    env_names: z.array(EnvVarNameSchema),
+    // Public path values are frozen; credential values remain in mounted private files.
+    public_env: PublicRuntimeEnvSchema,
     init: z.literal(true),
     restart: z.literal('no'),
     pid_namespace: z.literal('private'),

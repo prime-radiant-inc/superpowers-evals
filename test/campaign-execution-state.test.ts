@@ -4,6 +4,10 @@ import {
   initialProjection,
 } from '../src/campaign/execution-state.ts';
 import {
+  jcsCanonicalize,
+  sha256Hex,
+} from '../src/contracts/campaign/digest.ts';
+import {
   replacementFixture,
   startTransition,
 } from './fixtures/core-comparison/factory.ts';
@@ -27,6 +31,7 @@ test('replacement preserves observations and the primary denominator', () => {
 
 import {
   ArtifactRefSchema,
+  AttemptRuntimeSpecSchema,
   CampaignTransitionSchema,
 } from '../src/contracts/campaign/execution.ts';
 import {
@@ -565,4 +570,157 @@ test('V2 schemas reject removed policy fields, ragged slots, and unsafe referenc
     expect(ArtifactRefSchema.safeParse({ ...evidenceRef, path }).success).toBe(
       false,
     );
+});
+
+test('runtime records freeze public values and reject credential values', () => {
+  const e = twoArmExperiment();
+  const intent = blockActivation(e).attempts[0]!;
+  const spec = intent.runtime_spec;
+  expect(
+    AttemptRuntimeSpecSchema.safeParse({ ...spec, public_env: undefined })
+      .success,
+  ).toBe(false);
+  expect(
+    AttemptRuntimeSpecSchema.safeParse({
+      ...spec,
+      public_env: { ...spec.public_env, ANTHROPIC_API_KEY: 'secret' },
+    }).success,
+  ).toBe(false);
+  expect(
+    AttemptRuntimeSpecSchema.safeParse({ ...spec, labels: undefined }).success,
+  ).toBe(false);
+  expect(
+    AttemptRuntimeSpecSchema.safeParse({ ...spec, entrypoint: undefined })
+      .success,
+  ).toBe(false);
+});
+
+test('registration rejects normalized suite/cell disagreement', () => {
+  const e = twoArmExperiment();
+  e.suite.comparisons[0]!.n = 2;
+  expect(ExperimentSchema.safeParse(e).success).toBe(false);
+});
+
+test('registration rejects duplicate comparison arms even in unused entries', () => {
+  const e = twoArmExperiment();
+  e.comparisons.push({
+    comparison_id: 'unused',
+    baseline: 'base',
+    treatment: 'base',
+  });
+  expect(ExperimentSchema.safeParse(e).success).toBe(false);
+});
+
+test('registration rejects unresolved selectors in the frozen document', () => {
+  const e = twoArmExperiment();
+  e.suite.comparisons[0]!.scenarios = 'tier=full';
+  expect(ExperimentSchema.safeParse(e).success).toBe(false);
+});
+
+test.each([
+  'label',
+  'output root',
+])('authenticated runtime rejects another attempt %s', (field) => {
+  const e = twoArmExperiment();
+  const state = sessionTransitions(e).reduce(
+    foldTransition,
+    initialProjection(e),
+  );
+  const activation = blockActivation(e);
+  const intent = activation.attempts[0]!;
+  if (field === 'label')
+    intent.runtime_spec.labels['quorum.attempt_id'] = 'other';
+  else
+    intent.runtime_spec.public_env.QUORUM_ATTEMPT_DIR =
+      '/campaign/attempts/other';
+  intent.runtime_spec_digest = sha256Hex(jcsCanonicalize(intent.runtime_spec));
+  expect(() =>
+    foldTransition(state, transition('block_activated', activation, 3)),
+  ).toThrow();
+});
+
+test('replacement reserve belongs to the primary cell and is consumed once', () => {
+  const f = replacementFixture();
+  const closed = f.transitions
+    .slice(0, 6)
+    .reduce(foldTransition, initialProjection(f.experiment));
+  const wrong = structuredClone(f.successor);
+  wrong.reserve_id = 'foreign-reserve';
+  expect(() =>
+    foldTransition(
+      closed,
+      transition(
+        'block_replaced',
+        { activation: wrong, reason: 'grader_rate_limited' },
+        6,
+      ),
+    ),
+  ).toThrow();
+  const replaced = foldTransition(closed, f.transitions[6]!);
+  expect(replaced.consumed_reserves.has('reserve')).toBe(true);
+  expect(closed.consumed_reserves.size).toBe(0);
+  expect(() =>
+    foldTransition(replaced, {
+      ...f.transitions[6]!,
+      transition_id: 'second-replacement',
+    }),
+  ).toThrow();
+});
+
+test('failed observation transaction leaves the accepted sibling and maps untouched', () => {
+  const { state, primary } = active();
+  const good = foldTransition(
+    state,
+    transition(
+      'attempt_observed',
+      { observation: observation(primary, 0, 4), excluded_block: null },
+      4,
+    ),
+  );
+  const bad = observation(primary, 1, 5, {
+    validity: 'unknown',
+    outcome: 'indeterminate',
+  });
+  expect(() =>
+    foldTransition(
+      good,
+      transition(
+        'attempt_observed',
+        {
+          observation: bad,
+          excluded_block: { block_id: 'foreign', reason: 'missing_telemetry' },
+        },
+        5,
+      ),
+    ),
+  ).toThrow();
+  expect(
+    good.attempts.get(primary.attempts[0]!.identity.execution_attempt_id)
+      ?.observation?.outcome,
+  ).toBe('pass');
+  expect(
+    good.attempts.get(primary.attempts[1]!.identity.execution_attempt_id)
+      ?.observation,
+  ).toBeNull();
+  expect(good.blocks.get('primary')?.excluded).toBeNull();
+});
+
+test('fresh transitions cannot move the journal clock backward', () => {
+  const { state, primary } = active();
+  expect(() =>
+    foldTransition(
+      state,
+      transition(
+        'accounting_observed',
+        {
+          execution_attempt_id:
+            primary.attempts[0]!.identity.execution_attempt_id,
+          stopped: observation(primary, 0, 2).stopped,
+          artifacts: [],
+          evidence_missing: 'not recorded',
+        },
+        2,
+      ),
+    ),
+  ).toThrow();
 });
