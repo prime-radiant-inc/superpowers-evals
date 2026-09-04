@@ -1,5 +1,12 @@
 # Quorum campaign platform: comparative evals as configuration
 
+**Forward direction (2026-09-04):** Drew accepted the
+[campaign consolidation direction](2026-09-04-campaign-consolidation-design.md).
+It retains comparative questions as configuration, chooses one V2 execution
+and evidence model, and pauses V1-specific D4b integration. Its detailed design
+is pending written review. This document remains the V1 contract and historical
+plan; its remaining delivery sequence is superseded for consolidation planning.
+
 **Date:** 2026-08-17 (revision 3, 2026-09-04)
 **Status:** APPROVED (Drew, 2026-08-17) — the governing plan for
 PRI-2874. Revision 2 incorporates the seven-seat, two-round adversarial

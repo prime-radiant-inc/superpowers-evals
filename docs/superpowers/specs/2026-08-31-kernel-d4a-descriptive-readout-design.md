@@ -1,5 +1,11 @@
 # Kernel Deliverable 4a — Descriptive Readout (seal act + report engine): Design
 
+**Forward direction (2026-09-04):** the accepted
+[campaign consolidation direction](2026-09-04-campaign-consolidation-design.md)
+pauses the V1-specific D4b hand-off below. D4a's implementation and historical
+artifact contract remain unchanged; future reports use the surviving V2
+measurement model. The detailed consolidation design is pending written review.
+
 **Date:** 2026-08-31 (revision 3, 2026-09-04: post-implementation scope
 amendment per PAR revision 3 — the revision-2 implementation stamp is
 untouched)
