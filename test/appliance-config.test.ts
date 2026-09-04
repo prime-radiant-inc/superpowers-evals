@@ -12,12 +12,13 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import {
   loadCredentialConfig,
   loadStateConfig,
 } from '../src/appliance/config.ts';
 import { ApplianceError } from '../src/appliance/errors.ts';
+import { defaultLiveSpendLockPath } from '../src/campaign/locks.ts';
 
 interface ConfigFixture {
   readonly root: string;
@@ -383,4 +384,55 @@ test('an ancestor of the bundle anchor swapped at open time cannot redirect meta
     expect(caught).toBeInstanceOf(ApplianceError);
     expect((caught as ApplianceError).code).toBe('config_invalid');
   }
+});
+
+test('structural configuration refuses a symlinked authority file', () => {
+  const fx = fixture();
+  const alias = join(fx.root, 'redirected-config.json');
+  symlinkSync(fx.configPath, alias);
+  expect(() => loadStateConfig(alias)).toThrow();
+  expect(loadStateConfig(fx.configPath).config.root).toBe(fx.root);
+});
+
+test('a config replacement after its pinned read cannot change the selected lock authority', () => {
+  const fx = fixture();
+  const original = JSON.parse(fs.readFileSync(fx.configPath, 'utf8'));
+  original.live_spend_lock = join(fx.root, 'original.lock');
+  writeFileSync(fx.configPath, JSON.stringify(original));
+  const realRead = fs.readFileSync;
+  let swapped = false;
+  const spy = spyOn(fs, 'readFileSync').mockImplementation(((
+    path: fs.PathOrFileDescriptor,
+    options?: unknown,
+  ) => {
+    const result = realRead(path, options as never);
+    if (!swapped && typeof path === 'number') {
+      swapped = true;
+      fs.renameSync(fx.configPath, join(fx.root, 'original.json'));
+      writeFileSync(
+        fx.configPath,
+        JSON.stringify({
+          ...original,
+          live_spend_lock: join(fx.root, 'replacement.lock'),
+        }),
+      );
+    }
+    return result;
+  }) as typeof fs.readFileSync);
+  try {
+    expect(
+      defaultLiveSpendLockPath({ canonicalConfigPath: fx.configPath, env: {} }),
+    ).toBe(join(fx.root, 'original.lock'));
+    expect(JSON.parse(realRead(fx.configPath, 'utf8')).live_spend_lock).toBe(
+      join(fx.root, 'replacement.lock'),
+    );
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test('a relative configuration filename retains structural loading with pinned file reads', () => {
+  const fx = fixture();
+  const relativePath = relative(process.cwd(), fx.configPath);
+  expect(loadStateConfig(relativePath).config.root).toBe(fx.root);
 });

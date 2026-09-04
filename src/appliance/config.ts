@@ -1,12 +1,11 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { getEnv } from '../env.ts';
 import {
   assertCredentialBundleBoundary,
   readPinnedNoFollowFile,
 } from './credential-scope.ts';
 import { ApplianceError } from './errors.ts';
-import { readJsonFile } from './fs.ts';
 import {
   assertNoFollowDirChain,
   assertRealDirNoFollow,
@@ -54,11 +53,15 @@ export function loadStateConfig(
     configPath ?? getEnv('EVALS_APPLIANCE_CONFIG') ?? DEFAULT_CONFIG_PATH;
 
   try {
-    const config = readJsonFile(
-      resolvedConfigPath,
-      ApplianceConfigSchema,
+    const body = readPinnedNoFollowFile(
+      dirname(resolvedConfigPath),
+      [basename(resolvedConfigPath)],
       `appliance config ${resolvedConfigPath}`,
+      true,
     );
+    if (body === null)
+      throw new Error(`appliance config missing: ${resolvedConfigPath}`);
+    const config = ApplianceConfigSchema.parse(JSON.parse(body));
 
     // The configured root and the state namespace are no-follow boundaries
     // for READS too: status/show/costs/cancel resolve records through these

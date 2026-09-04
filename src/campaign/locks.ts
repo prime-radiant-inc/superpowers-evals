@@ -63,7 +63,6 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { loadStateConfig } from '../appliance/config.ts';
-import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
 import { envSnapshot, getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import { clockNowMs } from './host-stats.ts';
@@ -983,14 +982,7 @@ export function defaultLiveSpendLockPath(
   const canonicalPath =
     options.canonicalConfigPath ?? '/srv/quorum/config/appliance.json';
   const configured = (path: string): string => {
-    // loadStateConfig validates structural directories without reading credentials.
-    // Pin the config file itself too; its JSON reader alone follows symlinks.
-    readPinnedNoFollowFile(
-      dirname(path),
-      [basename(path)],
-      'appliance lock configuration',
-      true,
-    );
+    // The structural loader parses one pinned no-follow read without credentials.
     const value = loadStateConfig(path).config.live_spend_lock;
     if (!value || !isAbsolute(value))
       throw new LockError(
