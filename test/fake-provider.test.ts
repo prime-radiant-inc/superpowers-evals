@@ -9,13 +9,15 @@ const nodeRequire = createRequire(import.meta.url);
 const ANTHROPIC_VERSION = '2023-06-01';
 const GRADER_API_KEY = 'fake-grader-api-key';
 const MODEL = 'claude-fake-grader-0';
-const PROVIDER_CONNECT_ATTEMPTS = 120;
+const PROVIDER_CONNECT_ATTEMPTS = 20;
 const PROVIDER_CONNECT_RETRY_DELAY_MS = 250;
+const LOOPBACK_PROXY_HOSTS = ['127.0.0.1', 'localhost', '::1'] as const;
+let loopbackProxyBypassQueue = Promise.resolve();
 
 // The full repository suite can leave a freshly-created Bun server waiting
 // for its first accept window. Keep the retry bounded and give it room to
 // finish inside the test timeout.
-setDefaultTimeout(35_000);
+setDefaultTimeout(10_000);
 
 interface Message {
   readonly role: 'user' | 'assistant';
@@ -226,12 +228,50 @@ async function withProviderConnectionRetry<T>(
   throw new Error('provider connection retry loop did not return');
 }
 
+function addLoopbackProxyHosts(value: string | undefined): string {
+  const hosts = new Set(
+    (value ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== ''),
+  );
+  for (const host of LOOPBACK_PROXY_HOSTS) hosts.add(host);
+  return [...hosts].join(',');
+}
+
+async function withLoopbackProxyBypass<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previousTurn = loopbackProxyBypassQueue;
+  let release!: () => void;
+  loopbackProxyBypassQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previousTurn;
+
+  const previousUpper = Bun.env['NO_PROXY'];
+  const previousLower = Bun.env['no_proxy'];
+  try {
+    Bun.env['NO_PROXY'] = addLoopbackProxyHosts(previousUpper);
+    Bun.env['no_proxy'] = addLoopbackProxyHosts(previousLower);
+    return await operation();
+  } finally {
+    if (previousUpper === undefined) delete Bun.env['NO_PROXY'];
+    else Bun.env['NO_PROXY'] = previousUpper;
+    if (previousLower === undefined) delete Bun.env['no_proxy'];
+    else Bun.env['no_proxy'] = previousLower;
+    release();
+  }
+}
+
 async function fetchProvider(
   input: URL,
   init?: RequestInit,
   fetchImpl: FetchImplementation = fetch,
 ): Promise<Response> {
-  return withProviderConnectionRetry(() => fetchImpl(input, init));
+  return withProviderConnectionRetry(() =>
+    withLoopbackProxyBypass(() => fetchImpl(input, init)),
+  );
 }
 
 const defaultSdkRuntime: SdkRuntime = {
@@ -275,7 +315,9 @@ function makeTransport(
       usesSdk: true,
       send: async (body) =>
         parseToolResponse(
-          await withProviderConnectionRetry(() => client.messages.create(body)),
+          await withProviderConnectionRetry(() =>
+            withLoopbackProxyBypass(() => client.messages.create(body)),
+          ),
         ),
     };
   }
@@ -426,6 +468,38 @@ test('retries transient provider connection failures before sending the request'
     },
   );
   expect(attempts).toBe(3);
+});
+
+test('loopback provider connections add local proxy bypasses', async () => {
+  const previousUpper = Bun.env['NO_PROXY'];
+  const previousLower = Bun.env['no_proxy'];
+  delete Bun.env['NO_PROXY'];
+  delete Bun.env['no_proxy'];
+  let observedUpper: string | undefined;
+  let observedLower: string | undefined;
+  try {
+    const response = await fetchProvider(
+      new URL('http://127.0.0.1:1/v1/messages'),
+      undefined,
+      async () => {
+        observedUpper = Bun.env['NO_PROXY'];
+        observedLower = Bun.env['no_proxy'];
+        return new Response(null, { status: 204 });
+      },
+    );
+    expect(response.status).toBe(204);
+    expect(observedUpper).toContain('127.0.0.1');
+    expect(observedUpper).toContain('localhost');
+    expect(observedUpper).toContain('::1');
+    expect(observedLower).toContain('127.0.0.1');
+    expect(observedLower).toContain('localhost');
+    expect(observedLower).toContain('::1');
+  } finally {
+    if (previousUpper === undefined) delete Bun.env['NO_PROXY'];
+    else Bun.env['NO_PROXY'] = previousUpper;
+    if (previousLower === undefined) delete Bun.env['no_proxy'];
+    else Bun.env['no_proxy'] = previousLower;
+  }
 });
 
 function makeRequest(
