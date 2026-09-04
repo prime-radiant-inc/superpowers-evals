@@ -9,6 +9,7 @@ import {
   readlinkSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -101,6 +102,35 @@ function copyRepositoryFiles(
   }
 }
 
+function installDependencies(root: string): void {
+  const nodeModules = join(root, 'node_modules');
+  if (existsSync(nodeModules) && lstatSync(nodeModules).isSymbolicLink()) {
+    // The source checkout link is useful for local synthetic runs, but its
+    // absolute target is outside the one tree mounted into an attempt
+    // container. Materialize the ignored dependency tree inside the copy so
+    // the container sees the same dependencies as a campaign snapshot.
+    unlinkSync(nodeModules);
+  }
+  const result = spawnSync('bun', ['install', '--frozen-lockfile'], {
+    cwd: root,
+    env: {
+      PATH: Bun.env['PATH'] ?? '',
+      HOME: Bun.env['HOME'] ?? root,
+      TMPDIR: Bun.env['TMPDIR'],
+    },
+    encoding: 'utf8',
+    maxBuffer: Number.POSITIVE_INFINITY,
+  });
+  if (result.error !== undefined || result.status !== 0) {
+    const diagnostics = `${result.stderr ?? ''}${result.stdout ?? ''}`.trim();
+    throw new Error(
+      diagnostics === ''
+        ? 'synthetic checkout dependency install failed'
+        : `synthetic checkout dependency install failed: ${diagnostics}`,
+    );
+  }
+}
+
 function runQuorumCheck(root: string, scenarioName: string): void {
   const environment: Record<string, string> = {
     PATH: Bun.env['PATH'] ?? '',
@@ -188,6 +218,7 @@ export function createSyntheticCheckout(
       root,
       options.untrackedPaths ?? DEFAULT_UNTRACKED_PATHS,
     );
+    installDependencies(root);
     options.configure(root);
     runQuorumCheck(root, options.scenarioName);
     const commit = initializeCommit(root, options.scenarioName);
