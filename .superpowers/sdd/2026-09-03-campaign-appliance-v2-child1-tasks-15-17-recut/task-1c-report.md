@@ -266,3 +266,87 @@ fix to guess at.
 - `a76c07db` — test: expose synthetic registration diagnostics
 - `10de15e2` — test: diagnose Linux registration PATH
 - `a1499ad3` — test: use PATH delimiter for Linux fixture shim
+
+## Fix round 3/5
+
+### Failure evidence and root cause
+
+The first round-3 devbox run was made against `ada4e38c`, with the requested
+Docker integration environment enabled. Its retained attempt stderr identified
+the early exit that the campaign report had hidden:
+`error: bun is unable to write files to tempdir: AccessDenied`. The container
+configuration showed that the synthetic checkout's `node_modules` was an
+absolute symlink back to the devbox source checkout. That source path was not
+inside the only evals tree bind-mounted into the attempt container, so the
+container had no dependencies. Bun fell back toward the image install location,
+which is not writable by the attempt UID. This was a fixture-boundary defect;
+the Child 1 spawner and entrypoint were not changed.
+
+After materializing dependencies in the synthetic copy, the next devbox run
+crossed that boundary. It created and started real attempt containers, emitted
+`run_allocated`, and produced Gauntlet `run.jsonl` files with an
+`llm_request` event. The provider record remained empty and the complete test
+eventually hit its explicit 180-second timeout because the grader could not
+reach the host fake provider.
+
+The reachability check used the runtime-resolved Docker bridge gateway:
+`docker network inspect bridge` reported subnet `172.17.0.0/16` and gateway
+`172.17.0.1`; the host fake provider was listening on `0.0.0.0:<port>` and
+host loopback/bridge curls returned HTTP 404 (the provider's expected response
+to a non-POST route). Docker containers using both UID 1001 and root timed out
+connecting to `http://172.17.0.1:<port>/v1/messages`, while a host-network
+container returned 404. Read-only firewall inspection showed active UFW with
+default-deny INPUT and no `docker0` allow rule. The suite's gateway parsing and
+provider bind are therefore correct; the devbox host policy blocks bridge to
+host connections.
+
+### Changes
+
+- `campaign-attempt-docker.test.ts` now snapshots retained attempt
+  `stdout.log`/`stderr.log` files and any files under the run's
+  `gauntlet-agent/results` tree into the fixture temp directory before
+  teardown. It appends bounded tails to assertion failures, and a failure in
+  the diagnostic collector itself is rendered without bypassing cleanup.
+- All five gated integration tests now use an explicit `180_000` ms timeout.
+- `synthetic-checkout.ts` removes the local-only absolute `node_modules` link
+  and runs `bun install --frozen-lockfile` in the synthetic copy. The generated
+  dependency tree remains ignored and outside the committed fixture tree, but
+  is visible through the evals bind mount exactly as the production snapshot's
+  install is.
+- No production Child 1 behavior or host firewall state was changed.
+
+### Verification
+
+Local verification after the fixture and diagnostic changes:
+
+- `bun test test/linux/campaign-attempt-docker.test.ts`: 0 passed, 5 skipped,
+  0 failed with the integration environment unset.
+- `bun test test/fake-provider.test.ts`: 8 passed, 0 failed.
+- `bunx biome ci test/linux/fixtures/synthetic-checkout.ts test/linux/campaign-attempt-docker.test.ts`:
+  pass.
+- `bunx tsc --noEmit`: pass.
+- `bun run quorum check`: pass.
+- `git diff --check`: pass.
+- A direct synthetic-checkout construction with a minimal valid temporary
+  fixture passed and confirmed `node_modules` was a real directory, not an
+  external symlink.
+
+Devbox verification:
+
+- At `ada4e38c`, the requested full Linux command reached real containers but
+  reported 1 pass and 4 failures in 189.83 seconds. The diagnostics showed
+  `AccessDenied` in every failing attempt's stderr.
+- At `80ad2f27`, registration succeeded and the suite reached the real
+  container/Gauntlet path. The complete test timed out at 180 seconds while
+  waiting for provider progress; its retained attempt logs contained
+  `run_allocated` and empty stderr, and the staging run contained Gauntlet
+  `run.jsonl` but no provider record. The run was stopped after this evidence
+  was collected rather than changing the suite to evade the bridge contract.
+- The retained attempt containers and synthetic/debug trees from the interrupted
+  diagnostic runs were removed by exact resolved paths; a final devbox check
+  reported zero `quorum-attempt` containers and no matching test temp trees.
+
+### Round commits
+
+- `ada4e38c` — test: preserve Linux campaign failure diagnostics
+- `80ad2f27` — test: materialize synthetic checkout dependencies
