@@ -353,3 +353,5 @@ Devbox verification:
 
 - `ada4e38c` — test: preserve Linux campaign failure diagnostics
 - `80ad2f27` — test: materialize synthetic checkout dependencies
+- `b2615d69` — test: finish Linux runtime-boundary diagnostics
+- `5d4cbb7c` — test: clean retained containers after early failure
