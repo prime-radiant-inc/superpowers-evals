@@ -120,6 +120,12 @@ after consuming this authorization cannot retry it, even if no worker started.
 A deliberate new run requires a new campaign identity and verified termination
 of the old work. Status remains read-only.
 
+The campaign identity names one invocation independently of the frozen input
+digest. Registering the same inputs again produces a fresh identity with the
+same input digest. Commit the sole start authorization under shared exclusion,
+then publish the durable host claim before any child can launch. A crash before
+claim publication consumes that start but cannot have created a worker.
+
 Establish stable campaign/input/output roots and the minimum attempt ownership
 record in this increment's format before exercising the container boundary.
 Pin the public credential authority and exact projection policy for the session;
@@ -142,8 +148,10 @@ call, container operation, or filesystem publication.
 
 **Keep the real external-effect boundaries.** The following order is required:
 
-1. Allocate attempt, run, output, and deterministic container identities;
-   durably record execution intent before `docker create`.
+1. Allocate attempt, output, and deterministic container identities;
+   durably record execution intent before `docker create`. The runner retains
+   run-ID allocation; bind that ID after verifying its publication manifest
+   and attempt identity.
 2. Create and inspect the container; durably bind its immutable runtime ID
    before `docker start` can authorize provider access.
 3. Execute the existing runner with private inputs and outputs.
