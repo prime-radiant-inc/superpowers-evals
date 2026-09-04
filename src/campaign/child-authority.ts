@@ -56,6 +56,9 @@ const realReadOps: AttemptAuthorityReadOps = {
     return readFileSync('/proc/self/mountinfo', 'utf8');
   },
 };
+function containsPath(root: string, path: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
 export function validatePreparedAttemptAuthority(
   identity: CampaignIdentity,
   io: AttemptAuthorityReadOps = realReadOps,
@@ -78,15 +81,29 @@ export function validatePreparedAttemptAuthority(
   );
   const intent = doc.intent;
   const spec = intent.runtime_spec;
+  const authorityMounts = spec.mounts.filter(
+    (mount) => mount.target === ATTEMPT_AUTHORITY_PATH,
+  );
+  const authorityMount = authorityMounts[0];
+  if (
+    authorityMounts.length !== 1 ||
+    authorityMount?.mode !== 'ro' ||
+    containsPath(intent.output_root, ATTEMPT_AUTHORITY_PATH) ||
+    containsPath(intent.output_root, authorityMount.source) ||
+    spec.mounts.some(
+      (mount) =>
+        mount.mode === 'rw' &&
+        containsPath(mount.source, authorityMount.source),
+    )
+  )
+    throw new Error(
+      'private attempt authority source must be unambiguous and outside writable output or source aliases',
+    );
   if (
     doc.campaign_id !== expected.campaign_id ||
     jcsCanonicalize(intent.identity) !== jcsCanonicalize(expected) ||
     sha256Hex(jcsCanonicalize(spec)) !== intent.runtime_spec_digest ||
-    spec.public_env.QUORUM_ATTEMPT_AUTHORITY_FILE !== ATTEMPT_AUTHORITY_PATH ||
-    !spec.mounts.some(
-      (mount) => mount.target === ATTEMPT_AUTHORITY_PATH && mount.mode === 'ro',
-    ) ||
-    ATTEMPT_AUTHORITY_PATH.startsWith(`${intent.output_root}/`)
+    spec.public_env.QUORUM_ATTEMPT_AUTHORITY_FILE !== ATTEMPT_AUTHORITY_PATH
   )
     throw new Error(
       'private attempt authority identity or runtime specification mismatch',

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
 import { jcsCanonicalize, sha256Hex } from '../contracts/campaign/digest.ts';
 import {
+  type ExecutionStart,
   type HostCampaignClaim,
   HostCampaignClaimSchema,
   type ProcessIdentity,
@@ -66,6 +67,14 @@ function identityMatches(
     left.input_digest === right.input_digest &&
     left.start_id === right.start_id
   );
+}
+function assertClaimStart(
+  claim: HostCampaignClaim,
+  actual: ExecutionStart | null,
+): void {
+  const { campaign_dir: _dir, ...start } = claim;
+  if (!same(actual, start))
+    throw new Error('host claim start differs from journal');
 }
 export function currentProcessIdentity(): ProcessIdentity {
   const birth = realProcessIdentityProbe.startTimeMs(process.pid);
@@ -152,9 +161,7 @@ export function assertHostClaimAuthority(
       `unresolved host claim for ${claim.campaign_id}; cancel before admitting another spender`,
     );
   const projection = readProjection(claim.campaign_dir);
-  const { campaign_dir: _dir, ...start } = claim;
-  if (!same(projection.start, start))
-    throw new Error('host claim start differs from journal');
+  assertClaimStart(claim, projection.start);
   if (authority.kind === 'controller') {
     const { kind: _kind, process: caller, ...bound } = authority;
     if (
@@ -221,6 +228,7 @@ export function clearHostClaim(
       'termination receipt is not the durable journal transition',
     );
   const projection = readProjection(claim.campaign_dir);
+  assertClaimStart(claim, projection.start);
   if (
     !projection.termination ||
     projection.termination.start_id !== claim.start_id ||

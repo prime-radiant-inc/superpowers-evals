@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -405,3 +406,91 @@ test('dead controller lease reclamation preserves the claim while worker state i
   expect(readHostClaim({ lockPath: fx.lockPath })).toEqual(fx.claim);
   expect(fx.writer.readProjection().attempts.size).toBe(2);
 });
+
+for (const changed of [
+  'campaign',
+  'input',
+  'launcher',
+  'claimed_at',
+] as const) {
+  test(`claim clearing refuses a replacement journal with a different ${changed} and the same start ID`, () => {
+    const fx = fixture();
+    publishHostClaim(fx.claim, { lockPath: fx.lockPath });
+    fx.writer.release();
+    renameSync(fx.dir, join(fx.root, 'original-campaign'));
+    mkdirSync(fx.dir);
+    const experiment = structuredClone(fx.experiment);
+    if (changed === 'campaign') experiment.campaign_id = 'campaign-two';
+    if (changed === 'input') experiment.refs.evals = '1'.repeat(40);
+    experiment.input_digest = experimentDigest(experiment);
+    initExecutionJournal({ campaignDir: fx.dir, experiment });
+    writeFileSync(join(fx.dir, 'campaign.json'), JSON.stringify(experiment));
+    const replacement = ExecutionJournalWriter.elect({
+      campaignDir: fx.dir,
+      experiment,
+      clock: new RealClock(),
+      identity: realProcessIdentityProbe,
+    });
+    cleanup.push(() => replacement.release());
+    const { campaign_dir: _dir, ...originalStart } = fx.claim;
+    const start = {
+      ...originalStart,
+      campaign_id: experiment.campaign_id,
+      input_digest: experiment.input_digest,
+      ...(changed === 'launcher'
+        ? { launcher: { ...originalStart.launcher, birth: 'different-birth' } }
+        : {}),
+      ...(changed === 'claimed_at' ? { claimed_at: fixtureTime(0) } : {}),
+    };
+    replacement.commitTransition(
+      transition('registered', {
+        campaign_id: experiment.campaign_id,
+        input_digest: experiment.input_digest,
+      }),
+    );
+    replacement.commitTransition(transition('started', start, 1));
+    replacement.commitTransition(
+      transition(
+        'controller_bound',
+        { start_id: 'start', controller: currentProcessIdentity() },
+        2,
+      ),
+    );
+    replacement.commitTransition(
+      transition(
+        'ended',
+        { outcome: 'interrupted', reason: 'stopped', cancel_intent: null },
+        3,
+      ),
+    );
+    const body = '{"controller":"stopped"}\n';
+    writeFileSync(join(fx.dir, 'process.json'), body);
+    const committed = replacement.commitTransition(
+      transition(
+        'termination_verified',
+        {
+          start_id: 'start',
+          stopped: [],
+          process_evidence: [
+            {
+              path: 'process.json',
+              sha256: sha256Hex(body),
+              bytes: Buffer.byteLength(body),
+            },
+          ],
+        },
+        4,
+      ),
+    );
+    const receipt: TerminationReceipt = {
+      campaign_id: fx.claim.campaign_id,
+      input_digest: fx.claim.input_digest,
+      start_id: fx.claim.start_id,
+      transition_id: committed.transition.transition_id,
+      transition_digest: committed.transition_digest,
+      stopped: [],
+    };
+    expect(() => clearHostClaim(receipt, { lockPath: fx.lockPath })).toThrow();
+    expect(readHostClaim({ lockPath: fx.lockPath })).toEqual(fx.claim);
+  });
+}

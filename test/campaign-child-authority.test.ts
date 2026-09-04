@@ -100,3 +100,93 @@ test('a parent lease authorizes only its direct child and expires when released'
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const unsafeAuthorityLayouts: {
+  name: string;
+  modify: (doc: ReturnType<typeof authority>) => void;
+}[] = [
+  {
+    name: 'authority source is inside writable attempt output',
+    modify(doc) {
+      doc.intent.runtime_spec.mounts[1]!.source =
+        `${doc.intent.output_root}/authority.json`;
+    },
+  },
+  {
+    name: 'authority source equals writable attempt output',
+    modify(doc) {
+      doc.intent.runtime_spec.mounts[1]!.source = doc.intent.output_root;
+    },
+  },
+  {
+    name: 'a writable directory mount exposes the authority source through another target',
+    modify(doc) {
+      doc.intent.runtime_spec.mounts.push({
+        source: '/private/control',
+        target: '/work/control',
+        mode: 'rw',
+      });
+    },
+  },
+  {
+    name: 'a writable file mount aliases the exact authority source',
+    modify(doc) {
+      doc.intent.runtime_spec.mounts.push({
+        source: '/private/control/authority.json',
+        target: '/work/authority.json',
+        mode: 'rw',
+      });
+    },
+  },
+  {
+    name: 'the authority target equals writable attempt output',
+    modify(doc) {
+      doc.intent.output_root = '/run/quorum/attempt-authority.json';
+    },
+  },
+  {
+    name: 'multiple declared authority mounts make the source ambiguous',
+    modify(doc) {
+      doc.intent.runtime_spec.mounts.push({
+        source: '/private/other/authority.json',
+        target: '/run/quorum/attempt-authority.json',
+        mode: 'ro',
+      });
+    },
+  },
+];
+for (const { name, modify } of unsafeAuthorityLayouts) {
+  test(`private authority refuses when ${name}`, () => {
+    const doc = authority();
+    modify(doc);
+    doc.intent.runtime_spec_digest = sha256Hex(
+      jcsCanonicalize(doc.intent.runtime_spec),
+    );
+    expect(() =>
+      validatePreparedAttemptAuthority(doc.intent.identity, {
+        readDocument: () => JSON.stringify(doc),
+        readMountInfo: () => mountInfo,
+      }),
+    ).toThrow();
+  });
+}
+
+test('a source with a shared string prefix outside writable path segments stays private', () => {
+  const doc = authority();
+  doc.intent.runtime_spec.mounts[1]!.source =
+    `${doc.intent.output_root}-control/authority.json`;
+  doc.intent.runtime_spec.mounts.push({
+    source: `${doc.intent.output_root}-controls`,
+    target: '/work/other',
+    mode: 'rw',
+  });
+  doc.intent.runtime_spec_digest = sha256Hex(
+    jcsCanonicalize(doc.intent.runtime_spec),
+  );
+  expect(
+    validatePreparedAttemptAuthority(doc.intent.identity, {
+      readDocument: () => JSON.stringify(doc),
+      readMountInfo: () => mountInfo,
+    }).start_id,
+  ).toBe('start');
+});
