@@ -391,7 +391,7 @@ const monitor = await runtime.start(bound);
 
 **Interfaces:** `startCampaignOnce` consumes authenticated experiment and helper dependencies; returns `launched | already_running | refused` with shared status. `cancelCampaign` consumes the same identity plus stop/runtime probes and returns `terminated | unresolved`; it never imports dispatcher or replacement functions. `observeCampaignStatus` is read-only and implements the precedence above. Job records store invocation/controller/result only.
 
-- [ ] Add real child-process tests with a gated harmless worker: two racing invocations consume one start; pipe EOF, invalid gate message, startup timeout, or cancel-before-release produces no worker marker. Use temporary directories and fake runtime, no provider calls.
+- [x] Add real child-process tests with a gated harmless worker: two racing invocations consume one start; pipe EOF, invalid gate message, startup timeout, or cancel-before-release produces no worker marker. Use temporary directories and fake runtime, no provider calls.
 
 ```ts
 test('a consumed start survives launcher loss', async () => {
@@ -411,8 +411,8 @@ test('a published claim survives loss before child creation', async () => {
 });
 ```
 
-- [ ] Run focused tests; implement the pipe gate and ownership sequence exactly as above. Persist PID, birth and boot identity before release. A helper ACK without a gated child is not sufficient. Treat callback/pipe-write failures as consumed interrupted starts.
-- [ ] Implement cancellation from frozen intent inventory and runtime observations. Assert import boundaries behaviorally with a fake runtime that throws if cancellation calls create/start; cover all crash cuts, idempotent repeated cancel, controller-death-before-writer-takeover, and orphan accounting without accepted outcomes.
+- [x] Run focused tests; implement the pipe gate and ownership sequence exactly as above. Persist PID, birth and boot identity before release. A helper ACK without a gated child is not sufficient. Treat callback/pipe-write failures as consumed interrupted starts.
+- [x] Implement cancellation from frozen intent inventory and runtime observations. Assert import boundaries behaviorally with a fake runtime that throws if cancellation calls create/start; cover all crash cuts, idempotent repeated cancel, controller-death-before-writer-takeover, and orphan accounting without accepted outcomes.
 
 ```ts
 await publishCancelIntent(identity);
@@ -424,7 +424,7 @@ commitTerminationAndClearMatchingClaim(writer, stopped);
 ```
 
 These private functions are the steps inside `cancelCampaign`; each failure returns unresolved and retains the host claim. An ordinary cancel observed by the live controller may write cancelled; post-loss cancellation preserves interrupted. Never take the writer before verifying the previous controller dead.
-- [ ] Test refresh/helper replacement/bundle mutation refusal with unresolved ownership. Run portable helper, process, cancellation and lock tests; commit.
+- [x] Test refresh/helper replacement/bundle mutation refusal with unresolved ownership. Run portable helper, process, cancellation and lock tests; commit.
 
 ## Task 7: Connect existing dispatch algorithms to the atomic session
 
@@ -461,7 +461,7 @@ Private helpers reuse the existing greedy admission order and demand evaluator. 
 
 **Files:** Modify `src/campaign/report-evidence.ts`, `report.ts`, `seal.ts`, `src/contracts/campaign/report.ts`; create `test/fixtures/core-comparison/{campaign.json,transitions.json,evidence.json,expected-report.json}`; extend report/evidence tests.
 
-**Interfaces:** `readAttemptEvidence({expectedIdentity, artifacts}): AttemptEvidence`, where `AttemptEvidence` contains observed outcome, Gauntlet judgment, checks, wall duration, role usage/cost, versions and field missingness. `foldComparisonReport({experiment, state, evidenceByAttempt}): ComparisonReport` is pure. `publishReport` freezes the canonical anchor; `renderReportMd` consumes that same JSON. Cost/usage types come from existing captured economics and `TokenUsage`.
+**Interfaces:** `readAttemptEvidence({resultsRoot, expectedIdentity, artifacts}): AttemptEvidence`, where `AttemptEvidence` contains observed outcome, Gauntlet judgment, checks, wall duration, role usage/cost, versions and field missingness. `foldComparisonReport({experiment, state, evidenceByAttempt}): ComparisonReport` is pure. `publishReport` freezes the canonical anchor; `renderReportMd` consumes that same JSON. Cost/usage types come from existing captured economics and `TokenUsage`.
 
 - [ ] Encode the worked fixture and literal expected numbers above. Include unaccepted orphan accounting, malformed field, absent price, changed identity and cross-block pairing tests. Do not derive expected values using the production aggregation functions.
 
@@ -550,3 +550,13 @@ Task 4 checkpoint: finite registration and shared resource policy are complete a
 Task 5 checkpoint: runtime creation, binding, start, independent deadline, strict credential projection and immutable publication are complete at `94000530`, with independent spec/quality approval and scoped confirmation of the subscriber-isolation fix. The main focused receipt is 215 passing tests; the fix receipt is 39 passing covering tests. Lint and typecheck pass. Seven Linux runtime cases remain explicitly unrun, and full real entrypoint/runner/authority integration remains an environment-dependent gate.
 
 The reviewed runtime has required create/start authority callbacks and a separate start-settlement callback. A durably unbound intent cannot have issued a permitted start; a bound intent without a durable successful start receipt remains uncertain after controller loss. Image defaults are authenticated by immutable image ID before comparison of the full actual runtime inventory. The spec requires `credential_projection: { path, sha256 }` for the private read-only registry derived from the frozen subject credential and selected key grant; this preserves key-pool selection through existing runner auth. Both attempt credential deliveries use strict literal records, with the shared Phase 1 serializer unchanged. Tasks 6/7 own production callback wiring and controller error handling; Task 9 removes the temporary budgeted spawner.
+
+Task 6 checkpoint: the one-session helper lifecycle, termination-only cancellation, truthful status and supported mutation guards are complete at `db4668eb`. Independent task review found the late controller-binding race and unknown-as-loss bug; the scoped fix review passes those corrections plus the root-identified healthy-handoff status correction. The initial affected receipt is 265 passing tests; the final fix receipt is 65 passing affected tests, with lint and typecheck passing. Real harmless processes exercise gate/launcher behavior; actual Linux container and installed appliance proof remain unrun.
+
+The internal controller target is required and local, with no old-controller default. `CampaignControllerContext` supplies authenticated experiment/start/claim/process identity, resolved results root, held run/live/journal handles, and `assertAdmission()`. `ExecutionJournalWriter.assertCurrentOwner()` checks the current lease and SQLite generation; a cached projection alone is not authority. A durable launcher-role release receipt is published only after parent leases are released and binding/admission is permanently relinquished, before gate delivery. It proves role quiescence, not launcher OS death. Cancellation settles the final controller binding after launcher quiescence and checks that identity against the elected writer before certifying termination.
+
+Normal completion calls `completeControllerTermination` with the current controller's held handles, immutable ended state, complete stopped inventory, and the runtime's required `assertNoUnsettledStarts` assertion. A timed-out or rejected client call never erases daemon-start uncertainty. Claim release follows durable termination; no further admission is permitted. Read-only status treats a matching known-live bound child as running during the legitimate lease handoff without claiming an attempt is already admitted. Unknown identity never becomes established controller loss.
+
+Attempt artifact references are `<runId>/<file>` relative to the configured shared `resultsRoot`, including the manifest. Control/process evidence references remain relative to `campaignDir`. The helper resolves and passes the shared root through controller, cancellation and report readers; it does not create campaign-local results or move old artifacts. Publication retains ENOSPC causes so cancellation stops the full inventory and records emergency evidence instead of reporting ordinary missing output.
+
+Report integration must also preserve partially priced role subtotals: existing captured usage can carry known cost with unpriced models. Keep that known spend in all-attempt accounting with incomplete coverage; it cannot participate as a complete role total in matched cost comparisons. This reads frozen values and flags, without repricing.
