@@ -6,10 +6,28 @@ import type {
   ScenarioStats,
 } from '../contracts/estimates.ts';
 import type { ReplayRecord } from '../contracts/replay.ts';
+import type { FinalStatus, RunErrorStage } from '../contracts/verdict.ts';
+
+/** Error stages at which the coding agent never ran: the run died in
+ *  fixture/provisioning (setup), the grader was misconfigured before the
+ *  drive (qa-agent-misconfigured), or quorum itself crashed outside any
+ *  named stage (unknown — observed as copyfile ENOTSUP during worktree
+ *  materialization). Such runs last well under a second and would drag a
+ *  cell's median toward zero. Every other indeterminate (capture, checks,
+ *  compose, gauntlet, stopped) ran the subject and keeps its real wall. */
+const NEVER_RAN_STAGES: ReadonlySet<RunErrorStage> = new Set<RunErrorStage>([
+  'setup',
+  'qa-agent-misconfigured',
+  'unknown',
+]);
 
 export interface EstimateInput {
   record: ReplayRecord;
   finished_at: string;
+  /** The run's composed outcome and, when indeterminate, its error stage
+   *  (null when the verdict carries no RunError). Drives the never-ran
+   *  exclusion. */
+  outcome: { final: FinalStatus; error_stage: RunErrorStage | null };
   /** The run's coding-agent token volume (coding-agent-token-usage.json
    *  total_tokens) — the C3 pricing-override volume source. Null when the
    *  sidecar is absent or unreadable: pre-token corpora are legitimate
@@ -167,18 +185,37 @@ export function buildEstimates(
   // Merge rule: union by run_id, first input wins; duplicates counted out.
   const seen = new Set<string>();
   const rows: EstimateRow[] = [];
+  const excluded: EstimatesArtifact['corpus']['excluded'] = [];
   const finishedAts: string[] = [];
   let duplicatesExcluded = 0;
-  for (const { record, finished_at, tokens_total } of inputs) {
+  for (const { record, finished_at, tokens_total, outcome } of inputs) {
     if (seen.has(record.run_id)) {
       duplicatesExcluded++;
       continue;
     }
     seen.add(record.run_id);
-    rows.push({ ...record, tokens_total: tokens_total ?? null });
+    // generated_at (R-REG-21 staleness) sees every unique run, excluded
+    // or not: an excluded run is still evidence the corpus was refreshed.
     finishedAts.push(finished_at);
+    if (
+      outcome.final === 'indeterminate' &&
+      outcome.error_stage !== null &&
+      NEVER_RAN_STAGES.has(outcome.error_stage)
+    ) {
+      excluded.push({
+        run_id: record.run_id,
+        scenario: record.scenario,
+        agent: record.agent,
+        credential: record.credential,
+        os: record.os,
+        stage: outcome.error_stage,
+      });
+      continue;
+    }
+    rows.push({ ...record, tokens_total: tokens_total ?? null });
   }
   if (rows.length === 0) throw new Error('buildEstimates: no inputs');
+  excluded.sort((a, b) => cmp(a.run_id, b.run_id));
 
   const entries: EstimateEntry[] = [...byKey(rows, entryTuple).values()]
     .map(({ tuple, records: rs }): EstimateEntry => {
@@ -218,6 +255,7 @@ export function buildEstimates(
       sources: opts.sources,
       run_count: rows.length,
       duplicates_excluded: duplicatesExcluded,
+      excluded,
       digest,
     },
     entries,

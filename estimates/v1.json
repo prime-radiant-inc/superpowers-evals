@@ -3,11 +3,61 @@
   "generated_at": "2026-09-04T06:43:12.180Z",
   "corpus": {
     "sources": [
-      "corpus/gate-20260808",
-      "corpus/staging-inclusion"
+      "/tmp/quorum-corpus/gate-20260808",
+      "/tmp/quorum-corpus/staging-inclusion"
     ],
-    "run_count": 1265,
+    "run_count": 1259,
     "duplicates_excluded": 0,
+    "excluded": [
+      {
+        "run_id": "00-quorum-smoke-hello-world-codex-codex_sub-linux-20260707T005822Z-436b",
+        "scenario": "00-quorum-smoke-hello-world",
+        "agent": "codex",
+        "credential": "codex_sub",
+        "os": "linux",
+        "stage": "unknown"
+      },
+      {
+        "run_id": "00-quorum-smoke-hello-world-codex-openai_responses_56sol-linux-20260714T063231Z-cbb4",
+        "scenario": "00-quorum-smoke-hello-world",
+        "agent": "codex",
+        "credential": "openai_responses_56sol",
+        "os": "linux",
+        "stage": "unknown"
+      },
+      {
+        "run_id": "00-quorum-smoke-hello-world-codex-openai_responses_56sol-linux-20260714T063444Z-1c14",
+        "scenario": "00-quorum-smoke-hello-world",
+        "agent": "codex",
+        "credential": "openai_responses_56sol",
+        "os": "linux",
+        "stage": "unknown"
+      },
+      {
+        "run_id": "00-quorum-smoke-hello-world-copilot-copilot_default-linux-20260624T002621Z-5ffe",
+        "scenario": "00-quorum-smoke-hello-world",
+        "agent": "copilot",
+        "credential": "copilot_default",
+        "os": "linux",
+        "stage": "setup"
+      },
+      {
+        "run_id": "00-quorum-smoke-hello-world-copilot-copilot_default-linux-20260805T181141Z-79a8",
+        "scenario": "00-quorum-smoke-hello-world",
+        "agent": "copilot",
+        "credential": "copilot_default",
+        "os": "linux",
+        "stage": "setup"
+      },
+      {
+        "run_id": "sdd-codex-dispatch-pinning-codex-codex_sub-linux-20260722T225311Z-206d",
+        "scenario": "sdd-codex-dispatch-pinning",
+        "agent": "codex",
+        "credential": "codex_sub",
+        "os": "linux",
+        "stage": "setup"
+      }
+    ],
     "digest": "a68f902461373b2d919dc5f5b041400715288a34ba6ce002dd7dfa61daf48a93"
   },
   "entries": [
@@ -34,54 +84,54 @@
       "agent": "codex",
       "credential": "codex_sub",
       "os": "linux",
-      "duration_s_median": 118.136,
-      "duration_n": 3,
+      "duration_s_median": 144.15699999999998,
+      "duration_n": 2,
       "cost_subject_usd_median": 0.150758,
       "cost_grader_usd_median": 0.17952015,
       "cost_total_usd_median": 0.3302785,
       "priced_n": 2,
       "tokens_total_median": 81320.5,
       "spread_s": {
-        "p25": 0.171,
+        "p25": 118.136,
         "p75": 170.178
       },
-      "confidence": "medium"
+      "confidence": "low"
     },
     {
       "scenario": "00-quorum-smoke-hello-world",
       "agent": "codex",
       "credential": "openai_responses_56sol",
       "os": "linux",
-      "duration_s_median": 0.503,
-      "duration_n": 3,
+      "duration_s_median": 78.3,
+      "duration_n": 1,
       "cost_subject_usd_median": null,
       "cost_grader_usd_median": 0.0921126,
       "cost_total_usd_median": null,
       "priced_n": 0,
       "tokens_total_median": 45128,
       "spread_s": {
-        "p25": 0.279,
+        "p25": 78.3,
         "p75": 78.3
       },
-      "confidence": "medium"
+      "confidence": "low"
     },
     {
       "scenario": "00-quorum-smoke-hello-world",
       "agent": "copilot",
       "credential": "copilot_default",
       "os": "linux",
-      "duration_s_median": 0.862,
-      "duration_n": 3,
+      "duration_s_median": 107.85,
+      "duration_n": 1,
       "cost_subject_usd_median": 0.090935,
       "cost_grader_usd_median": 0.1132032,
       "cost_total_usd_median": 0.204138,
       "priced_n": 1,
       "tokens_total_median": 137168,
       "spread_s": {
-        "p25": 0.082,
+        "p25": 107.85,
         "p75": 107.85
       },
-      "confidence": "medium"
+      "confidence": "low"
     },
     {
       "scenario": "00-quorum-smoke-hello-world",
@@ -2150,18 +2200,18 @@
       "agent": "codex",
       "credential": "codex_sub",
       "os": "linux",
-      "duration_s_median": 380.0045,
-      "duration_n": 8,
+      "duration_s_median": 598.872,
+      "duration_n": 7,
       "cost_subject_usd_median": 2.64700325,
       "cost_grader_usd_median": 0.43660984999999997,
       "cost_total_usd_median": 3.0836129999999997,
       "priced_n": 6,
       "tokens_total_median": 1752968.5,
       "spread_s": {
-        "p25": 71.092,
-        "p75": 637.866
+        "p25": 137.135,
+        "p75": 647.525
       },
-      "confidence": "high"
+      "confidence": "medium"
     },
     {
       "scenario": "sdd-codex-no-tier-escalation",
@@ -5346,32 +5396,32 @@
       {
         "scenario": "00-quorum-smoke-hello-world",
         "agent": "codex",
-        "duration_s_median": 39.4015,
-        "duration_n": 6,
+        "duration_s_median": 118.136,
+        "duration_n": 3,
         "cost_subject_usd_median": 0.150758,
         "cost_grader_usd_median": 0.12133755,
         "cost_total_usd_median": 0.3302785,
         "priced_n": 2,
         "tokens_total_median": 45128,
         "spread_s": {
-          "p25": 0.279,
-          "p75": 118.136
+          "p25": 78.3,
+          "p75": 170.178
         },
         "confidence": "medium"
       },
       {
         "scenario": "00-quorum-smoke-hello-world",
         "agent": "copilot",
-        "duration_s_median": 62.065,
-        "duration_n": 7,
+        "duration_s_median": 71.842,
+        "duration_n": 5,
         "cost_subject_usd_median": 0.051912,
         "cost_grader_usd_median": 0.0813001,
         "cost_total_usd_median": 0.133212,
         "priced_n": 3,
         "tokens_total_median": 43683,
         "spread_s": {
-          "p25": 0.862,
-          "p75": 77.868
+          "p25": 57.9975,
+          "p75": 92.859
         },
         "confidence": "medium"
       },
@@ -6242,18 +6292,18 @@
       {
         "scenario": "sdd-codex-dispatch-pinning",
         "agent": "codex",
-        "duration_s_median": 380.0045,
-        "duration_n": 8,
+        "duration_s_median": 598.872,
+        "duration_n": 7,
         "cost_subject_usd_median": 2.64700325,
         "cost_grader_usd_median": 0.43660984999999997,
         "cost_total_usd_median": 3.0836129999999997,
         "priced_n": 6,
         "tokens_total_median": 1752968.5,
         "spread_s": {
-          "p25": 71.092,
-          "p75": 637.866
+          "p25": 137.135,
+          "p75": 647.525
         },
-        "confidence": "high"
+        "confidence": "medium"
       },
       {
         "scenario": "sdd-codex-no-tier-escalation",
@@ -7745,16 +7795,16 @@
     "scenario": [
       {
         "scenario": "00-quorum-smoke-hello-world",
-        "duration_s_median": 66.95349999999999,
-        "duration_n": 14,
+        "duration_s_median": 77.868,
+        "duration_n": 9,
         "cost_subject_usd_median": 0.0854725,
         "cost_grader_usd_median": 0.0958738,
         "cost_total_usd_median": 0.202743,
         "priced_n": 6,
         "tokens_total_median": 45128,
         "spread_s": {
-          "p25": 0.503,
-          "p75": 78.3
+          "p25": 66.95349999999999,
+          "p75": 112.993
         },
         "confidence": "high"
       },
@@ -8120,18 +8170,18 @@
       },
       {
         "scenario": "sdd-codex-dispatch-pinning",
-        "duration_s_median": 380.0045,
-        "duration_n": 8,
+        "duration_s_median": 598.872,
+        "duration_n": 7,
         "cost_subject_usd_median": 2.64700325,
         "cost_grader_usd_median": 0.43660984999999997,
         "cost_total_usd_median": 3.0836129999999997,
         "priced_n": 6,
         "tokens_total_median": 1752968.5,
         "spread_s": {
-          "p25": 71.092,
-          "p75": 637.866
+          "p25": 137.135,
+          "p75": 647.525
         },
-        "confidence": "high"
+        "confidence": "medium"
       },
       {
         "scenario": "sdd-codex-no-tier-escalation",
@@ -9005,7 +9055,7 @@
       }
     ],
     "corpus_median": {
-      "duration_s": 323.376,
+      "duration_s": 324.225,
       "cost_total_usd": 1.0877155,
       "tokens_total_median": 622582
     }

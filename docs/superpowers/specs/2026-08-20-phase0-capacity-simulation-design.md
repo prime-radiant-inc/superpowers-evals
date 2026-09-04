@@ -295,7 +295,11 @@ trees vary by machine; the inclusion manifest pins run IDs + hashes):
 {
   schema_version: "quorum.estimates/v1",
   generated_at: string;  // derived: max finished_at across included inputs
-  corpus: { sources: string[]; run_count: number; digest: string };
+  corpus: {
+    sources: string[]; run_count: number; duplicates_excluded: number;
+    excluded: [{ run_id; scenario; agent; credential; os; stage }];
+    digest: string;
+  };
   entries: [{
     scenario: string; agent: string; credential: string; os: string;
     duration_s_median: number; duration_n: number;
@@ -329,6 +333,18 @@ trees vary by machine; the inclusion manifest pins run IDs + hashes):
   recorded; serialization = 2-space JSON, LF, shortest-round-trip
   doubles. Regeneration from the same inputs is byte-identical (tested);
   `generated_at` is data-derived, so it does not break identity.
+- **Never-ran exclusion (2026-09-04 ruling):** a run composed
+  `indeterminate` at a stage where the coding agent never ran — `setup`
+  (fixture/provisioning), `qa-agent-misconfigured` (grader refused before
+  the drive), or `unknown` (a quorum crash outside any named stage) — is
+  excluded from every tier's statistics: its sub-second wall would drag a
+  cell's median toward zero (observed: the copilot hello-world cell at 1 s
+  vs 108 s determinate). Every other indeterminate (capture, checks,
+  compose, gauntlet, stopped) ran the subject and keeps its real wall.
+  Excluded runs are not dropped: they are listed by identity and stage
+  under `corpus.excluded` — they are failures to fix or be aware of — and
+  they still count toward `generated_at`. `run_count` counts included
+  runs only.
 - zod schema in `src/contracts/estimates.ts`; round-trip tested.
 - **Refresh rule:** rebuild after every sealed gating campaign or when
   the newest included run is > 30 days older than the build. Staleness is

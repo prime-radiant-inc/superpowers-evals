@@ -108,6 +108,7 @@ test('EstimatesArtifactSchema round-trips a minimal artifact', () => {
       sources: ['corpus/gate-20260808'],
       run_count: 0,
       duplicates_excluded: 0,
+      excluded: [],
       digest: 'x',
     },
     entries: [],
@@ -140,6 +141,7 @@ test('EstimatesArtifactSchema exercises full entries + fallback tiers', () => {
       sources: ['corpus/gate-20260808'],
       run_count: 12,
       duplicates_excluded: 3,
+      excluded: [],
       digest: 'x',
     },
     entries: [

@@ -52,6 +52,22 @@ export const EstimatesArtifactSchema = z.object({
     /** Merge rule "counts recorded": duplicate run_ids excluded by the
      * union-by-run_id first-wins rule are never dropped silently. */
     duplicates_excluded: z.number().int().nonnegative(),
+    /** Runs whose subject never ran — indeterminate at a stage before or
+     *  outside the coding-agent lifecycle (setup, qa-agent-misconfigured,
+     *  or an unknown-stage harness crash). Their sub-second walls would
+     *  drag a cell's median toward zero, so they are excluded from every
+     *  tier's statistics but recorded here by identity: they are failures
+     *  to fix or be aware of, never silently dropped. */
+    excluded: z.array(
+      z.object({
+        run_id: z.string(),
+        scenario: z.string(),
+        agent: z.string(),
+        credential: z.string(),
+        os: z.string(),
+        stage: z.string(),
+      }),
+    ),
     digest: z.string(),
   }),
   entries: z.array(EstimateEntrySchema),

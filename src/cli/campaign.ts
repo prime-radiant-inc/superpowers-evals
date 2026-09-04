@@ -14,6 +14,7 @@ import { currentCheckoutSha } from '../appliance/git.ts';
 import { acquireCorpus } from '../campaign/acquire.ts';
 import {
   buildEstimates,
+  type EstimateInput,
   lookupEstimate,
   serializeEstimates,
 } from '../campaign/estimates.ts';
@@ -32,6 +33,7 @@ import {
 } from '../campaign/simulate.ts';
 import { EstimatesArtifactSchema } from '../contracts/estimates.ts';
 import type { ReplayRecord } from '../contracts/replay.ts';
+import { FINAL_STATUSES, RUN_ERROR_STAGES } from '../contracts/verdict.ts';
 
 /** CLI-boundary error: message to stderr, exit 1 (the run-all pattern). */
 function cliError(message: string): never {
@@ -167,6 +169,42 @@ function parseInclusion(path: string): InclusionManifest {
   };
 }
 
+/** The verdict fields the estimates builder needs beyond the replay
+ *  record: finished_at (generated_at derivation) and the composed
+ *  outcome + error stage (the never-ran exclusion). Malformed values are a
+ *  CLI error naming the run — never a silent default. */
+function readVerdictOutcome(
+  verdictPath: string,
+  label: string,
+): { finished_at: string; outcome: EstimateInput['outcome'] } {
+  const verdict = JSON.parse(readFileSync(verdictPath, 'utf8')) as {
+    finished_at?: unknown;
+    final?: unknown;
+    error?: unknown;
+  };
+  if (typeof verdict.finished_at !== 'string') {
+    cliError(`${label}: verdict.json finished_at missing/not a string`);
+  }
+  const final = z.enum(FINAL_STATUSES).safeParse(verdict.final);
+  if (!final.success) {
+    cliError(`${label}: verdict.json final missing/invalid`);
+  }
+  let error_stage: EstimateInput['outcome']['error_stage'] = null;
+  if (verdict.error !== null && verdict.error !== undefined) {
+    const stage = z
+      .enum(RUN_ERROR_STAGES)
+      .safeParse((verdict.error as { stage?: unknown }).stage);
+    if (!stage.success) {
+      cliError(`${label}: verdict.json error.stage missing/invalid`);
+    }
+    error_stage = stage.data;
+  }
+  return {
+    finished_at: verdict.finished_at,
+    outcome: { final: final.data, error_stage },
+  };
+}
+
 /** Scan-print mode: local runs whose verdict parses with valid
  *  wall/identity become the inclusion manifest for maintainer review +
  *  commit. Printed to stdout only — no artifact is written. */
@@ -255,17 +293,22 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
     const outPath = opts.out;
     const manifest = loadManifest(manifestPath);
     const loaded = loadCorpus(corpus, manifest);
-    const inputs = [...loaded.records.values()].map((record) => {
-      // finished_at re-read for generated_at derivation: wall + started.
-      const verdict = JSON.parse(
-        readFileSync(join(corpus, record.run_id, 'verdict.json'), 'utf8'),
-      ) as { finished_at: string };
-      return {
-        record,
-        finished_at: verdict.finished_at,
-        tokens_total: readTokensTotal(join(corpus, record.run_id)),
-      };
-    });
+    const inputs: EstimateInput[] = [...loaded.records.values()].map(
+      (record) => {
+        // finished_at re-read for generated_at derivation: wall + started;
+        // final + error stage for the never-ran exclusion.
+        const verdict = readVerdictOutcome(
+          join(corpus, record.run_id, 'verdict.json'),
+          record.run_id,
+        );
+        return {
+          record,
+          finished_at: verdict.finished_at,
+          tokens_total: readTokensTotal(join(corpus, record.run_id)),
+          outcome: verdict.outcome,
+        };
+      },
+    );
     if (opts.inclusion !== undefined) {
       const inclusion = parseInclusion(opts.inclusion);
       const committedHashes = inclusion.hashes ?? {};
@@ -307,14 +350,10 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
             `inclusion run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
-        const verdict = JSON.parse(readFileSync(verdictPath, 'utf8')) as {
-          finished_at?: unknown;
-        };
-        if (typeof verdict.finished_at !== 'string') {
-          cliError(
-            `inclusion run ${runId}: verdict.json finished_at missing/not a string`,
-          );
-        }
+        const verdict = readVerdictOutcome(
+          verdictPath,
+          `inclusion run ${runId}`,
+        );
         // v1 pool identity: the gate-era credential map embedded in the
         // inclusion manifest, falling back to the credential name
         // (estimates aggregate over pools; they never dispatch on them).
@@ -327,6 +366,7 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
           },
           finished_at: verdict.finished_at,
           tokens_total: readTokensTotal(dir),
+          outcome: verdict.outcome,
         });
       }
     }
@@ -345,7 +385,7 @@ export function campaignEstimates(opts: CampaignEstimatesOptions): void {
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, serializeEstimates(artifact), { mode: 0o644 });
     process.stdout.write(
-      `estimates: ${artifact.entries.length} entries, ${artifact.corpus.run_count} runs → ${outPath}\n`,
+      `estimates: ${artifact.entries.length} entries, ${artifact.corpus.run_count} runs (${artifact.corpus.excluded.length} never-ran excluded, listed in corpus.excluded) → ${outPath}\n`,
     );
   } catch (err: unknown) {
     catchCliError(err);

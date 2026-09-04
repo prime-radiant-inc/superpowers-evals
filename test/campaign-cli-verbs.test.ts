@@ -108,6 +108,7 @@ function writeEstimates(dir: string): string {
         sources: ['s'],
         run_count: 10,
         duplicates_excluded: 0,
+        excluded: [],
         digest: 'd',
       },
       entries: [

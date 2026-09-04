@@ -29,11 +29,15 @@ function rec(over: Partial<ReplayRecord>): ReplayRecord {
   };
 }
 
+/** The outcome of a run whose subject ran to a composed verdict. */
+const RAN: EstimateInput['outcome'] = { final: 'pass', error_stage: null };
+
 function input(
   record: ReplayRecord,
   finished_at = '2026-08-08T01:00:00.000Z',
+  outcome: EstimateInput['outcome'] = RAN,
 ): EstimateInput {
-  return { record, finished_at };
+  return { record, finished_at, outcome };
 }
 
 test('medians: odd n picks middle, even n averages two middles', () => {
@@ -236,6 +240,125 @@ test('NUL bytes in field values never corrupt grouping or fields', () => {
   ).toBe(200);
 });
 
+test('never-ran indeterminates (setup / qa-agent-misconfigured / unknown crash) are excluded from every tier and listed in corpus.excluded', () => {
+  // A cell whose history is two sub-second provisioning failures and one
+  // real pass must estimate from the real pass, not the failures.
+  const art = buildEstimates(
+    [
+      input(rec({ run_id: 'auth-missing', wall_ms: 80 }), undefined, {
+        final: 'indeterminate',
+        error_stage: 'setup',
+      }),
+      input(rec({ run_id: 'grader-misconfig', wall_ms: 900 }), undefined, {
+        final: 'indeterminate',
+        error_stage: 'qa-agent-misconfigured',
+      }),
+      input(rec({ run_id: 'copyfile-crash', wall_ms: 200 }), undefined, {
+        final: 'indeterminate',
+        error_stage: 'unknown',
+      }),
+      input(rec({ run_id: 'real', wall_ms: 108_000 })),
+    ],
+    { sources: ['fixture'] },
+  );
+  expect(art.entries).toHaveLength(1);
+  expect(art.entries[0]!.duration_n).toBe(1);
+  expect(art.entries[0]!.duration_s_median).toBe(108);
+  expect(art.fallbacks.scenario_agent[0]!.duration_n).toBe(1);
+  expect(art.fallbacks.scenario[0]!.duration_n).toBe(1);
+  expect(art.fallbacks.corpus_median.duration_s).toBe(108);
+  expect(art.corpus.run_count).toBe(1);
+  // Excluded runs are tracked, never dropped silently: identity + stage,
+  // sorted by run_id for byte-stable serialization.
+  expect(art.corpus.excluded).toEqual([
+    {
+      run_id: 'auth-missing',
+      scenario: 'sdd-escalates',
+      agent: 'claude',
+      credential: 'opus_bedrock',
+      os: 'linux',
+      stage: 'setup',
+    },
+    {
+      run_id: 'copyfile-crash',
+      scenario: 'sdd-escalates',
+      agent: 'claude',
+      credential: 'opus_bedrock',
+      os: 'linux',
+      stage: 'unknown',
+    },
+    {
+      run_id: 'grader-misconfig',
+      scenario: 'sdd-escalates',
+      agent: 'claude',
+      credential: 'opus_bedrock',
+      os: 'linux',
+      stage: 'qa-agent-misconfigured',
+    },
+  ]);
+  expect(
+    EstimatesArtifactSchema.parse(JSON.parse(serializeEstimates(art))).corpus
+      .excluded,
+  ).toHaveLength(3);
+});
+
+test('indeterminates whose subject ran (capture, no stage) and fails keep their real wall time', () => {
+  const art = buildEstimates(
+    [
+      input(rec({ run_id: 'a', wall_ms: 300_000 }), undefined, {
+        final: 'indeterminate',
+        error_stage: 'capture',
+      }),
+      input(rec({ run_id: 'b', wall_ms: 500_000 }), undefined, {
+        final: 'indeterminate',
+        error_stage: null,
+      }),
+      input(rec({ run_id: 'c', wall_ms: 700_000 }), undefined, {
+        final: 'fail',
+        error_stage: null,
+      }),
+    ],
+    { sources: ['fixture'] },
+  );
+  expect(art.entries[0]!.duration_n).toBe(3);
+  expect(art.entries[0]!.duration_s_median).toBe(500);
+  expect(art.corpus.excluded).toEqual([]);
+});
+
+test('a corpus of only never-ran runs has nothing to estimate', () => {
+  expect(() =>
+    buildEstimates(
+      [
+        input(rec({ run_id: 'a', wall_ms: 80 }), undefined, {
+          final: 'indeterminate',
+          error_stage: 'setup',
+        }),
+      ],
+      { sources: ['fixture'] },
+    ),
+  ).toThrow(/no inputs/);
+});
+
+test('a duplicate of an excluded run counts as a duplicate, not a second exclusion', () => {
+  const art = buildEstimates(
+    [
+      input(rec({ run_id: 'a', wall_ms: 80 }), undefined, {
+        final: 'indeterminate',
+        error_stage: 'setup',
+      }),
+      input(rec({ run_id: 'a', wall_ms: 80 }), undefined, {
+        final: 'indeterminate',
+        error_stage: 'setup',
+      }),
+      input(rec({ run_id: 'b', wall_ms: 100_000 })),
+    ],
+    { sources: ['fixture'] },
+  );
+  expect(art.corpus.excluded).toHaveLength(1);
+  expect(art.corpus.duplicates_excluded).toBe(1);
+  expect(art.corpus.run_count).toBe(1);
+});
+
 test('generated_at is max finished_at; serialization is byte-stable', () => {
   const inputs = [
     input(rec({ run_id: 'a' }), '2026-08-08T01:00:00.000Z'),
@@ -253,16 +376,19 @@ test('tokens_total_median: median over observed sidecar volumes at every tier; a
     {
       record: rec({ run_id: 't1', wall_ms: 100_000 }),
       finished_at: '2026-08-08T01:00:00.000Z',
+      outcome: RAN,
       tokens_total: 100_000,
     },
     {
       record: rec({ run_id: 't2', wall_ms: 300_000 }),
       finished_at: '2026-08-08T01:00:00.000Z',
+      outcome: RAN,
       tokens_total: 300_000,
     },
     {
       record: rec({ run_id: 't3', wall_ms: 500_000 }),
       finished_at: '2026-08-08T01:00:00.000Z',
+      outcome: RAN,
       tokens_total: null,
     },
   ];
@@ -280,6 +406,7 @@ test('tokens_total_median: median over observed sidecar volumes at every tier; a
       {
         record: rec({ run_id: 'n1' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: null,
       },
     ],
@@ -305,11 +432,13 @@ test('tokens_total_median: median over observed sidecar volumes at every tier; a
       {
         record: rec({ run_id: 'd' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: 100,
       },
       {
         record: rec({ run_id: 'd' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: 900,
       },
     ],
@@ -323,11 +452,13 @@ test('lookupEstimate surfaces tokens_total_median through the fallback chain', (
     {
       record: rec({ run_id: 'a', wall_ms: 100_000 }),
       finished_at: '2026-08-08T01:00:00.000Z',
+      outcome: RAN,
       tokens_total: 111_000,
     },
     {
       record: rec({ run_id: 'b', credential: 'other_cred', wall_ms: 300_000 }),
       finished_at: '2026-08-08T01:00:00.000Z',
+      outcome: RAN,
       tokens_total: 222_000,
     },
   ];
@@ -367,6 +498,7 @@ test('tokens_total_median schema: negative volumes fail artifact parse; fraction
       {
         record: rec({ run_id: 'v' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: -100,
       },
     ],
@@ -382,11 +514,13 @@ test('tokens_total_median schema: negative volumes fail artifact parse; fraction
       {
         record: rec({ run_id: 'f1' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: 1,
       },
       {
         record: rec({ run_id: 'f2' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: 2,
       },
     ],
@@ -407,6 +541,7 @@ test('corpus_median tokens_total_median is equally constrained (negative fallbac
       {
         record: rec({ run_id: 'c1' }),
         finished_at: '2026-08-08T01:00:00.000Z',
+        outcome: RAN,
         tokens_total: 1_000,
       },
     ],
