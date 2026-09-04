@@ -30,7 +30,7 @@
 
 ## Source integration and contract precedence
 
-Use the existing `.worktrees/campaign-consolidation-design` worktree and `codex/campaign-consolidation-design` branch. Its `ab256d73` design commit descends from main `f8e1889c745f916491526b5e57ea3fa30e9dfcac`. Merge appliance work `65c28448625d8446720f36c377890879dacd7f1d` into this branch before implementation. Their common ancestor is `c2059d0b7e1ca68c6ee60222d13e7fbca3ff2a8a`; neither source supersedes the other. In particular, retain main's Codex/Kimi/Pi/Copilot capability and estimate fixes as well as the appliance container implementation.
+At Drew's explicit request, use the fresh `.worktrees/core-comparison` worktree on `codex/core-comparison` for implementation. It starts at design/plan commit `270dd5b5`, descended from main `f8e1889c745f916491526b5e57ea3fa30e9dfcac`. Merge appliance work `65c28448625d8446720f36c377890879dacd7f1d` into this branch before implementation. The source tips' common ancestor is `c2059d0b7e1ca68c6ee60222d13e7fbca3ff2a8a`; neither source supersedes the other. In particular, retain main's Codex/Kimi/Pi/Copilot capability and estimate fixes as well as the appliance container implementation. The earlier design worktree remains a design workspace.
 
 This plan makes the consolidation design's overrides explicit:
 
@@ -81,6 +81,8 @@ type PoolPolicy = {
   pool_id: string; max_concurrency: number; launch_spacing_seconds: number;
 };
 type ArtifactRef = { path: string; sha256: string; bytes: number };
+// Same wire shape, resolved only under the campaign's immutable control evidence root.
+type CampaignEvidenceRef = { path: string; sha256: string; bytes: number };
 type Observed<T> =
   | { value: T; artifact: ArtifactRef }
   | { missing: 'absent' | 'invalid' | 'unpriced' | 'not_recorded' };
@@ -128,14 +130,22 @@ type AttemptObservation = {
 | `block_activated / BlockActivation` | Bound live session, no stop intent, primary not yet selected; atomically records all attempts and selects this coherent instance. |
 | `block_replaced / {activation: BlockActivation, reason: ReplacementCause}` | Predecessor selected, all its workers verified dead, typed replaceable reason, reserve and per-slot allowance available. Atomically consumes reserve, creates all successor intents, excludes predecessor and selects successor. |
 | `runtime_bound / {execution_attempt_id, container_id, runtime_spec_digest}` | Prepared attempt only; exact specification digest; immutable ID may be bound once. |
-| `runtime_started / {execution_attempt_id, observed_at}` | Bound attempt; an observation of start, not permission to start. Missing this row after a crash never proves no worker ran. |
+| `runtime_started / {execution_attempt_id, observed_at, receipt: 'docker_start_succeeded'}` | Bound attempt; durably records the successful, settled Docker start response, not permission to start. Missing this row after a crash never proves no worker ran or that the request settled. |
 | `attempt_observed / {observation: AttemptObservation, excluded_block: {block_id, reason} | null}` | Exact intent and verified death; closes execution immutably with validated references or explicit missingness. Only live controller may accept behavior. If this observation establishes invalid/unknown required validity, exclude its coherent block in the same transaction; do not wait for a replacement. |
 | `accounting_observed / {execution_attempt_id, stopped: VerifiedStopped, artifacts: ArtifactRef[], evidence_missing: string | null}` | Persists verified death and available accounting, including an empty artifact set with explicit missingness; accepted behavior unchanged. May be written by cancellation for orphan accounting. |
+| `block_validated / {block_id, evidence_refs: CampaignEvidenceRef[]}` | Live controller only, all member executions closed and required validity audits complete. Positive inclusion receipt; cannot undo an invalidation. |
+| `block_invalidated / {block_id, reason: ValidityCause, evidence_refs: CampaignEvidenceRef[]}` | Live controller only, before ended. Atomically excludes an activated block when a closed-window validity audit arrives after observations were accepted. No observation rewrite, reserve consumption or successor required. |
 | `block_exhausted / {primary_block_id, reason: ReplacementCause}` | Selected failed instance closed, no legal replacement remains. Its excluded observations stay readable; fixed slots become observed-but-excluded. |
-| `ended / {outcome: 'completed'|'cancelled'|'interrupted', reason: string}` | No further admission. Completed requires every primary block resolved or exhausted and all workers stopped. Cancelled requires ordinary cancel intent and all workers stopped. Interrupted never changes to completed/cancelled. |
-| `termination_verified / {start_id, stopped: VerifiedStopped[]}` | An existing ended outcome and complete intent inventory, controller and pending launcher verified dead or current authorized terminator, no possible owned live worker. Enables removal of matching host claim. Never changes inclusion. |
+| `ended / {outcome: 'completed'|'cancelled'|'interrupted', reason: string, cancel_intent: CampaignEvidenceRef | null}` | No further admission. Completed requires every primary block resolved with final validity receipt or exhausted and all workers stopped. Cancelled requires an authenticated ordinary cancel-intent reference and all workers stopped. Interrupted never changes to completed/cancelled. |
+| `termination_verified / {start_id, stopped: VerifiedStopped[], process_evidence: CampaignEvidenceRef[]}` | An existing ended outcome and complete intent inventory, controller and pending launcher verified dead or current authorized terminator, no possible owned live worker. Enables removal of matching host claim. Never changes inclusion. |
 
 `ReplacementCause` is the closed table below, not arbitrary strings. Reject duplicate identities, missing arms, wrong primary slots, changed arm mapping, reserve reuse, cross-cell successors, backward timestamps where monotonicity matters, changed runtime binding, and transitions after termination. A duplicate `transition_id` is idempotent only if canonical bytes match; different bytes are corruption. No standalone mutable sample status is persisted. The projection stores immutable attempts and one selected block instance per primary block, plus exhausted disposition.
+
+`ValidityCause` is `contention | exposure | skew | missing_telemetry | provenance`. Late validity audits use `block_invalidated` even when no replacement remains, and completion waits for all required closed-window audits. Cancellation cannot perform new validity adjudication. Interrupted reports honor every previously committed invalidation while leaving unaccepted artifacts unpromoted.
+
+Pass/fail observations require supporting artifacts; empty evidence can only support an explicitly missing indeterminate observation. Accounting or termination may persist a newly discovered immutable container ID for an unbound intent after authenticated inspection, preserving uniqueness and every known ID. That observation never grants start authority.
+
+The positive `block_validated` receipt is required for analytical inclusion; pending validity is explicit missingness even when raw attempt outcomes are readable. Artifact bytes, symlinks, process death and cancellation sidecars are authenticated at the IO boundary before journal commit. The pure fold checks record identity, path shape and legal predecessors, not the filesystem. Cancellation intent remains the one fsynced sidecar; do not add a second journal intent authority. A cancellation writer may append accounting, end and termination records only, never behavior, validity, admission or replacement decisions.
 
 ### Failure policy
 
@@ -180,6 +190,8 @@ interface AttemptRuntime {
   stop(bound: BoundExecution, graceSeconds: number): Promise<StopObservation>;
 }
 ```
+
+Freeze exact public environment values, entrypoint and identity labels in the runtime specification; names alone cannot authenticate output or authority paths. `QUORUM_ATTEMPT_AUTHORITY_FILE` identifies the private prepared attempt authority, distinct from the credential-authority digest. Secret values remain in private credential projections.
 
 Define `AttemptRuntimeSpec` as the existing structured Docker inputs plus frozen deadline/init/restart/private-namespace fields; persist its complete public contents in the intent and authenticate them with `runtime_spec_digest`. It contains no secret values. Cancellation must not reconstruct this specification from mutable configuration. `OwnedRuntimeObservation` is `absent | matching-created | matching-running | matching-stopped | unresolved`, each matching case carrying the immutable container ID and inspected specification digest. `AttemptMonitor` exposes separate `onStopped(VerifiedStopped)` and `onMonitorFailure(reason: string)` callbacks. No callback from a failed follower is death proof. Unknown runtime state prevents publication, capacity release and replacement.
 
@@ -226,12 +238,14 @@ Report JSON has a versioned deterministic fold, campaign/input identity, journal
 
 ## Task 1: Integrate the actual source baseline
 
-**Files:** Git integration only, then this plan's progress boxes. Preserve the untracked `docs/experiments/2026-09-04-campaign-consolidation-design-review.md` unchanged.
+Completed in `14e13006`; integration review accepted the retained source histories. Baseline `bun run check` exited 1 with one intermittent CLI timeout, 3675 passing tests and 6 skips. Isolated reruns passed unchanged; the full portable gate remains required after implementation. Scenario validation and the separate dashboard check passed.
+
+**Files:** Git integration in the fresh implementation worktree, then this plan's progress boxes. Preserve the untracked `docs/experiments/2026-09-04-campaign-consolidation-design-review.md` in the design worktree unchanged; do not copy it into implementation.
 
 **Interfaces:** Produces a branch containing both exact source tips above and the approved design. No runtime behavior changes are part of this task.
 
-- [ ] Record `git status --short`, `git rev-parse HEAD`, gitdir/common-dir, and the untracked note's SHA-256. Confirm the current worktree is linked and the two pinned commits exist.
-- [ ] Merge the appliance source into this worktree; resolve only actual conflicts while retaining main's capability/credential fixes. If overlapping user edits appear, leave them untouched and report the concrete overlap.
+- [x] Record `git status --short`, `git rev-parse HEAD`, gitdir/common-dir, and the design worktree note's SHA-256. Confirm the fresh current worktree is linked and the two pinned commits exist.
+- [x] Merge the appliance source into this worktree; resolve only actual conflicts while retaining main's capability/credential fixes. If overlapping user edits appear, leave them untouched and report the concrete overlap.
 
 ```sh
 git merge --no-ff 65c28448625d8446720f36c377890879dacd7f1d
@@ -240,16 +254,18 @@ bun run check
 bun run quorum check
 ```
 
-- [ ] Record baseline command exits. Existing failures are blockers to distinguish from new failures; do not silently delete their tests or claim a green baseline. Check no Docker/live command ran as a side effect.
-- [ ] Verify both tips are ancestors. Commit merge resolution with a detailed body explaining the two source lines and core-only scope; preserve hooks.
+- [x] Record baseline command exits. Existing failures are blockers to distinguish from new failures; do not silently delete their tests or claim a green baseline. Check no Docker/live command ran as a side effect.
+- [x] Verify both tips are ancestors. Commit merge resolution with a detailed body explaining the two source lines and core-only scope; preserve hooks.
 
 ## Task 2: Define fixed experiment slots and the one-session fold
+
+Completed through `16b03af4`; independent review and scoped fix review approved the records/fold. The final task receipt is 89 passing related tests, including 38 focused tests, plus typecheck and scoped Biome. Review fixes cover discovered container identities after create-before-bind and rejection of pass/fail without supporting artifacts.
 
 **Files:** Create `src/contracts/campaign/experiment.ts`, `src/contracts/campaign/execution.ts`, `src/campaign/execution-state.ts`, `test/campaign-execution-state.test.ts`, `test/fixtures/core-comparison/factory.ts`. Modify shared leaf schemas only as needed; cut over V1 consumers in Task 9.
 
 **Interfaces:** Produces `ExperimentSchema`, `CampaignTransitionSchema`, `CampaignProjection`, `initialProjection(experiment: Experiment): CampaignProjection`, and `foldTransition(state, transition): CampaignProjection`. Shared record shapes and exact transition table are above. Factory exports a valid two-arm experiment and deterministic transition builders using fixture timestamps/IDs.
 
-- [ ] Write behavior tests for sole start, atomic complete arm inventory, immutable outcomes, reserve/per-slot limits, and coherent selection. Include an already accepted predecessor whose successor has one indeterminate arm.
+- [x] Write behavior tests for sole start, atomic complete arm inventory, immutable outcomes, reserve/per-slot limits, and coherent selection. Include an already accepted predecessor whose successor has one indeterminate arm.
 
 ```ts
 test('replacement preserves observations and the primary denominator', () => {
@@ -262,7 +278,7 @@ test('replacement preserves observations and the primary denominator', () => {
 });
 ```
 
-- [ ] Run `bun test test/campaign-execution-state.test.ts`; expect missing exports, then implement the strict records and pure fold. Validate the entire proposed transition against a cloned projection before changing any maps; a thrown validation error leaves the input untouched.
+- [x] Run `bun test test/campaign-execution-state.test.ts`; expect missing exports, then implement the strict records and pure fold. Validate the entire proposed transition against a cloned projection before changing any maps; a thrown validation error leaves the input untouched.
 
 ```ts
 export function foldTransition(state: CampaignProjection, transition: CampaignTransition): CampaignProjection {
@@ -273,11 +289,13 @@ export function foldTransition(state: CampaignProjection, transition: CampaignTr
 ```
 
 `cloneProjection` copies mutable maps/sets; `applyValidatedTransition` is a private exhaustive switch implementing the table, with no I/O. Neither is a second replay policy.
-- [ ] Run the focused tests including table-driven illegal predecessor/identity cases. Commit the domain contracts and fixture factory with their intent and finite-bound semantics.
+- [x] Run the focused tests including table-driven illegal predecessor/identity cases. Commit the domain contracts and fixture factory with their intent and finite-bound semantics.
 
 ## Task 3: Make journal transitions atomic and host ownership durable
 
 **Files:** Modify `src/campaign/journal.ts`, `locks.ts`, `src/cli/run-command.ts`, `src/run-all/index.ts`; create `src/campaign/ownership.ts`, `test/campaign-transitions.test.ts`, `test/campaign-ownership.test.ts`; extend `test/campaign-lock-threading.test.ts`.
+
+A separate `src/campaign/execution-journal.ts` may hold the V2 writer while unchanged V1 consumers retain `journal.ts` until Task 9 removes them. This is an intermediate source arrangement, never schema-based runtime compatibility. Extract shared durable-file primitives only to avoid duplication. A small pure experiment digest helper may move forward from Task 4 so the journal reader can authenticate its document without a document/journal import cycle. Exclude campaign ID, input digest, and registration actor/time; retain all other frozen fields, including supplied scheduling estimates.
 
 **Interfaces:** Consume Task 2. Produce `commitTransition`, `readProjection(campaignDir): CampaignProjection`, `publishHostClaim(claim: HostCampaignClaim): void`, `readHostClaim(): HostCampaignClaim | null`, `clearHostClaim(receipt: TerminationReceipt): void`. `TerminationReceipt` contains experiment/start identity, the committed termination transition ID/digest and complete stopped inventory. Paths derive from the existing host lock root and campaign directory. `acquireLiveSpendLock` gains an explicit typed matching-start or cancellation authority; default callers can never bypass a claim.
 
@@ -376,6 +394,14 @@ const monitor = await runtime.start(bound);
 ```ts
 test('a consumed start survives launcher loss', async () => {
   const f = await launchFixture({ crashAfter: 'started' });
+  await f.firstRun();
+  expect((await f.secondRun()).kind).toBe('refused');
+  expect(f.runtimeStartCount()).toBe(0);
+  expect(f.hostClaim()).toBeNull();
+});
+
+test('a published claim survives loss before child creation', async () => {
+  const f = await launchFixture({ crashAfter: 'claim_published' });
   await f.firstRun();
   expect((await f.secondRun()).kind).toBe('refused');
   expect(f.runtimeStartCount()).toBe(0);
@@ -514,5 +540,5 @@ This command belongs on the explicitly selected Linux environment with Docker ac
 | Honest distinction between portable/Linux/installed proof | 10 |
 
 - [x] Root self-review: every spec obligation mapped; corrected the credential registry and command-options signatures against source; verified existing task paths; scanned for unresolved placeholders. Test-local fixture helpers are specified by their scenario rather than production APIs.
-- [ ] Narrow execution review: stress ownership cuts, policy exhaustion and the report oracle. Resolve concrete blockers before implementation; do not reopen resume/restart or add a new architecture panel.
+- [x] Narrow execution review: addressed the five ownership/accounting/validity findings and the scoped re-review's late-invalidation and launch-cut corrections. Uncertain daemon starts retain ownership until conclusive settlement; no stop snapshot or elapsed-time inference clears it. The report oracle's fixed denominators and literal arithmetic were independently checked.
 - [ ] Execute Tasks 1-9 locally with task-scoped review and focused tests; Task 10's environment-dependent proof remains separately identified.
