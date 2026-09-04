@@ -20,6 +20,7 @@ import {
 import { realProcessIdentityProbe } from '../src/campaign/locks.ts';
 import { credentialAuthorityDigest } from '../src/campaign/registration.ts';
 import { compileResourcePolicy } from '../src/campaign/resource-policy.ts';
+import { compose } from '../src/composer.ts';
 import {
   jcsCanonicalize,
   sha256Hex,
@@ -436,6 +437,69 @@ test('unknown price and behavioral failure change observations but never admissi
     ).toEqual(['fail', 'fail']);
   }
   expect(identities[0]).toEqual(identities[1]);
+});
+
+test('the real composer manifest mismatch reaches checks replacement through authenticated verdict bytes', async () => {
+  const f = fixture();
+  const publish = f.deps.publish;
+  f.deps.publish = (args) => {
+    const result = publish(args);
+    if (args.bound.intent.attempt_number !== 1) return result;
+    const verdict = compose({
+      gauntlet: {
+        status: 'pass',
+        summary: '',
+        reasoning: '',
+        run_id: 'grader',
+      },
+      checks: [],
+      captureEmpty: false,
+      error: null,
+      expected: {
+        schema_version: 1,
+        entries: [
+          {
+            phase: 'post',
+            check: 'file-exists',
+            args: ['expected.txt'],
+            negated: false,
+            count: 1,
+          },
+        ],
+      },
+    });
+    expect(verdict.error?.stage).toBe('checks');
+    const ref = result.artifacts.find((r) => r.path.endsWith('/verdict.json'))!;
+    const body = JSON.stringify({
+      ...verdict,
+      campaign: args.bound.intent.identity,
+    });
+    writeFileSync(join(f.context.resultsRoot, ref.path), body);
+    ref.bytes = Buffer.byteLength(body);
+    ref.sha256 = sha256Hex(body);
+    return result;
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.complete(0);
+  await flush();
+  expect(f.started).toHaveLength(4);
+  const predecessor = f.writer.readProjection().blocks.get('primary')!;
+  expect(
+    predecessor.activation.attempts.every(
+      (a) =>
+        f.writer.readProjection().attempts.get(a.identity.execution_attempt_id)
+          ?.stopped,
+    ),
+  ).toBe(true);
+  expect(
+    f.writer.readProjection().attempts.get('sample-base-1')?.observation?.cause,
+  ).toBe('checks_crashed');
+  f.complete(2);
+  f.complete(3);
+  await settle(f, run);
+  expect(f.writer.readProjection().consumed_reserves.size).toBe(1);
+  expect(f.writer.readProjection().ended?.outcome).toBe('completed');
 });
 
 test('a permanent grader configuration failure ends the session and stops its sibling', async () => {
