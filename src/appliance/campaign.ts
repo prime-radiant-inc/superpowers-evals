@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CommandRunner } from '../agents/command-runner.ts';
@@ -51,12 +57,82 @@ export interface CampaignCommandDeps {
   launch?: typeof startCampaignOnce;
 }
 
+const CAMPAIGN_SELECTOR_RE = /^[a-z0-9][a-z0-9._-]*$/;
+type UnreadableCampaignCode =
+  | 'unsafe_path'
+  | 'invalid_campaign'
+  | 'unavailable';
+
+class ListedCampaignError extends Error {
+  readonly code: UnreadableCampaignCode;
+
+  constructor(code: UnreadableCampaignCode, message: string) {
+    super(message);
+    this.name = 'ListedCampaignError';
+    this.code = code;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function listedCampaignNames(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => {
+      if (entry.isSymbolicLink()) return true;
+      if (!entry.isDirectory()) return false;
+      try {
+        return (
+          lstatSync(join(root, entry.name, 'campaign.json'), {
+            throwIfNoEntry: false,
+          }) !== undefined
+        );
+      } catch {
+        return true;
+      }
+    })
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function listedCampaignDirectory(
+  root: string,
+  realRoot: string,
+  selector: string,
+): string {
+  if (!CAMPAIGN_SELECTOR_RE.test(selector)) {
+    throw new ListedCampaignError(
+      'unsafe_path',
+      'campaign selector must be a closed basename',
+    );
+  }
+  const campaignDir = join(root, selector);
+  try {
+    if (!assertNoFollowDirChain(root, campaignDir, 'campaign'))
+      throw new Error('campaign directory unavailable');
+    const realCampaignDir = realpathSync(campaignDir);
+    assertInsideRoot(realRoot, realCampaignDir);
+    return realCampaignDir;
+  } catch (error) {
+    throw new ListedCampaignError('unsafe_path', errorMessage(error));
+  }
+}
+
+function unreadableCampaign(selector: string, error: unknown) {
+  const reason =
+    error instanceof ListedCampaignError
+      ? { code: error.code, message: error.message }
+      : { code: 'unavailable' as const, message: errorMessage(error) };
+  return { selector, state: 'unreadable' as const, reason };
+}
+
 /** Select a published basename or exact immutable identity, never a path escape. */
 export function resolveCampaignDirectory(
   loaded: LoadedApplianceStateConfig,
   selector: string,
 ): string {
-  if (!/^[a-z0-9][a-z0-9._-]*$/.test(selector))
+  if (!CAMPAIGN_SELECTOR_RE.test(selector))
     throw new ApplianceError(
       'config_invalid',
       'campaign',
@@ -87,14 +163,16 @@ export function resolveCampaignDirectory(
 export function campaignCommands(deps: CampaignCommandDeps) {
   const { loaded, runner } = deps;
   const root = join(loaded.config.evals.path, 'campaigns');
-  const context = (selector: string) => ({
+  const lifecycleContext = (campaignDir: string) => ({
     loaded,
-    campaignDir: resolveCampaignDirectory(loaded, selector),
+    campaignDir,
     jobId: `campaign-${randomUUID()}`,
     resultsRoot: resolveCampaignResultsRoot(
       loaded.config.container.results_root,
     ),
   });
+  const context = (selector: string) =>
+    lifecycleContext(resolveCampaignDirectory(loaded, selector));
   return {
     register(args: CampaignRegisterArgs) {
       const globalCap = args.globalCap ?? DEFAULT_GLOBAL_CAP;
@@ -122,19 +200,36 @@ export function campaignCommands(deps: CampaignCommandDeps) {
       if (!existsSync(root)) return [];
       if (!assertNoFollowDirChain(loaded.config.evals.path, root, 'campaigns'))
         throw new Error('campaign root unavailable');
-      return readdirSync(root)
-        .sort()
-        .filter((name) => existsSync(join(root, name, 'campaign.json')))
-        .map((name) => {
-          const args = context(name);
-          const experiment = loadFrozenCampaign(args.campaignDir);
+      const realRoot = realpathSync(root);
+      return listedCampaignNames(root).map((selector) => {
+        try {
+          const campaignDir = listedCampaignDirectory(root, realRoot, selector);
+          let experiment: ReturnType<typeof loadFrozenCampaign>;
+          try {
+            experiment = loadFrozenCampaign(campaignDir);
+          } catch (error) {
+            throw new ListedCampaignError(
+              'invalid_campaign',
+              errorMessage(error),
+            );
+          }
+          const args = lifecycleContext(campaignDir);
+          let status: ReturnType<typeof observeCampaignStatus>;
+          try {
+            status = observeCampaignStatus(args, deps.processes);
+          } catch (error) {
+            throw new ListedCampaignError('unavailable', errorMessage(error));
+          }
           return {
             campaign_id: experiment.campaign_id,
-            selector: basename(args.campaignDir),
+            selector: basename(campaignDir),
             input_digest: experiment.input_digest,
-            ...observeCampaignStatus(args, deps.processes),
+            ...status,
           };
-        });
+        } catch (error) {
+          return unreadableCampaign(selector, error);
+        }
+      });
     },
     status(args: CampaignCommandArgs) {
       return observeCampaignStatus(
