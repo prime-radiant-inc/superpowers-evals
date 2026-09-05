@@ -31,8 +31,11 @@ test('real scenario setup and post checks preserve pass, fail, and missing-evide
     'brainstorming-todo-shared-intent',
   );
   const workdir = join(f.dir, 'coding-agent-workdir');
+  const codingAgentHome = join(f.dir, 'home');
   mkdirSync(workdir);
-  runSetup(scenarioDir, workdir);
+  runSetup(scenarioDir, workdir, {
+    QUORUM_CODING_AGENT_HOME: codingAgentHome,
+  });
   expect(readdirSync(workdir).sort()).toEqual(['.git', 'README.md']);
   expect(
     spawnSync('git', ['status', '--porcelain'], {
@@ -66,7 +69,7 @@ test('real scenario setup and post checks preserve pass, fail, and missing-evide
   const missing = await runPhase({ ...phaseArgs, phase: 'post' });
   expect(missing.exitCode).toBe(127);
   const evidence = join(f.dir, 'brainstorming-evidence');
-  const logs = join(f.dir, 'home', '.codex', 'sessions');
+  const logs = join(codingAgentHome, '.codex', 'sessions');
   mkdirSync(logs, { recursive: true });
   const rawLog = join(logs, 'rollout.jsonl');
   writeFileSync(rawLog, f.raw);
