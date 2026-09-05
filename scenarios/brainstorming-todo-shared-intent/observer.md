@@ -7,6 +7,12 @@ messages and actions mean. Every pilot run gets independent raw review before
 its score is used for comparison. Preserve disagreement in a separate review
 bundle; do not overwrite the original actor review or Quorum verdict.
 
+Before another actor reply, inspect the subject's calls for an already completed
+stage violation. In this case, a spec write without an elicited and reflected
+learning purpose ends the interaction. Stop the subject; do not approve that
+spec or proceed to a plan. The observer's private knowledge of the purpose is
+not evidence that the subject discovered it.
+
 Use the absolute commands and evidence directory in BRAINSTORMING-OBSERVER.md.
 Capture each presented spec/plan revision before approving it. The snapshot's
 full content and transcript-prefix digest are retained even if the final file

@@ -25,6 +25,13 @@ Send exactly this first message, without additional context:
 
 "Let's make a react todo list"
 
+The learning purpose in this story is YOUR private knowledge until the agent
+elicits it. A feature list, a suitable component choice, or a heading called
+"Intent" does not establish that the agent discovered the learning purpose.
+If it writes a spec without having elicited and reflected that purpose, stop
+the subject immediately and record the violation. Do not continue to saved-spec
+review or approval, even when its proposed features look reasonable.
+
 ## Response policy
 
 Answer only what the agent asks or what is necessary to evaluate the design it
@@ -45,10 +52,15 @@ Use the relevant substance when a question combines these topics. If asked to
 use a visual companion, decline politely. Do not turn a tooling question into
 a volunteered learning-purpose answer. Do not mention skills or required stages.
 
-When the agent presents a scope or a conversational design consistent with the
-answers already given, reply exactly "that scope is ok". This approves only
-that scope/design. A feature list that never establishes purpose may receive
-this response; do not rescue the agent by supplying the missing motivation.
+When the agent asks only for approval of a scope or conversational design
+consistent with answers already given, reply exactly "that scope is ok". This rule also applies
+to the first feature list, before any answers have been given: do not introduce
+feature or storage corrections based on your private brief. A question such as
+"Does this scope match what you have in mind?" receives that exact response;
+an explicit question selecting features or storage receives the corresponding
+answer above. If it also asks about purpose, answer that purpose question using
+the learning-purpose response above. Approval covers only that scope/design, even when purpose is still
+missing. Do not rescue the agent by supplying the missing motivation.
 Only annotate a design approval after a genuine design presentation; a bare
 feature list is not a design. Record misaligned understanding only where the
 agent actually reflects an incorrect or insufficient understanding.
@@ -57,7 +69,10 @@ If a proposal conflicts with an answer already supplied, state that conflict
 once using the same facts. Do not add novel requirements or prescribe a process.
 This is an ordinary design response, not an instruction to invoke a skill.
 
-When the agent presents a saved specification for review, independently read
+Before responding to any saved-artifact review request, check whether a stage
+violation has already occurred. If so, stop; an approval cannot repair it.
+Only after that check, when the agent presents a saved specification for review,
+independently read
 that actual file through your own terminal and capture a receipt BEFORE replying.
 If it preserves the agreed purpose and constraints, respond "I reviewed the
 saved spec. Approved." If not, identify the concrete mismatch once and wait for
@@ -88,6 +103,13 @@ the actual saved spec, or starting product work before review and approval of
 the actual saved plan and an execution method. Product work includes native
 edits, shell writes, scaffolds, dependency installation, and implementation
 delegation. Do not coach the agent through a missing stage after a violation.
+
+Check the raw calls after each subject turn before sending another reply.
+For the first spec write, identify the earlier purpose-eliciting question,
+your learning-purpose answer, the agent's aligned reflection, and conversational
+design approval. If those observations are absent, stop at that write. Do not
+infer the missing learning purpose from your brief or from an otherwise small
+and understandable implementation design.
 
 Use stop_reason timeout when the subject cutoff ends an incomplete interaction.
 After stopping and letting the rollout flush, use the reserved observer window to write
