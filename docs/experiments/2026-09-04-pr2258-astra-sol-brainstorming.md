@@ -545,3 +545,17 @@ model/effort/instructions, unusable observer evidence, incomplete accounting,
 or insufficient remaining budget. The proposed eight-run $100 budget and
 approximately five-hour reservation are unchanged. Restore shared source,
 config, and pricing when the pilot finishes or pauses.
+
+## Live pilot authorization
+
+Drew approved the eight-run pilot and increased the total subject-plus-grader
+budget to **$500** for contingency. This supersedes the $100 proposal above;
+the number of runs, treatment definitions, first-pair review, and stop rules
+are unchanged. No replacements, fractals extension, or 204-run screen are
+included. The frozen runtime remains 0e11ce12: the old suite budget in that
+snapshot is an unused proposal, because Phase 1 jobs do not execute the suite.
+The approved $500 allowance is recorded in the live operator ledger and the
+current suite manifest. Check complete accounting before each new admission;
+reserve at least $50 or twice the highest observed run cost, whichever is
+larger, from the remaining allowance. This controls admission, not in-flight
+provider charges. Retain every attempted job and its outcome.
