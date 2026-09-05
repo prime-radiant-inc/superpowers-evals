@@ -1,13 +1,13 @@
 # PR 2258: Astra and Sol brainstorming evaluation
 
-**Status:** Core pilot instrument implemented under
-[PRI-3097](https://linear.app/prime-radiant/issue/PRI-3097/evaluate-pr-2258-brainstorming-with-astra-and-sol):
-the original todo reproduction, observer receipts and offline chronology audit,
-four pinned arms, and an eight-run suite. No live runs or model calls have been
-performed for this experiment. Drew approved both models at `xhigh`, fractals,
-and focused new cases plus existing regressions. The remaining eight new cases
-and broader screen are subsequent work, not part of this first implementation.
-The proposed budget and run counts are not live-spend authorization.
+**Status:** The eight-run pilot is authorized with a $500 budget under
+[PRI-3097](https://linear.app/prime-radiant/issue/PRI-3097/evaluate-pr-2258-brainstorming-with-astra-and-sol),
+and paused after Drew requested provider verification. One admitted job was
+cancelled before any recorded Coding-Agent interaction; no behavioral sample
+is available. Both subject models are configured for the direct OpenAI
+Responses API, and the appliance key can retrieve both model IDs. Inference
+access remains unverified. See the cancellation record below. The remaining
+new cases, fractals, and broader screen are subsequent work.
 
 **Question:** Does [Superpowers PR 2258](https://github.com/obra/superpowers/pull/2258)
 make Astra establish and preserve shared understanding through brainstorming,
@@ -559,3 +559,43 @@ current suite manifest. Check complete accounting before each new admission;
 reserve at least $50 or twice the highest observed run cost, whichever is
 larger, from the remaining allowance. This controls admission, not in-flight
 provider charges. Retain every attempted job and its outcome.
+
+
+## Provider check and cancelled first attempt
+
+Drew asked to pause and verify whether Astra required direct API keys after
+job `job-20260905T010653Z-cff7` was submitted. It started at 01:07:08 UTC on
+September 5 (September 4 local) and was cancelled at 01:07:16 UTC through the
+installed appliance helper. Canonical outcome is indeterminate due to operator
+cancellation, not a model failure. Its run ID is
+`brainstorming-todo-shared-intent-codex-openai_responses_6astra-linux-20260905T010708Z-241f`.
+No subsequent job or replacement was admitted.
+
+Both subject credentials already select `https://api.openai.com/v1` with
+`OPENAI_API_KEY`, not Mantle. The generated subject config confirms Astra,
+Responses, and xhigh. Read-only model retrieval with the scoped appliance key
+returned HTTP 200 and exact IDs for both `gpt-6-astra` and `gpt-5.6-sol` at
+01:08 UTC. Those requests did not invoke inference; visibility does not prove
+successful inference, billing headroom, or xhigh execution.
+
+The grader completed one Sonnet 5 response to read its observer instructions;
+a second request was in flight at cancellation. There is no Coding-Agent raw
+session. The helper's canonical costs remain unavailable. Separately pricing
+the retained usage sidecar gives $0.0203465 for the observed first response;
+this is a partial estimate, not the total charge or a zero-cost cancellation.
+The second request may have incurred unrecorded usage. Original artifacts are
+unchanged, with private receipts and the admission ledger in
+`results/pri3097-pilot/` and the corresponding appliance experiment directory.
+
+The statement during operation that Mantle was the grader route was premature.
+The live supervisor file did not contain an Anthropic base-URL override;
+Gauntlet recorded provider anthropic and model claude-sonnet-5. The suite's
+Mantle alias does not establish this helper job's endpoint. Resolve and record
+the intended grader route before resuming, preserving this cancelled attempt
+separately. No Astra-via-Mantle availability claim was established or needed.
+
+Preparation cleared the live credential scope after cancellation. At 01:09:50
+UTC, the rehearsed restoration returned shared evals, Superpowers, config bytes
+and mode, and pricing-file absence to their recorded baseline. Doctor passed
+with no run/sync locks. The pilot remains paused; the $500 authorization is
+unchanged, and no replacement is silently added to the eight-attempt scope.
