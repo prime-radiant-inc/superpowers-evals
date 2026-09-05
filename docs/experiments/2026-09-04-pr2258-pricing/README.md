@@ -4,6 +4,9 @@ This is an experiment-specific obol 0.9.0 snapshot, in USD per million tokens,
 for the two subjects, their known native delegate models, and the fixed grader.
 It contains only explicitly priced model IDs. An unexpected model is unpriced
 and requires an accounting review before another pilot job is admitted.
+Require an empty `unpriced_models` list for both subject and grader. A mixed
+known/unknown trajectory can have a numeric subtotal while omitting the
+unknown model's cost; a non-null total alone does not prove full coverage.
 
 Sources checked September 4, 2026:
 
