@@ -27,8 +27,8 @@ import {
   REPORT_MD_NAME,
   ReportFoldError,
   renderReportMd,
-} from '../src/campaign/report.ts';
-import type { SampleEvidence } from '../src/campaign/report-evidence.ts';
+} from '../src/campaign/budgeted-report.ts';
+import type { SampleEvidence } from '../src/campaign/budgeted-report-evidence.ts';
 import {
   campaignDoc,
   REPORT_BLOCK_1,

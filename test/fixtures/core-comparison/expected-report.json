@@ -1,0 +1,190 @@
+{
+  "comparisons": [
+    {
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arms": [
+        {
+          "arm": "b",
+          "denominator": 4,
+          "pass": 1,
+          "fail": 1,
+          "indeterminate": 1,
+          "no_usable_result": 1,
+          "available": {
+            "subject_cost_usd": 3,
+            "grader_cost_usd": 3,
+            "wall_seconds": 3,
+            "subject_tokens": 0,
+            "grader_tokens": 0
+          }
+        },
+        {
+          "arm": "t1",
+          "denominator": 4,
+          "pass": 3,
+          "fail": 0,
+          "indeterminate": 0,
+          "no_usable_result": 1,
+          "available": {
+            "subject_cost_usd": 2,
+            "grader_cost_usd": 3,
+            "wall_seconds": 3,
+            "subject_tokens": 0,
+            "grader_tokens": 0
+          }
+        }
+      ],
+      "paired": {
+        "pass_rate": {
+          "n": 2,
+          "baseline_mean": 0.5,
+          "treatment_mean": 1,
+          "mean_delta": 0.5
+        },
+        "subject_cost_usd": {
+          "n": 1,
+          "baseline_mean": 1,
+          "treatment_mean": 2,
+          "mean_delta": 1
+        },
+        "grader_cost_usd": {
+          "n": 2,
+          "baseline_mean": 0.55,
+          "treatment_mean": 0.3,
+          "mean_delta": -0.25
+        },
+        "wall_seconds": {
+          "n": 2,
+          "baseline_mean": 55,
+          "treatment_mean": 30,
+          "mean_delta": -25
+        },
+        "subject_tokens": {
+          "n": 0,
+          "baseline_mean": null,
+          "treatment_mean": null,
+          "mean_delta": null
+        },
+        "grader_tokens": {
+          "n": 0,
+          "baseline_mean": null,
+          "treatment_mean": null,
+          "mean_delta": null
+        }
+      }
+    },
+    {
+      "comparison_id": "c2",
+      "scenario": "scenario",
+      "arms": [
+        {
+          "arm": "b",
+          "denominator": 2,
+          "pass": 1,
+          "fail": 0,
+          "indeterminate": 0,
+          "no_usable_result": 1,
+          "available": {
+            "subject_cost_usd": 1,
+            "grader_cost_usd": 1,
+            "wall_seconds": 1,
+            "subject_tokens": 0,
+            "grader_tokens": 0
+          }
+        },
+        {
+          "arm": "t2",
+          "denominator": 2,
+          "pass": 0,
+          "fail": 1,
+          "indeterminate": 0,
+          "no_usable_result": 1,
+          "available": {
+            "subject_cost_usd": 1,
+            "grader_cost_usd": 1,
+            "wall_seconds": 1,
+            "subject_tokens": 0,
+            "grader_tokens": 0
+          }
+        }
+      ],
+      "paired": {
+        "pass_rate": {
+          "n": 1,
+          "baseline_mean": 1,
+          "treatment_mean": 0,
+          "mean_delta": -1
+        },
+        "subject_cost_usd": {
+          "n": 1,
+          "baseline_mean": 7,
+          "treatment_mean": 8,
+          "mean_delta": 1
+        },
+        "grader_cost_usd": {
+          "n": 1,
+          "baseline_mean": 0.7,
+          "treatment_mean": 0.8,
+          "mean_delta": 0.1
+        },
+        "wall_seconds": {
+          "n": 1,
+          "baseline_mean": 70,
+          "treatment_mean": 80,
+          "mean_delta": 10
+        },
+        "subject_tokens": {
+          "n": 0,
+          "baseline_mean": null,
+          "treatment_mean": null,
+          "mean_delta": null
+        },
+        "grader_tokens": {
+          "n": 0,
+          "baseline_mean": null,
+          "treatment_mean": null,
+          "mean_delta": null
+        }
+      }
+    }
+  ],
+  "accounting": {
+    "subject_cost_usd": {
+      "known_subtotal": 136,
+      "observed": 9,
+      "attempts": 12,
+      "complete": false
+    },
+    "grader_cost_usd": {
+      "known_subtotal": 5.9,
+      "observed": 11,
+      "attempts": 12,
+      "complete": false
+    },
+    "combined_cost_usd": {
+      "known_subtotal": 141.9,
+      "observed": 9,
+      "attempts": 12,
+      "complete": false
+    },
+    "wall_seconds": {
+      "known_subtotal": 500,
+      "observed": 10,
+      "attempts": 12,
+      "complete": false
+    },
+    "subject_tokens": {
+      "known_subtotal": 0,
+      "observed": 0,
+      "attempts": 12,
+      "complete": false
+    },
+    "grader_tokens": {
+      "known_subtotal": 0,
+      "observed": 0,
+      "attempts": 12,
+      "complete": false
+    }
+  }
+}

@@ -19,6 +19,14 @@ import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CommandRunner } from '../src/agents/command-runner.ts';
 import { defaultCommandRunner } from '../src/agents/command-runner.ts';
+import {
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
+} from '../src/campaign/budgeted-report.ts';
+import {
+  runTerminusSeal,
+  type SealerWriter,
+} from '../src/campaign/budgeted-seal.ts';
 import { SIDECAR_FILENAME } from '../src/campaign/contention.ts';
 import type { GroupSignaler } from '../src/campaign/dispatcher.ts';
 import type { HostStats, HostStatsProbe } from '../src/campaign/host-stats.ts';
@@ -30,8 +38,6 @@ import {
   replayEvents,
 } from '../src/campaign/journal.ts';
 import { resumeCampaign, universeOf } from '../src/campaign/recovery.ts';
-import { REPORT_JSON_NAME, REPORT_MD_NAME } from '../src/campaign/report.ts';
-import { runTerminusSeal, type SealerWriter } from '../src/campaign/seal.ts';
 import type {
   CampaignChildSpec,
   ChildExitInfo,

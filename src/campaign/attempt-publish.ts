@@ -9,7 +9,10 @@ import {
   renameSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
+import {
+  readPinnedNoFollowBytes,
+  readPinnedNoFollowFile,
+} from '../appliance/credential-scope.ts';
 import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
 import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
 import {
@@ -393,11 +396,11 @@ export function publishExecution(args: {
 
 /** Read only publisher-returned references beneath the configured results root.
  * Revalidate bytes at each consumer boundary; a pathname alone is not evidence. */
-export function readPublishedArtifact(
+export function readPublishedArtifactBytes(
   resultsRoot: string,
   ref: ArtifactRef,
-): string {
-  const body = readPinnedNoFollowFile(
+): Buffer {
+  const body = readPinnedNoFollowBytes(
     resultsRoot,
     ref.path.split('/'),
     'published campaign artifact',
@@ -405,11 +408,20 @@ export function readPublishedArtifact(
   );
   if (
     body === null ||
-    Buffer.byteLength(body) !== ref.bytes ||
+    body.length !== ref.bytes ||
     createHash('sha256').update(body).digest('hex') !== ref.sha256
   )
     throw new AttemptPublishError(
       'published artifact differs from authenticated reference',
     );
   return body;
+}
+
+export function readPublishedArtifact(
+  resultsRoot: string,
+  ref: ArtifactRef,
+): string {
+  return new TextDecoder('utf-8', { fatal: true }).decode(
+    readPublishedArtifactBytes(resultsRoot, ref),
+  );
 }

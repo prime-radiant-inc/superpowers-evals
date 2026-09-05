@@ -782,6 +782,16 @@ import { isAbsolute } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
+import {
+  canonicalReportBytes,
+  comparePresentReportArtifacts,
+  digestReportBytes,
+  foldDescriptiveReport,
+  publishReport,
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
+} from '../campaign/budgeted-report.ts';
+import { readSampleEvidence } from '../campaign/budgeted-report-evidence.ts';
 import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from '../campaign/campaign-document.ts';
 import type { ContainerStopper } from '../campaign/container-spawner.ts';
 import { clockNowMs, hostStatsProbeForCli } from '../campaign/host-stats.ts';
@@ -794,16 +804,6 @@ import {
   universeOf,
 } from '../campaign/recovery.ts';
 import { registerBudgetedCampaign as registerCampaign } from '../campaign/registration.ts';
-import {
-  canonicalReportBytes,
-  comparePresentReportArtifacts,
-  digestReportBytes,
-  foldDescriptiveReport,
-  publishReport,
-  REPORT_JSON_NAME,
-  REPORT_MD_NAME,
-} from '../campaign/report.ts';
-import { readSampleEvidence } from '../campaign/report-evidence.ts';
 import { resolveCampaignResultsRoot } from '../campaign/results-root.ts';
 import type { ChildSpawner } from '../campaign/spawn.ts';
 import {

@@ -1,0 +1,1305 @@
+[
+  {
+    "transition_id": "registered-0",
+    "at": "2026-09-04T00:00:00.000Z",
+    "type": "registered",
+    "payload": {
+      "campaign_id": "campaign-one",
+      "input_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "transition_id": "started-1",
+    "at": "2026-09-04T00:00:01.000Z",
+    "type": "started",
+    "payload": {
+      "campaign_id": "campaign-one",
+      "input_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "start_id": "start",
+      "launcher": {
+        "pid": 101,
+        "birth": "birth",
+        "boot_id": "boot"
+      },
+      "claimed_at": "2026-09-04T00:00:01.000Z"
+    }
+  },
+  {
+    "transition_id": "controller_bound-2",
+    "at": "2026-09-04T00:00:02.000Z",
+    "type": "controller_bound",
+    "payload": {
+      "start_id": "start",
+      "controller": {
+        "pid": 102,
+        "birth": "controller",
+        "boot_id": "boot"
+      }
+    }
+  },
+  {
+    "transition_id": "block_activated-3",
+    "at": "2026-09-04T00:00:03.000Z",
+    "type": "block_activated",
+    "payload": {
+      "block_id": "c1-r1",
+      "primary_block_id": "c1-r1",
+      "reserve_id": null,
+      "predecessor_block_id": null,
+      "attempts": [
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c1",
+            "block_id": "c1-r1",
+            "sample_id": "c1-r1-b",
+            "execution_attempt_id": "c1-r1-b-1"
+          },
+          "primary_block_id": "c1-r1",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c1-r1-b-1",
+          "container_name": "c1-r1-b-1",
+          "runtime_spec_digest": "3d3ee42276ce62b2661caaedb4488358f3024cce20c926252f7f5c824743cc83",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c1-r1-b-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c1-r1-b-1",
+                "target": "/campaign/attempts/c1-r1-b-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c1-r1-b-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c1-r1-b-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c1-r1-b-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c1-r1-b-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r1-b-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r1-b-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c1-r1-b-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        },
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c1",
+            "block_id": "c1-r1",
+            "sample_id": "c1-r1-t1",
+            "execution_attempt_id": "c1-r1-t1-1"
+          },
+          "primary_block_id": "c1-r1",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c1-r1-t1-1",
+          "container_name": "c1-r1-t1-1",
+          "runtime_spec_digest": "cd992783cdd61cd9fe26930dcb547ff4e8e848e543a0f980213b5deec22207b8",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c1-r1-t1-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c1-r1-t1-1",
+                "target": "/campaign/attempts/c1-r1-t1-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c1-r1-t1-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c1-r1-t1-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c1-r1-t1-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c1-r1-t1-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r1-t1-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r1-t1-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c1-r1-t1-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "attempt_observed-4",
+    "at": "2026-09-04T00:00:04.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r1-b-1",
+        "stopped": {
+          "execution_attempt_id": "c1-r1-b-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:04.000Z"
+        },
+        "outcome": "pass",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "attempt_observed-5",
+    "at": "2026-09-04T00:00:05.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r1-t1-1",
+        "stopped": {
+          "execution_attempt_id": "c1-r1-t1-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:05.000Z"
+        },
+        "outcome": "pass",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "block_validated-6",
+    "at": "2026-09-04T00:00:06.000Z",
+    "type": "block_validated",
+    "payload": {
+      "block_id": "c1-r1",
+      "evidence_refs": [
+        {
+          "path": "audit.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 12
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "block_activated-7",
+    "at": "2026-09-04T00:00:07.000Z",
+    "type": "block_activated",
+    "payload": {
+      "block_id": "c1-r2",
+      "primary_block_id": "c1-r2",
+      "reserve_id": null,
+      "predecessor_block_id": null,
+      "attempts": [
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c1",
+            "block_id": "c1-r2",
+            "sample_id": "c1-r2-b",
+            "execution_attempt_id": "c1-r2-b-1"
+          },
+          "primary_block_id": "c1-r2",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c1-r2-b-1",
+          "container_name": "c1-r2-b-1",
+          "runtime_spec_digest": "7a6e9bc40a37dd6cf03135a2af7394d2f7301d7bdb6cf610196f9ca0f9752a53",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c1-r2-b-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c1-r2-b-1",
+                "target": "/campaign/attempts/c1-r2-b-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c1-r2-b-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c1-r2-b-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c1-r2-b-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c1-r2-b-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r2-b-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r2-b-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c1-r2-b-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        },
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c1",
+            "block_id": "c1-r2",
+            "sample_id": "c1-r2-t1",
+            "execution_attempt_id": "c1-r2-t1-1"
+          },
+          "primary_block_id": "c1-r2",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c1-r2-t1-1",
+          "container_name": "c1-r2-t1-1",
+          "runtime_spec_digest": "10193123e6e6d1cd7f1c18f5267d22c1c166ed12e3998e7639695239b657067b",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c1-r2-t1-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c1-r2-t1-1",
+                "target": "/campaign/attempts/c1-r2-t1-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c1-r2-t1-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c1-r2-t1-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c1-r2-t1-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c1-r2-t1-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r2-t1-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r2-t1-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c1-r2-t1-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "attempt_observed-8",
+    "at": "2026-09-04T00:00:08.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r2-b-1",
+        "stopped": {
+          "execution_attempt_id": "c1-r2-b-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:08.000Z"
+        },
+        "outcome": "fail",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "attempt_observed-9",
+    "at": "2026-09-04T00:00:09.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r2-t1-1",
+        "stopped": {
+          "execution_attempt_id": "c1-r2-t1-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:09.000Z"
+        },
+        "outcome": "pass",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "block_validated-10",
+    "at": "2026-09-04T00:00:10.000Z",
+    "type": "block_validated",
+    "payload": {
+      "block_id": "c1-r2",
+      "evidence_refs": [
+        {
+          "path": "audit.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 12
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "block_activated-11",
+    "at": "2026-09-04T00:00:11.000Z",
+    "type": "block_activated",
+    "payload": {
+      "block_id": "c1-r3",
+      "primary_block_id": "c1-r3",
+      "reserve_id": null,
+      "predecessor_block_id": null,
+      "attempts": [
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c1",
+            "block_id": "c1-r3",
+            "sample_id": "c1-r3-b",
+            "execution_attempt_id": "c1-r3-b-1"
+          },
+          "primary_block_id": "c1-r3",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c1-r3-b-1",
+          "container_name": "c1-r3-b-1",
+          "runtime_spec_digest": "85c998c15f0e6c5ab981ff1161bdf8bfc04c29ce6b84d6f168f946aa44816793",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c1-r3-b-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c1-r3-b-1",
+                "target": "/campaign/attempts/c1-r3-b-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c1-r3-b-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c1-r3-b-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c1-r3-b-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c1-r3-b-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r3-b-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r3-b-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c1-r3-b-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        },
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c1",
+            "block_id": "c1-r3",
+            "sample_id": "c1-r3-t1",
+            "execution_attempt_id": "c1-r3-t1-1"
+          },
+          "primary_block_id": "c1-r3",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c1-r3-t1-1",
+          "container_name": "c1-r3-t1-1",
+          "runtime_spec_digest": "229e35f74ebe6c77143a3a82b83b9c95db3700d8befb694e36742e483393d696",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c1-r3-t1-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c1-r3-t1-1",
+                "target": "/campaign/attempts/c1-r3-t1-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c1-r3-t1-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c1-r3-t1-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c1-r3-t1-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c1-r3-t1-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r3-t1-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r3-t1-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c1-r3-t1-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "attempt_observed-12",
+    "at": "2026-09-04T00:00:12.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r3-b-1",
+        "stopped": {
+          "execution_attempt_id": "c1-r3-b-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:12.000Z"
+        },
+        "outcome": "pass",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "attempt_observed-13",
+    "at": "2026-09-04T00:00:13.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r3-t1-1",
+        "stopped": {
+          "execution_attempt_id": "c1-r3-t1-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:13.000Z"
+        },
+        "outcome": "indeterminate",
+        "failure_class": "instrument",
+        "cause": "grader_rate_limited",
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "block_replaced-14",
+    "at": "2026-09-04T00:00:14.000Z",
+    "type": "block_replaced",
+    "payload": {
+      "activation": {
+        "block_id": "c1-r3-reserve",
+        "primary_block_id": "c1-r3",
+        "reserve_id": "c1-reserve",
+        "predecessor_block_id": "c1-r3",
+        "attempts": [
+          {
+            "identity": {
+              "campaign_id": "campaign-one",
+              "comparison_id": "c1",
+              "block_id": "c1-r3-reserve",
+              "sample_id": "c1-r3-b",
+              "execution_attempt_id": "c1-r3-b-2"
+            },
+            "primary_block_id": "c1-r3",
+            "attempt_number": 2,
+            "output_root": "/campaign/attempts/c1-r3-b-2",
+            "container_name": "c1-r3-b-2",
+            "runtime_spec_digest": "4bc03679f8b3670986185ebb6e55489d7462ef076c77e344afd813bc315d121b",
+            "runtime_spec": {
+              "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "credential_projection": {
+                "path": "/run/quorum/credentials.yaml",
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "command": "bun",
+              "args": ["run", "quorum"],
+              "cwd": "/campaign/attempts/c1-r3-b-2",
+              "user": {
+                "uid": 1000,
+                "gid": 1000
+              },
+              "mounts": [
+                {
+                  "source": "/campaign/attempts/c1-r3-b-2",
+                  "target": "/campaign/attempts/c1-r3-b-2",
+                  "mode": "rw"
+                }
+              ],
+              "public_env": {
+                "HOME": "/campaign/attempts/c1-r3-b-2/home",
+                "TMPDIR": "/run/quorum/attempt",
+                "TMUX_TMPDIR": "/run/quorum/attempt",
+                "XDG_CONFIG_HOME": "/campaign/attempts/c1-r3-b-2/home/.config",
+                "XDG_CACHE_HOME": "/campaign/attempts/c1-r3-b-2/home/.cache",
+                "XDG_STATE_HOME": "/campaign/attempts/c1-r3-b-2/home/.local/state",
+                "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+                "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+                "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r3-b-2",
+                "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+                "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+                "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r3-b-2/authority.json"
+              },
+              "entrypoint": [],
+              "labels": {
+                "quorum.campaign_id": "campaign-one",
+                "quorum.attempt_id": "c1-r3-b-2",
+                "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+                "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "init": true,
+              "restart": "no",
+              "pid_namespace": "private",
+              "ipc_namespace": "private",
+              "privileged": false,
+              "no_new_privileges": true,
+              "tmpfs_bytes": 1024,
+              "max_time_s": 60,
+              "graceful_shutdown_s": 5
+            }
+          },
+          {
+            "identity": {
+              "campaign_id": "campaign-one",
+              "comparison_id": "c1",
+              "block_id": "c1-r3-reserve",
+              "sample_id": "c1-r3-t1",
+              "execution_attempt_id": "c1-r3-t1-2"
+            },
+            "primary_block_id": "c1-r3",
+            "attempt_number": 2,
+            "output_root": "/campaign/attempts/c1-r3-t1-2",
+            "container_name": "c1-r3-t1-2",
+            "runtime_spec_digest": "9b3ea4c893da6d4eee5112d266e44977b509f2f6e228c08eab12ce283fef4a1f",
+            "runtime_spec": {
+              "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "credential_projection": {
+                "path": "/run/quorum/credentials.yaml",
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+              },
+              "command": "bun",
+              "args": ["run", "quorum"],
+              "cwd": "/campaign/attempts/c1-r3-t1-2",
+              "user": {
+                "uid": 1000,
+                "gid": 1000
+              },
+              "mounts": [
+                {
+                  "source": "/campaign/attempts/c1-r3-t1-2",
+                  "target": "/campaign/attempts/c1-r3-t1-2",
+                  "mode": "rw"
+                }
+              ],
+              "public_env": {
+                "HOME": "/campaign/attempts/c1-r3-t1-2/home",
+                "TMPDIR": "/run/quorum/attempt",
+                "TMUX_TMPDIR": "/run/quorum/attempt",
+                "XDG_CONFIG_HOME": "/campaign/attempts/c1-r3-t1-2/home/.config",
+                "XDG_CACHE_HOME": "/campaign/attempts/c1-r3-t1-2/home/.cache",
+                "XDG_STATE_HOME": "/campaign/attempts/c1-r3-t1-2/home/.local/state",
+                "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+                "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+                "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c1-r3-t1-2",
+                "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+                "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+                "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c1-r3-t1-2/authority.json"
+              },
+              "entrypoint": [],
+              "labels": {
+                "quorum.campaign_id": "campaign-one",
+                "quorum.attempt_id": "c1-r3-t1-2",
+                "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+                "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "init": true,
+              "restart": "no",
+              "pid_namespace": "private",
+              "ipc_namespace": "private",
+              "privileged": false,
+              "no_new_privileges": true,
+              "tmpfs_bytes": 1024,
+              "max_time_s": 60,
+              "graceful_shutdown_s": 5
+            }
+          }
+        ]
+      },
+      "reason": "grader_rate_limited"
+    }
+  },
+  {
+    "transition_id": "attempt_observed-15",
+    "at": "2026-09-04T00:00:15.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r3-b-2",
+        "stopped": {
+          "execution_attempt_id": "c1-r3-b-2",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:15.000Z"
+        },
+        "outcome": "indeterminate",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "attempt_observed-16",
+    "at": "2026-09-04T00:00:16.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c1-r3-t1-2",
+        "stopped": {
+          "execution_attempt_id": "c1-r3-t1-2",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:16.000Z"
+        },
+        "outcome": "pass",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "block_validated-17",
+    "at": "2026-09-04T00:00:17.000Z",
+    "type": "block_validated",
+    "payload": {
+      "block_id": "c1-r3-reserve",
+      "evidence_refs": [
+        {
+          "path": "audit.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 12
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "block_activated-18",
+    "at": "2026-09-04T00:00:18.000Z",
+    "type": "block_activated",
+    "payload": {
+      "block_id": "c2-r1",
+      "primary_block_id": "c2-r1",
+      "reserve_id": null,
+      "predecessor_block_id": null,
+      "attempts": [
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c2",
+            "block_id": "c2-r1",
+            "sample_id": "c2-r1-b",
+            "execution_attempt_id": "c2-r1-b-1"
+          },
+          "primary_block_id": "c2-r1",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c2-r1-b-1",
+          "container_name": "c2-r1-b-1",
+          "runtime_spec_digest": "7e6ad9d8ceb30b2ad80ba526e04f9c12761bceea7df49739898f54a6fb55bab7",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c2-r1-b-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c2-r1-b-1",
+                "target": "/campaign/attempts/c2-r1-b-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c2-r1-b-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c2-r1-b-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c2-r1-b-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c2-r1-b-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c2-r1-b-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c2-r1-b-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c2-r1-b-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        },
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c2",
+            "block_id": "c2-r1",
+            "sample_id": "c2-r1-t2",
+            "execution_attempt_id": "c2-r1-t2-1"
+          },
+          "primary_block_id": "c2-r1",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c2-r1-t2-1",
+          "container_name": "c2-r1-t2-1",
+          "runtime_spec_digest": "2e410545e20ec3a0098ab99832a16028329e980485ba67d330c97cf30f2118de",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c2-r1-t2-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c2-r1-t2-1",
+                "target": "/campaign/attempts/c2-r1-t2-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c2-r1-t2-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c2-r1-t2-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c2-r1-t2-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c2-r1-t2-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c2-r1-t2-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c2-r1-t2-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c2-r1-t2-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "attempt_observed-19",
+    "at": "2026-09-04T00:00:19.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c2-r1-b-1",
+        "stopped": {
+          "execution_attempt_id": "c2-r1-b-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:19.000Z"
+        },
+        "outcome": "pass",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "attempt_observed-20",
+    "at": "2026-09-04T00:00:20.000Z",
+    "type": "attempt_observed",
+    "payload": {
+      "observation": {
+        "execution_attempt_id": "c2-r1-t2-1",
+        "stopped": {
+          "execution_attempt_id": "c2-r1-t2-1",
+          "container_id": null,
+          "proof": "never_created",
+          "observed_at": "2026-09-04T00:00:20.000Z"
+        },
+        "outcome": "fail",
+        "failure_class": "evidence",
+        "cause": null,
+        "artifacts": [
+          {
+            "path": "audit.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bytes": 12
+          }
+        ],
+        "evidence_missing": null,
+        "validity": "valid"
+      },
+      "excluded_block": null
+    }
+  },
+  {
+    "transition_id": "block_validated-21",
+    "at": "2026-09-04T00:00:21.000Z",
+    "type": "block_validated",
+    "payload": {
+      "block_id": "c2-r1",
+      "evidence_refs": [
+        {
+          "path": "audit.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 12
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "block_activated-22",
+    "at": "2026-09-04T00:00:22.000Z",
+    "type": "block_activated",
+    "payload": {
+      "block_id": "c2-r2",
+      "primary_block_id": "c2-r2",
+      "reserve_id": null,
+      "predecessor_block_id": null,
+      "attempts": [
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c2",
+            "block_id": "c2-r2",
+            "sample_id": "c2-r2-b",
+            "execution_attempt_id": "c2-r2-b-1"
+          },
+          "primary_block_id": "c2-r2",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c2-r2-b-1",
+          "container_name": "c2-r2-b-1",
+          "runtime_spec_digest": "bd7138919d440c87e8d8b77aaf654f2c47933d7c74cd074b009227c3b0d0378e",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c2-r2-b-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c2-r2-b-1",
+                "target": "/campaign/attempts/c2-r2-b-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c2-r2-b-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c2-r2-b-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c2-r2-b-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c2-r2-b-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c2-r2-b-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c2-r2-b-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c2-r2-b-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        },
+        {
+          "identity": {
+            "campaign_id": "campaign-one",
+            "comparison_id": "c2",
+            "block_id": "c2-r2",
+            "sample_id": "c2-r2-t2",
+            "execution_attempt_id": "c2-r2-t2-1"
+          },
+          "primary_block_id": "c2-r2",
+          "attempt_number": 1,
+          "output_root": "/campaign/attempts/c2-r2-t2-1",
+          "container_name": "c2-r2-t2-1",
+          "runtime_spec_digest": "00c2d82034f3d998ddc7bde4c06b2611fbbbef040fdc7551ac51b3cbba32f401",
+          "runtime_spec": {
+            "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "credential_projection": {
+              "path": "/run/quorum/credentials.yaml",
+              "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            },
+            "command": "bun",
+            "args": ["run", "quorum"],
+            "cwd": "/campaign/attempts/c2-r2-t2-1",
+            "user": {
+              "uid": 1000,
+              "gid": 1000
+            },
+            "mounts": [
+              {
+                "source": "/campaign/attempts/c2-r2-t2-1",
+                "target": "/campaign/attempts/c2-r2-t2-1",
+                "mode": "rw"
+              }
+            ],
+            "public_env": {
+              "HOME": "/campaign/attempts/c2-r2-t2-1/home",
+              "TMPDIR": "/run/quorum/attempt",
+              "TMUX_TMPDIR": "/run/quorum/attempt",
+              "XDG_CONFIG_HOME": "/campaign/attempts/c2-r2-t2-1/home/.config",
+              "XDG_CACHE_HOME": "/campaign/attempts/c2-r2-t2-1/home/.cache",
+              "XDG_STATE_HOME": "/campaign/attempts/c2-r2-t2-1/home/.local/state",
+              "QUORUM_COVERED_BY_LIVE_SPEND_LOCK": "1",
+              "QUORUM_GRADER_SOURCE_MODE": "appliance-scoped",
+              "QUORUM_ATTEMPT_DIR": "/campaign/attempts/c2-r2-t2-1",
+              "QUORUM_SUBJECT_FILE": "/run/quorum/subject.env",
+              "QUORUM_GRADER_FILE": "/run/quorum/grader.env",
+              "QUORUM_ATTEMPT_AUTHORITY_FILE": "/campaign/attempts/c2-r2-t2-1/authority.json"
+            },
+            "entrypoint": [],
+            "labels": {
+              "quorum.campaign_id": "campaign-one",
+              "quorum.attempt_id": "c2-r2-t2-1",
+              "quorum.evals_sha": "dddddddddddddddddddddddddddddddddddddddd",
+              "quorum.image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "init": true,
+            "restart": "no",
+            "pid_namespace": "private",
+            "ipc_namespace": "private",
+            "privileged": false,
+            "no_new_privileges": true,
+            "tmpfs_bytes": 1024,
+            "max_time_s": 60,
+            "graceful_shutdown_s": 5
+          }
+        }
+      ]
+    }
+  },
+  {
+    "transition_id": "accounting_observed-23",
+    "at": "2026-09-04T00:00:23.000Z",
+    "type": "accounting_observed",
+    "payload": {
+      "execution_attempt_id": "c2-r2-b-1",
+      "stopped": {
+        "execution_attempt_id": "c2-r2-b-1",
+        "container_id": null,
+        "proof": "never_created",
+        "observed_at": "2026-09-04T00:00:23.000Z"
+      },
+      "artifacts": [
+        {
+          "path": "audit.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 12
+        }
+      ],
+      "evidence_missing": null
+    }
+  },
+  {
+    "transition_id": "accounting_observed-24",
+    "at": "2026-09-04T00:00:24.000Z",
+    "type": "accounting_observed",
+    "payload": {
+      "execution_attempt_id": "c2-r2-t2-1",
+      "stopped": {
+        "execution_attempt_id": "c2-r2-t2-1",
+        "container_id": null,
+        "proof": "never_created",
+        "observed_at": "2026-09-04T00:00:24.000Z"
+      },
+      "artifacts": [
+        {
+          "path": "audit.json",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 12
+        }
+      ],
+      "evidence_missing": null
+    }
+  },
+  {
+    "transition_id": "ended-25",
+    "at": "2026-09-04T00:00:25.000Z",
+    "type": "ended",
+    "payload": {
+      "outcome": "interrupted",
+      "reason": "fixture interruption",
+      "cancel_intent": null
+    }
+  }
+]

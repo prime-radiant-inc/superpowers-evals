@@ -174,6 +174,13 @@ function read(campaignDir: string) {
     db.close();
   }
 }
+/** Projection and anchor from one authenticated SQLite prefix read. */
+export function readCommittedPrefix(campaignDir: string): {
+  projection: CampaignProjection;
+  committed: CommittedTransition[];
+} {
+  return read(campaignDir);
+}
 export function readProjection(campaignDir: string): CampaignProjection {
   return read(campaignDir).projection;
 }

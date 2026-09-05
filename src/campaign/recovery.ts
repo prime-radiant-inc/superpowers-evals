@@ -37,6 +37,17 @@ import type { Credential } from '../contracts/credential.ts';
 import type { RunErrorStage } from '../contracts/verdict.ts';
 import { getEnv } from '../env.ts';
 import { type Clock, RealClock } from '../scheduler/clock.ts';
+import {
+  canonicalReportBytes,
+  comparePresentReportArtifacts,
+  digestReportBytes,
+  foldDescriptiveReport,
+  publishReport,
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
+} from './budgeted-report.ts';
+import { readSampleEvidence } from './budgeted-report-evidence.ts';
+import { runTerminusSeal } from './budgeted-seal.ts';
 import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from './campaign-document.ts';
 import { classifyFailure } from './classifier.ts';
 import type { ContainerStopper } from './container-spawner.ts';
@@ -93,18 +104,7 @@ import {
   readLiveSpendHolder,
   realProcessIdentityProbe,
 } from './locks.ts';
-import {
-  canonicalReportBytes,
-  comparePresentReportArtifacts,
-  digestReportBytes,
-  foldDescriptiveReport,
-  publishReport,
-  REPORT_JSON_NAME,
-  REPORT_MD_NAME,
-} from './report.ts';
-import { readSampleEvidence } from './report-evidence.ts';
 import { resolveCampaignResultsRoot } from './results-root.ts';
-import { runTerminusSeal } from './seal.ts';
 import {
   decideExposureAtTerminal,
   gauntletEventStreamTexts,

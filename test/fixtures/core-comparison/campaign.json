@@ -1,0 +1,246 @@
+{
+  "schema_version": 2,
+  "campaign_id": "campaign-one",
+  "input_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "suite": {
+    "schema_version": 2,
+    "name": "comparison",
+    "comparisons": [
+      {
+        "baseline": "b",
+        "treatment": "t1",
+        "scenarios": ["scenario"],
+        "n": 4
+      },
+      {
+        "baseline": "b",
+        "treatment": "t2",
+        "scenarios": ["scenario"],
+        "n": 2
+      }
+    ],
+    "reserve": 1,
+    "max_exposure_skew": 2,
+    "attempt_bounds": {
+      "max_attempts": 2,
+      "max_time_s": 60
+    }
+  },
+  "refs": {
+    "superpowers_by_arm": {
+      "b": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "t1": "cccccccccccccccccccccccccccccccccccccccc",
+      "t2": "cccccccccccccccccccccccccccccccccccccccc"
+    },
+    "evals": "dddddddddddddddddddddddddddddddddddddddd",
+    "gauntlet": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "grader": {
+    "credential": "grader",
+    "model": "model"
+  },
+  "cells": [
+    {
+      "scenario": "scenario",
+      "comparison_id": "c1",
+      "arms": ["b", "t1"],
+      "n": 4,
+      "coupling": "arm-independent"
+    },
+    {
+      "scenario": "scenario",
+      "comparison_id": "c2",
+      "arms": ["b", "t2"],
+      "n": 2,
+      "coupling": "arm-independent"
+    }
+  ],
+  "excluded_cells": [],
+  "comparisons": [
+    {
+      "comparison_id": "c1",
+      "baseline": "b",
+      "treatment": "t1"
+    },
+    {
+      "comparison_id": "c2",
+      "baseline": "b",
+      "treatment": "t2"
+    }
+  ],
+  "planned_slots": [
+    {
+      "sample_id": "c1-r1-b",
+      "primary_block_id": "c1-r1",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "b",
+      "replicate": 1
+    },
+    {
+      "sample_id": "c1-r1-t1",
+      "primary_block_id": "c1-r1",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "t1",
+      "replicate": 1
+    },
+    {
+      "sample_id": "c1-r2-b",
+      "primary_block_id": "c1-r2",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "b",
+      "replicate": 2
+    },
+    {
+      "sample_id": "c1-r2-t1",
+      "primary_block_id": "c1-r2",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "t1",
+      "replicate": 2
+    },
+    {
+      "sample_id": "c1-r3-b",
+      "primary_block_id": "c1-r3",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "b",
+      "replicate": 3
+    },
+    {
+      "sample_id": "c1-r3-t1",
+      "primary_block_id": "c1-r3",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "t1",
+      "replicate": 3
+    },
+    {
+      "sample_id": "c1-r4-b",
+      "primary_block_id": "c1-r4",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "b",
+      "replicate": 4
+    },
+    {
+      "sample_id": "c1-r4-t1",
+      "primary_block_id": "c1-r4",
+      "comparison_id": "c1",
+      "scenario": "scenario",
+      "arm": "t1",
+      "replicate": 4
+    },
+    {
+      "sample_id": "c2-r1-b",
+      "primary_block_id": "c2-r1",
+      "comparison_id": "c2",
+      "scenario": "scenario",
+      "arm": "b",
+      "replicate": 1
+    },
+    {
+      "sample_id": "c2-r1-t2",
+      "primary_block_id": "c2-r1",
+      "comparison_id": "c2",
+      "scenario": "scenario",
+      "arm": "t2",
+      "replicate": 1
+    },
+    {
+      "sample_id": "c2-r2-b",
+      "primary_block_id": "c2-r2",
+      "comparison_id": "c2",
+      "scenario": "scenario",
+      "arm": "b",
+      "replicate": 2
+    },
+    {
+      "sample_id": "c2-r2-t2",
+      "primary_block_id": "c2-r2",
+      "comparison_id": "c2",
+      "scenario": "scenario",
+      "arm": "t2",
+      "replicate": 2
+    }
+  ],
+  "reserve_slots": [
+    {
+      "reserve_id": "c1-reserve",
+      "comparison_id": "c1",
+      "scenario": "scenario"
+    },
+    {
+      "reserve_id": "c2-reserve",
+      "comparison_id": "c2",
+      "scenario": "scenario"
+    }
+  ],
+  "execution_surface": [
+    {
+      "name": "b",
+      "agent": "claude",
+      "credential": "subject",
+      "auth": "api-key",
+      "api": "anthropic",
+      "model": "model",
+      "key_env_names": ["ANTHROPIC_API_KEY"]
+    },
+    {
+      "name": "t1",
+      "agent": "claude",
+      "credential": "subject",
+      "auth": "api-key",
+      "api": "anthropic",
+      "model": "model",
+      "key_env_names": ["ANTHROPIC_API_KEY"]
+    },
+    {
+      "name": "t2",
+      "agent": "claude",
+      "credential": "subject",
+      "auth": "api-key",
+      "api": "anthropic",
+      "model": "model",
+      "key_env_names": ["ANTHROPIC_API_KEY"]
+    }
+  ],
+  "credential_authority_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "pool_policy": [
+    {
+      "pool_id": "subject",
+      "max_concurrency": 2,
+      "launch_spacing_seconds": 0
+    }
+  ],
+  "contention": {
+    "host_fingerprint": {
+      "cpu_model": "fixture",
+      "cpu_cores": 4,
+      "mem_bytes": 4096,
+      "disk_total_bytes": 8192
+    },
+    "global_run_cap": 2,
+    "thresholds": [
+      {
+        "metric": "load",
+        "source": "host",
+        "op": "gt",
+        "value": 3
+      }
+    ],
+    "cadence_ms": 100,
+    "sustain_k": 2,
+    "coverage_n": 2,
+    "mem_tolerance_pct": 10,
+    "disk_tolerance_pct": 10
+  },
+  "runtime_limits": {
+    "max_time_s": 60,
+    "graceful_shutdown_s": 5
+  },
+  "registered_at": "2026-09-04T00:00:00.000Z",
+  "registered_by": "fixture"
+}

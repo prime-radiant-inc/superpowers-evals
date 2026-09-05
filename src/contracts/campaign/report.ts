@@ -1,165 +1,209 @@
-// src/contracts/campaign/report.ts
 import { z } from 'zod';
+import { TokenUsageSchema } from '../economics.ts';
 import { FiniteNumberSchema } from '../finite.ts';
-import { CELL_CLASSES } from './suite.ts';
+import {
+  CheckRecordSchema,
+  FinalVerdictSchema,
+  GauntletLayerSchema,
+} from '../verdict.ts';
+import { ArtifactRefSchema } from './execution.ts';
+import { Sha256Schema } from './experiment.ts';
 
-export const REPORT_VERDICTS = [
-  'SHIP',
-  'NO_SHIP',
-  'UNDERPOWERED_OR_INVESTIGATE',
-] as const;
-
-/** Byte-stability contract (parent Report engine): shortest round-trip
- *  doubles, sorted keys, LF line endings. D4's renderer is tested against
- *  these constants. */
-export const REPORT_RENDERING = {
-  line_ending: '\n',
-  key_order: 'sorted',
-  numbers: 'shortest-round-trip',
-} as const;
-
-const IntegrityEntrySchema = z
+const Count = z.number().int().nonnegative();
+const Quantity = FiniteNumberSchema.nonnegative().nullable();
+const Outcome = z.enum(['pass', 'fail', 'indeterminate']).nullable();
+export const AttemptEvidenceSchema = z
   .object({
-    block_id: z.string().min(1),
-    rationale: z.string().min(1),
+    publication_valid: z.boolean(),
+    observed_outcome: Outcome,
+    gauntlet: GauntletLayerSchema.nullable(),
+    checks: z.array(CheckRecordSchema).nullable(),
+    wall_seconds: Quantity,
+    subject_cost_usd: Quantity,
+    subject_cost_complete: z.boolean(),
+    grader_cost_usd: Quantity,
+    grader_cost_complete: z.boolean(),
+    subject_tokens: Quantity,
+    grader_tokens: Quantity,
+    subject_usage: TokenUsageSchema.nullable(),
+    versions: FinalVerdictSchema.shape.provenance.unwrap().nullable(),
+    missingness: z.array(
+      z.object({ field: z.string(), reason: z.string() }).strict(),
+    ),
+    artifacts: z.array(ArtifactRefSchema),
   })
   .strict();
-
-/** Decision D-8 amendment (D4a spec:
- * docs/superpowers/specs/2026-08-31-kernel-d4a-descriptive-readout-design.md):
- * cells carry pass/fail counts and coverage, comparisons carry medians,
- * accounting carries the contention dispositions, provenance carries
- * failed_cells, and grader.observed is optional. Additive only — no
- * existing field changed; REPORT_RENDERING is unchanged. */
-
-export const ReportSchema = z
+export type AttemptEvidence = z.infer<typeof AttemptEvidenceSchema>;
+export const PairedQuantitySchema = z
   .object({
-    schema_version: z.literal(1),
+    n: Count,
+    baseline_mean: FiniteNumberSchema.nullable(),
+    treatment_mean: FiniteNumberSchema.nullable(),
+    mean_delta: FiniteNumberSchema.nullable(),
+  })
+  .strict()
+  .refine(
+    (q) =>
+      q.n === 0
+        ? q.baseline_mean === null &&
+          q.treatment_mean === null &&
+          q.mean_delta === null
+        : q.baseline_mean !== null &&
+          q.treatment_mean !== null &&
+          q.mean_delta !== null,
+    'empty cohorts require null means',
+  );
+export const AccountingQuantitySchema = z
+  .object({
+    known_subtotal: FiniteNumberSchema.nonnegative(),
+    observed: Count,
+    attempts: Count,
+    complete: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (q) =>
+      q.observed <= q.attempts && q.complete === (q.observed === q.attempts),
+    'coverage must match counts',
+  );
+const quantities = {
+  subject_cost_usd: AccountingQuantitySchema,
+  grader_cost_usd: AccountingQuantitySchema,
+  combined_cost_usd: AccountingQuantitySchema,
+  wall_seconds: AccountingQuantitySchema,
+  subject_tokens: AccountingQuantitySchema,
+  grader_tokens: AccountingQuantitySchema,
+};
+export const AccountingSchema = z.object(quantities).strict();
+export const ComparisonReportSchema = z
+  .object({
+    schema_version: z.literal('quorum.comparison-report/v1'),
+    fold_version: z.literal(1),
     campaign_id: z.string().min(1),
-    profile: z.enum(['release_gate_v1', 'descriptive_v1']),
-    stamp: z.literal('DESCRIPTIVE').optional(),
-    verdict: z.enum(REPORT_VERDICTS).optional(),
-    cannot_answer: z.array(
-      z
-        .object({ cell: z.string().min(1), mde: FiniteNumberSchema.positive() })
-        .strict(),
-    ),
+    input_digest: Sha256Schema,
+    status: z.enum(['active', 'completed', 'cancelled', 'interrupted']),
+    behavior_available: z.boolean(),
+    complete: z.boolean(),
+    termination_verified: z.boolean(),
     comparisons: z.array(
       z
         .object({
-          comparison_id: z.string().min(1),
-          cells: z.array(
+          comparison_id: z.string(),
+          scenario: z.string(),
+          arms: z.array(
             z
               .object({
-                scenario: z.string().min(1),
-                class: z.enum(CELL_CLASSES),
-                n: z.number().int().nonnegative(),
-                delta: FiniteNumberSchema.optional(),
-                fisher_p: FiniteNumberSchema.min(0).max(1).optional(),
-                mde: FiniteNumberSchema.positive().optional(),
-                pass: z.number().int().nonnegative(),
-                fail: z.number().int().nonnegative(),
-                coverage: FiniteNumberSchema.min(0).max(1),
+                arm: z.string(),
+                denominator: Count,
+                pass: Count,
+                fail: Count,
+                indeterminate: Count,
+                no_usable_result: Count,
+                available: z
+                  .object({
+                    subject_cost_usd: Count,
+                    grader_cost_usd: Count,
+                    wall_seconds: Count,
+                    subject_tokens: Count,
+                    grader_tokens: Count,
+                  })
+                  .strict(),
               })
-              .strict(),
+              .strict()
+              .refine(
+                (a) =>
+                  a.pass + a.fail + a.indeterminate + a.no_usable_result ===
+                  a.denominator,
+                'outcome counts must preserve planned denominator',
+              ),
           ),
-          medians: z
+          paired: z
             .object({
-              tokens: FiniteNumberSchema.optional(),
-              usd: FiniteNumberSchema.optional(),
+              pass_rate: PairedQuantitySchema,
+              subject_cost_usd: PairedQuantitySchema,
+              grader_cost_usd: PairedQuantitySchema,
+              wall_seconds: PairedQuantitySchema,
+              subject_tokens: PairedQuantitySchema,
+              grader_tokens: PairedQuantitySchema,
             })
             .strict(),
         })
         .strict(),
     ),
-    accounting: z
+    accounting: AccountingSchema,
+    excluded_accounting: z
       .object({
-        instrument_errors: z.number().int().nonnegative(),
-        indeterminates: z.number().int().nonnegative(),
-        replacements: z.number().int().nonnegative(),
-        reserve_draws: z.number().int().nonnegative(),
-        skew_exclusions: z.number().int().nonnegative(),
-        skew_caveats: z.number().int().nonnegative(),
-        budget_events: z.number().int().nonnegative(),
-        amendments: z.number().int().nonnegative(),
-        contention_invalidated: z.number().int().nonnegative(),
-        unknown_coverage: z.number().int().nonnegative(),
-        integrity_findings: z.number().int().nonnegative(),
-        integrity_caveats: z.number().int().nonnegative(),
-        denominators: z.record(z.string(), z.number().int().nonnegative()),
+        superseded: AccountingSchema,
+        unaccepted: AccountingSchema,
+        analytically_unusable: AccountingSchema,
       })
       .strict(),
-    provenance: z
-      .object({
-        arms: z.array(
-          z
-            .object({
-              arm: z.string().min(1),
-              registered_model: z.string().min(1),
-              observed_model_set: z.array(z.string().min(1)),
-            })
-            .strict(),
-        ),
-        grader: z
-          .object({
-            credential: z.string().min(1),
-            model: z.string().min(1),
-            observed: z.string().min(1).optional(),
-          })
-          .strict(),
-        failed_cells: z.array(
-          z
-            .object({
-              comparison_id: z.string().min(1),
-              scenario: z.string().min(1),
-              reason: z.string().min(1),
-            })
-            .strict(),
-        ),
-      })
-      .strict(),
-    supersedes: z.string().min(1).optional(),
-    integrity: z
-      .object({
-        findings: z.array(IntegrityEntrySchema),
-        caveats: z.array(IntegrityEntrySchema),
-      })
-      .strict(),
-    errata: z.array(z.object({ note: z.string().min(1) }).strict()),
+    attempts: z.array(
+      z
+        .object({
+          execution_attempt_id: z.string(),
+          sample_id: z.string(),
+          block_id: z.string(),
+          primary_block_id: z.string(),
+          comparison_id: z.string(),
+          arm: z.string(),
+          selected: z.boolean(),
+          accepted_outcome: Outcome,
+          analysis_usable: z.boolean(),
+          reasons: z.array(z.string()),
+          evidence: AttemptEvidenceSchema,
+        })
+        .strict(),
+    ),
+    caveats: z.array(z.string()),
   })
   .strict()
-  .superRefine((report, ctx) => {
-    if (report.profile === 'release_gate_v1') {
-      if (report.stamp !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['stamp'],
-          message:
-            'stamps are descriptive-only; gating reports carry a verdict',
-        });
-      }
-      if (report.verdict === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['verdict'],
-          message: 'gating reports require a verdict',
-        });
-      }
-    } else {
-      if (report.verdict !== undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['verdict'],
-          message: 'descriptive reports have no verdict slot',
-        });
-      }
-      if (report.stamp === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['stamp'],
-          message: 'descriptive reports are stamped DESCRIPTIVE',
-        });
-      }
-    }
+  .superRefine((r, ctx) => {
+    if (
+      !r.behavior_available &&
+      (r.comparisons.length ||
+        r.attempts.some(
+          (a) =>
+            a.accepted_outcome !== null ||
+            a.evidence.observed_outcome !== null ||
+            a.evidence.gauntlet !== null ||
+            a.evidence.checks !== null,
+        ))
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'active report must hide behavior',
+      });
+    if (r.complete && r.status !== 'completed')
+      ctx.addIssue({
+        code: 'custom',
+        message: 'incomplete lifecycle cannot be complete',
+      });
   });
+export type ComparisonReport = z.infer<typeof ComparisonReportSchema>;
+export const ReportAnchorSchema = z
+  .object({
+    campaign_id: z.string().min(1),
+    input_digest: Sha256Schema,
+    last_sequence: Count,
+    prefix_digest: Sha256Schema,
+    roots: z
+      .object({ campaign: z.string().min(1), results: z.string().min(1) })
+      .strict(),
+    artifacts: z.array(
+      ArtifactRefSchema.extend({
+        root: z.enum(['results', 'campaign']),
+      }).strict(),
+    ),
+  })
+  .strict();
+export const ReportSchema = z
+  .object({ report: ComparisonReportSchema, anchor: ReportAnchorSchema })
+  .strict()
+  .refine(
+    (r) =>
+      r.report.campaign_id === r.anchor.campaign_id &&
+      r.report.input_digest === r.anchor.input_digest,
+    'report anchor identity mismatch',
+  );
 export type Report = z.infer<typeof ReportSchema>;

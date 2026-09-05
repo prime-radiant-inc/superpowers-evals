@@ -38,13 +38,13 @@ import { cpus, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { ATIF_SCHEMA_VERSION, type AtifTrajectory } from '../src/atif/types.ts';
 import { validateTrajectory } from '../src/atif/validate.ts';
+import { REPORT_JSON_NAME } from '../src/campaign/budgeted-report.ts';
+import { runTerminusSeal } from '../src/campaign/budgeted-seal.ts';
 import {
   type ContainerStopper,
   containerNameForAttempt,
 } from '../src/campaign/container-spawner.ts';
 import { electWriter } from '../src/campaign/journal.ts';
-import { REPORT_JSON_NAME } from '../src/campaign/report.ts';
-import { runTerminusSeal } from '../src/campaign/seal.ts';
 import type {
   CampaignChildSpec,
   ChildExitInfo,

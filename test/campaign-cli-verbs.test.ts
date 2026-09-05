@@ -24,19 +24,19 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import {
-  electWriter,
-  initJournalDb,
-  openJournalRead,
-} from '../src/campaign/journal.ts';
-import {
   canonicalReportBytes,
   digestReportBytes,
   foldDescriptiveReport,
   REPORT_JSON_NAME,
   REPORT_MD_NAME,
   renderReportMd,
-} from '../src/campaign/report.ts';
-import { readSampleEvidence } from '../src/campaign/report-evidence.ts';
+} from '../src/campaign/budgeted-report.ts';
+import { readSampleEvidence } from '../src/campaign/budgeted-report-evidence.ts';
+import {
+  electWriter,
+  initJournalDb,
+  openJournalRead,
+} from '../src/campaign/journal.ts';
 import {
   campaignCancel,
   campaignRegister,

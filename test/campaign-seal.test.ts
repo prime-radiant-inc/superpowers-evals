@@ -21,6 +21,22 @@ import type {
   CommandRunner,
 } from '../src/agents/command-runner.ts';
 import {
+  canonicalReportBytes,
+  digestReportBytes,
+  foldDescriptiveReport,
+  REPORT_JSON_NAME,
+  REPORT_MD_NAME,
+  renderReportMd,
+} from '../src/campaign/budgeted-report.ts';
+import { readSampleEvidence } from '../src/campaign/budgeted-report-evidence.ts';
+import {
+  runTerminusSeal,
+  SealError,
+  type SealerWriter,
+  type TerminusBoundary,
+  type TerminusResult,
+} from '../src/campaign/budgeted-seal.ts';
+import {
   SIDECAR_FILENAME,
   type SidecarLine,
 } from '../src/campaign/contention.ts';
@@ -33,22 +49,6 @@ import {
   replayEvents,
 } from '../src/campaign/journal.ts';
 import { universeOf } from '../src/campaign/recovery.ts';
-import {
-  canonicalReportBytes,
-  digestReportBytes,
-  foldDescriptiveReport,
-  REPORT_JSON_NAME,
-  REPORT_MD_NAME,
-  renderReportMd,
-} from '../src/campaign/report.ts';
-import { readSampleEvidence } from '../src/campaign/report-evidence.ts';
-import {
-  runTerminusSeal,
-  SealError,
-  type SealerWriter,
-  type TerminusBoundary,
-  type TerminusResult,
-} from '../src/campaign/seal.ts';
 import type { Campaign } from '../src/contracts/campaign/campaign.ts';
 import type {
   JournalEvent,

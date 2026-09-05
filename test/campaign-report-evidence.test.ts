@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readSampleEvidence } from '../src/campaign/report-evidence.ts';
+import { readSampleEvidence } from '../src/campaign/budgeted-report-evidence.ts';
 import { FinalVerdictSchema } from '../src/contracts/verdict.ts';
 
 function runDir(files: Record<string, unknown>): string {

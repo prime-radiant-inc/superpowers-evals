@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import {
   REPORT_RENDERING,
   ReportSchema,
-} from '../src/contracts/campaign/report.ts';
+} from '../src/contracts/campaign/budgeted-report.ts';
 
 function gatingReport(overrides: Record<string, unknown> = {}) {
   return {

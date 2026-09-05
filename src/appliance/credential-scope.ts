@@ -487,12 +487,12 @@ export function pinAbsoluteDir(absPath: string, label: string): PinnedDir {
 // intermediate is opened no-follow relative to its pinned parent, so a
 // component swapped after validation cannot redirect the read. `required:
 // false` treats any missing component as absence.
-function readRelativeNoFollow(
+function readRelativeNoFollowBytes(
   base: PinnedDir,
   parts: readonly string[],
   label: string,
   required: boolean,
-): string | null {
+): Buffer | null {
   for (const part of parts) {
     assertSafeComponent(part, label);
   }
@@ -530,7 +530,7 @@ function readRelativeNoFollow(
       return null;
     }
     try {
-      return readFileSync(fd, 'utf8');
+      return readFileSync(fd);
     } catch (error) {
       throw scopeError(
         `${label} could not be read (${(error as NodeJS.ErrnoException).code ?? 'unknown error'})`,
@@ -553,18 +553,43 @@ function readRelativeNoFollow(
  * shared byte-read seam for credential metadata and scoped-container payload
  * binding; it does not expose a general material-writing interface.
  */
+export function readPinnedNoFollowBytes(
+  anchorDir: string,
+  parts: readonly string[],
+  label: string,
+  required: boolean,
+): Buffer | null {
+  const anchor = pinAbsoluteDir(anchorDir, label);
+  try {
+    return readRelativeNoFollowBytes(anchor, parts, label, required);
+  } finally {
+    closePin(anchor);
+  }
+}
+
 export function readPinnedNoFollowFile(
   anchorDir: string,
   parts: readonly string[],
   label: string,
   required: boolean,
 ): string | null {
-  const anchor = pinAbsoluteDir(anchorDir, label);
-  try {
-    return readRelativeNoFollow(anchor, parts, label, required);
-  } finally {
-    closePin(anchor);
-  }
+  return (
+    readPinnedNoFollowBytes(anchorDir, parts, label, required)?.toString(
+      'utf8',
+    ) ?? null
+  );
+}
+function readRelativeNoFollow(
+  anchor: PinnedDir,
+  parts: readonly string[],
+  label: string,
+  required: boolean,
+): string | null {
+  return (
+    readRelativeNoFollowBytes(anchor, parts, label, required)?.toString(
+      'utf8',
+    ) ?? null
+  );
 }
 
 function readBundleSource(
