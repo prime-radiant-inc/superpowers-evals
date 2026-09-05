@@ -836,6 +836,54 @@ test('web_search_call with url action type', () => {
   expect(tc.arguments['url']).toBe('https://react.dev');
 });
 
+// tool_search_call / tool_search_output (Codex native tool discovery)
+const toolSearchCallLine = JSON.stringify({
+  timestamp: '2026-06-14T07:23:39.000Z',
+  type: 'response_item',
+  payload: {
+    type: 'tool_search_call',
+    call_id: 'call_toolsearch1',
+    status: 'completed',
+    execution: 'client',
+    arguments: { query: 'spawn sub-agent delegate', limit: 8 },
+  },
+});
+const toolSearchOutputLine = JSON.stringify({
+  timestamp: '2026-06-14T07:23:40.000Z',
+  type: 'response_item',
+  payload: {
+    type: 'tool_search_output',
+    call_id: 'call_toolsearch1',
+    status: 'completed',
+    tools: [{ name: 'spawn_agent' }],
+  },
+});
+
+test('tool_search_call payload becomes a ToolSearch tool-call step keyed by call_id', () => {
+  const traj = normalizeCodex(toolSearchCallLine, '1.0.0');
+  const step = traj.steps.find((s) => s.tool_calls?.length);
+  expect(step).toBeDefined();
+  const tc = step!.tool_calls![0]!;
+  expect(tc.function_name).toBe('ToolSearch');
+  expect(tc.tool_call_id).toBe('call_toolsearch1');
+  expect(tc.arguments['query']).toBe('spawn sub-agent delegate');
+  expect(tc.arguments['limit']).toBe(8);
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
+
+test('tool_search_output attaches to its tool_search_call as an observation', () => {
+  const traj = normalizeCodex(
+    [toolSearchCallLine, toolSearchOutputLine].join('\n'),
+    '1.0.0',
+  );
+  expect(traj.steps).toHaveLength(1);
+  const step = traj.steps[0]!;
+  expect(step.observation?.results).toHaveLength(1);
+  expect(step.observation!.results[0]!.source_call_id).toBe('call_toolsearch1');
+  expect(step.observation!.results[0]!.content).toContain('spawn_agent');
+  expect(validateTrajectory(traj).ok).toBe(true);
+});
+
 test('full trajectory with all new features validates against ATIF schema', () => {
   const raw = [
     sessionMetaLine,

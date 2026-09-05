@@ -155,6 +155,19 @@ interface CodexWebSearchCallPayload {
   status?: string;
 }
 
+interface CodexToolSearchCallPayload {
+  type: 'tool_search_call';
+  call_id?: string;
+  arguments?: string | Record<string, unknown>;
+  status?: string;
+}
+
+interface CodexToolSearchOutputPayload {
+  type: 'tool_search_output';
+  call_id?: string;
+  tools?: unknown;
+}
+
 interface CodexFunctionCallOutputPayload {
   type: 'function_call_output';
   call_id?: string;
@@ -176,8 +189,10 @@ type CodexPayload =
   | CodexMessagePayload
   | CodexReasoningPayload
   | CodexWebSearchCallPayload
+  | CodexToolSearchCallPayload
   | CodexFunctionCallOutputPayload
   | CodexCustomToolCallOutputPayload
+  | CodexToolSearchOutputPayload
   | { type: string };
 
 function parseArgs(
@@ -521,6 +536,19 @@ function normalizeToolCallPayload(
     ];
   }
 
+  // Codex's native tool-discovery call. It carries a call_id, so its
+  // tool_search_output pairs onto it like a function_call_output.
+  if (payload.type === 'tool_search_call') {
+    const p = payload as CodexToolSearchCallPayload;
+    return [
+      {
+        tool_call_id: p.call_id ?? '',
+        function_name: 'ToolSearch',
+        arguments: parseArgs(p.arguments),
+      },
+    ];
+  }
+
   return null;
 }
 
@@ -537,12 +565,15 @@ function normalizeToolCallPayload(
  *   {"type": "response_item", "payload": {"type": "custom_tool_call_output", ...}}
  *   {"type": "response_item", "payload": {"type": "local_shell_call", ...}}
  *   {"type": "response_item", "payload": {"type": "web_search_call", ...}}
+ *   {"type": "response_item", "payload": {"type": "tool_search_call", "call_id": ..., "arguments": ...}}
+ *   {"type": "response_item", "payload": {"type": "tool_search_output", "call_id": ..., "tools": ...}}
  *
  * Full-fidelity features:
  *   - message events → user/agent/system steps
  *   - reasoning events → reasoning_content carried onto the next step
  *   - function_call_output / custom_tool_call_output → observation paired by call_id
  *   - web_search_call → tool-call step with function_name "web_search_call"
+ *   - tool_search_call → tool-call step with function_name "ToolSearch"; tool_search_output pairs by call_id
  *   - session_meta → session_id, agent.version, agent.extra (cwd/git/originator/instructions)
  */
 export function normalizeCodex(raw: string, version: string): AtifTrajectory {
@@ -705,11 +736,16 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
     // ── function_call_output / custom_tool_call_output: attach to pending call ─
     if (
       payload.type === 'function_call_output' ||
-      payload.type === 'custom_tool_call_output'
+      payload.type === 'custom_tool_call_output' ||
+      payload.type === 'tool_search_output'
     ) {
-      const p = payload as CodexFunctionCallOutputPayload;
+      const p = payload as
+        | CodexFunctionCallOutputPayload
+        | CodexToolSearchOutputPayload;
       const callId = p.call_id;
-      const outputText = parseOutputBlob(p.output);
+      const outputText = parseOutputBlob(
+        p.type === 'tool_search_output' ? p.tools : p.output,
+      );
 
       // Build the observation result; only set optional fields when they have a value
       // (exactOptionalPropertyTypes forbids assigning undefined to optional string props).

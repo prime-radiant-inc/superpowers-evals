@@ -548,6 +548,23 @@ test('ID-less native tools get distinct usable observer IDs', () => {
   expect(new Set(calls.map((call) => call.tool_call_id)).size).toBe(2);
 });
 
+test('tool_search_call is indexed as a call instead of aborting the audit', () => {
+  const raw = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'tool_search_call',
+      call_id: 'call_toolsearch1',
+      status: 'completed',
+      execution: 'client',
+      arguments: { query: 'spawn sub-agent delegate', limit: 8 },
+    },
+  });
+  const calls = indexTranscript(raw).flatMap((entry) => entry.calls);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]!.tool_call_id).toBe('call_toolsearch1');
+  expect(calls[0]!.function_name).toBe('ToolSearch');
+});
+
 test('snapshot preserves the reviewed bytes after the artifact changes and refuses overwrite', () => {
   const f = fixture();
   writeFileSync(f.artifact, 'different final file');
