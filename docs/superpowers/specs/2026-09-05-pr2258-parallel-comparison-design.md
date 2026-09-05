@@ -2,7 +2,9 @@
 
 **Date:** 2026-09-05
 
-**Status:** Proposed design selected by Drew; written spec awaiting review.
+**Status:** Staff-panel reconciliation incorporated; Drew approved amendment and
+implementation on September 5. Installed qualification and paid execution remain
+separate gates.
 
 **Source inspected:** Evals `672a0ad2580b75153e1a954ae3a8cad4c1e97b90`.
 
@@ -55,7 +57,8 @@ Current source establishes these gaps:
 | Discovery and indexing | `brainstorming-input-capture.ts` selects Codex parent rollouts; `brainstorming-evidence.ts` projects Codex messages and calls. |
 | Home identity | The guard persists the configured subject home, but scoring reconstructs `<run>/home/.codex/sessions`. Campaign homes are `<attempt>/home`, outside the staged run. |
 | Publication | Review files name a live absolute raw-log path. Receipts contain document bytes and transcript-prefix hashes, but not the raw transcript. Publication moves the staged run, leaving the attempt home behind. |
-| Admission | Equal-priority blocks sort by comparison before repetition, allowing both Astra repetitions to start before Claude. |
+| Checks home | `src/checks/index.ts` creates `<run>/home`, `src/runner/manifest.ts` excludes it, and `src/campaign/attempt-publish.ts` refuses the unlisted directory. A checks-bearing campaign run cannot publish through this path. |
+| Admission | Equal-priority blocks sort by comparison before repetition. At six slots, Astra r1, Astra r2, and Sol r1 pairs precede Claude. |
 | Grader capacity | The active direct `sonnet5` declaration caps graders at two. Six attempts require six graders. |
 
 Read-only checks on the installed appliance on September 5 found a healthy
@@ -95,8 +98,10 @@ after its contracts pass. Avoid a configurable observer plugin framework.
 
 ## One authoritative run binding
 
+Quorum owns the binding lifecycle: unbound, bound to one parent, then finalized.
 Setup receives the resolved runtime family and actual run, workdir, and subject
-home from Quorum. Resolve the normal session-root configuration from the selected
+home from Quorum, including the actual launch cwd after fixture setup. Resolve
+the normal session-root configuration from the selected
 agent configuration; do not infer the runtime from filenames or reconstruct home
 from the evidence directory. Persist one versioned binding outside the subject
 workdir. Installation, live capture, indexing, finalization, and scoring consume
@@ -112,6 +117,12 @@ session, symlink, or replaced source cannot supply approvals.
 Live paths locate sources only during execution. Published evidence uses
 bundle-relative paths and content digests. Original absolute paths may remain as
 provenance labels; replay must not dereference them.
+
+Checks execute untrusted source. Give them a fresh non-credential-bearing scratch
+HOME outside both the subject home and staged publication root. Never solve the
+publication mismatch by exposing the subject home to checks or weakening manifest
+exclusion or publisher inventory. Prove that a real checks-bearing runner output
+publishes, rather than only constructing a manifest fixture by hand.
 
 ## Raw chronology adapters
 
@@ -157,6 +168,12 @@ records must identify the actual canonical message block; ambiguous provenance
 is an evidence error. Qualify the exact Claude CLI build and dialect used by the
 experiment; existing parser fixtures alone do not establish current TUI behavior.
 
+Observer instructions and index output must describe the selected dialect instead
+of directing every grader to a Codex rollout. Qualification includes complete
+classification of every call within the observer window. Parent identity must be
+authoritative: file creation order or a launch-window guess cannot disambiguate
+an otherwise indistinguishable child. Unresolved parent identity blocks readiness.
+
 ### Descendants
 
 Approval chronology belongs to the main conversation. Retain relevant descendant
@@ -166,7 +183,12 @@ their actual purpose. Qualification covers document-review descendants whose
 effects are read-only/process. A descendant write or unresolved effect that
 cannot be placed causally against the approval boundary makes the evidence
 indeterminate. It must not disappear merely because the child was excluded from
-parent selection. General cross-session ordering is outside this increment.
+parent selection. Only add cross-session edges proven by the pinned dialect and
+build. A tool result closes a child interval only if it proves completion/join;
+an asynchronous spawn acknowledgment does not. Never move a child's effects to
+the spawn position when an approval may intervene. Read-only review/help remains
+allowed; do not coach the subject to avoid delegation. General cross-session
+ordering is outside this increment.
 
 ## Capture, finalization, and replay
 
@@ -182,21 +204,40 @@ the selected raw transcript after presentation and before approval. Preserve
 distinct observations even when document bytes repeat. Raw mutation or replay
 cannot turn an old receipt into a later approval boundary.
 
-After the subject stops and logs settle, finalize the source evidence under
-`<run>/brainstorming-evidence/`. The post-check scores only those frozen source
+Finalization belongs to the runner and covers normal, error, cancellation, and
+stop paths; a hook reached only through post-checks is insufficient. In the worker,
+prove termination of the subject and owned descendants using exact process
+identity, then take the final artifact snapshot and freeze source evidence under
+`<run>/brainstorming-evidence/`. Stable consecutive reads prove byte stability,
+not process termination. The controller's existing journaled container-stop proof
+separately gates terminal acceptance; namespace death is not required before the
+worker writes its manifest. The post-check scores only those frozen source
 bytes and adds its derived score; the attempt manifest then authenticates the
 complete self-contained bundle. Include:
 
 - versioned source/attempt binding and adapter identity;
 - byte-faithful parent raw transcript and relevant linked descendant logs;
 - immutable document receipts and their source-prefix bindings;
+- a terminal document snapshot, including additions/deletions after the last input;
 - actor review, derived canonical score, and explicit evidence errors;
 - enough identity and hashes to reconstruct the same index and score offline.
 
-Finalization verifies that each referenced prefix matches the finalized raw
-bytes. It must reject an incomplete or changing source rather than publish a
-plausible partial approval chain. Failure still produces explicit diagnostic
-evidence where possible; it cannot count as a valid sample.
+The actor review binds a complete raw prefix by byte count and digest.
+Finalization verifies every review/receipt prefix against the frozen raw bytes
+and retains the entire suffix. Accept a suffix only through a closed,
+per-dialect/build grammar of proven non-action records. Broad `event_msg` or
+`system` families are not sufficient: they can contain actions. Unknown or
+action-bearing suffixes, altered prefixes, incomplete JSONL, and unsettled sources
+produce explicit evidence errors, never a plausible partial approval chain.
+Record both reviewed-prefix and finalized-bundle digests. Copy without following
+symlinks, recheck source identity/content, and atomically expose the frozen bundle.
+
+The existing five-second hard-kill grace is unchanged. Finalization on a hard
+timeout is bounded best effort and cannot extend the deadline. Missing or partial
+evidence cannot be scored, synthesized, or completed by hand. Publication still
+requires a complete valid manifest and strict inventory; otherwise refuse it and
+record an explicit no-usable-result attempt. Test graceful termination and a
+wedged hard-kill path, including report missingness.
 
 The existing manifest and publisher authenticate these ordinary run artifacts.
 Do not publish the whole home, auth files, or credential projections. Raw evidence
@@ -216,6 +257,10 @@ standing artifact approvals; a plan change invalidates plan approval. Keep the
 first violation, canonical score, and composed Quorum verdict separately visible.
 Do not retroactively promote historical cosmetic-edit failures to passes.
 
+Preserve the actor's selected execution method, not merely the presence of any
+method choice. When inline execution is chosen, implementation delegation is a
+method violation. Read-only advisory/review delegation is not implementation.
+
 The diagnostic readout identifies independently reviewed cosmetic status-only
 edits versus substantive changes, with exact before/after receipts and call
 anchors. This label does not modify the strict score. Unresolved edits remain
@@ -223,18 +268,35 @@ unclassified. Also report purpose discovery, last completed stage, first
 violation, completion, observer/instrument failures, and reviewer disagreement.
 
 Provide a supported deterministic scenario readout through the existing observer
-CLI, consuming only terminal campaign evidence references and authenticated
-published bundles. It must use the campaign report's accepted complete-pair
-cohorts for comparative summaries and separately show every planned slot and
-attempt. Never infer inclusion from which files happen to exist. Active
-campaigns retain the existing behavior-hiding policy. Independent review files
-are separate derived artifacts and never overwrite sealed actor evidence.
+CLI, consuming terminal campaign evidence references and authenticated published
+bundles. Preregister a strict-observer cohort as the primary behavioral readout:
+two planned pairs per comparison; a realized pair requires both selected attempts
+from the same valid block, authenticated publications, valid observer bundles,
+and determinate strict scores. Show the planned and realized pair denominators,
+every planned slot and attempt, and each exclusion reason.
+
+The general campaign report and its composed complete-pair cohort remain
+unchanged. A determinate strict pair excluded there because of a grader failure
+may appear in the separate strict cohort. Show both cohorts and all strict,
+composed, and grader disagreements; there is no generic inclusion override.
+Never infer inclusion from which files happen to exist. Active campaigns retain
+the existing behavior-hiding policy.
+
+Independent review uses immutable versioned sidecars outside sealed runs, passed
+explicitly to the readout. Bind campaign/sample/attempt identity, manifest digest,
+bundle digest, reviewer identity, review time, per-event judgments, raw/receipt
+anchors, coverage, cosmetic/substantive/unresolved classifications, and
+disagreements. A review-set manifest authenticates the selected sidecars; conflicting
+reviews remain conflicts. They never overwrite actor evidence or the strict score.
+Missing independent review sets interpretation readiness false and withholds
+cosmetic labels; it does not erase a sealed score. Offline replay verifies
+consistency, not the truth of semantic annotations.
 
 Keep general campaign reports responsible for overall outcomes, paired costs,
 tokens, wall time, elapsed campaign time, and all-attempt cost coverage. Avoid
 adding brainstorming-specific fields to the general execution state. The scenario
-readout may add evidence-backed actor-turn/review-size measures; missing measures
-remain explicit. A fast stage-skipping failure is not an efficiency win. Human
+readout defers optional actor-turn/review-size measures. Missing measures remain
+explicit. A fast stage-skipping failure is not an efficiency win. Human
 attention measures are simulated-user proxies, not measured human review time.
 
 ## Frozen experiment
@@ -260,8 +322,9 @@ Use a schema-V2 suite with three base/head comparisons, the
 planned samples are the measured cohort. No automatic replacement or expansion.
 The historical schema-V1 pilot manifest remains historical.
 
-Keep the 25-minute subject-interaction cutoff and 30-minute total Gauntlet
-allowance, including five minutes for observer completion. Set a separate
+Keep the instructed 25-minute subject-interaction cutoff and enforced 30-minute
+total Gauntlet allowance, including five minutes for observer completion. Do not
+describe the actor's instructed cutoff as mechanically enforced. Set a separate
 40-minute whole-attempt ceiling to cover setup and final capture. This bounds
 worker execution; host preparation, publication, and final termination verification
 must also be reported, not hidden inside a subject-time claim.
@@ -269,16 +332,19 @@ must also be reported, not hidden inside a subject-time claim.
 Pin Evals and Gauntlet source revisions and the runtime image digest. Record and
 verify actual harness builds, served subject/grader models, loaded skill bytes,
 native instruction layers, and delegated model usage. Use Codex `xhigh` for both
-Codex comparisons. Before manifest freeze, select and record an explicit Claude
-effort setting supported by the qualified build; verify its effective setting
-through runtime evidence. Effort names across vendors are not equivalent units.
-The exact Claude setting is a required launch configuration, not a new experiment
-axis. No unknown/default effort may silently stand in for a selected setting.
+Codex comparisons. Pin the qualified Claude build and declare its requested effort
+or explicitly record the build's default. Record effective effort only if the
+qualified runtime exposes it; otherwise mark it unobservable. A settings digest
+proves requested configuration, not the served effective setting. No new effort
+configuration framework is required merely to claim certainty. Effort names
+across vendors are not equivalent units and are not a new experiment axis.
 
-Preserve the same scenario, actor responses, grader model/prompt, and observation
-policy across all arms. Cross-harness differences in native instructions and
+Preserve the same scenario, actor response policy, grader model/prompt, and
+observation policy across all arms; actual replies adapt to the question asked.
+Cross-harness differences in native instructions and
 capabilities remain documented properties of the complete subject stack. The
 primary findings are three within-stack PR effects, not an isolated model ranking.
+Label every interpretation n=2, single-case exploratory.
 
 ## Parallel admission and capacity
 
@@ -302,6 +368,16 @@ own public environment name; aliases of the same secret do not qualify. A
 different grading endpoint requires an explicit instrument revision and fresh
 qualification. No secret value enters Git or the spec.
 
+Before any paid admission, rehearse every arm's actual private credential
+projection, including secret-value separation, and remove the rehearsal stages.
+Probe exact pricing availability from the worker image and scratch home, not the
+operator's home. Compute achievable concurrent attempts under all frozen subject,
+grader, and global pools for this experiment and name any binding constraint.
+This is a six-way experiment preflight, not a universal registration rule that
+grader capacity must equal the global cap. Credential names/values are not proof
+of independent provider quota. A missing distinct grader bearer is a launch
+blocker; changing an endpoint requires a fresh instrument decision.
+
 For equal-duration primary blocks, change the deterministic tie-break to visit
 repetition ordinal before comparison and scenario order. Preserve longest-duration
 priority, stable ordering, whole-pair demand, resource fences, and existing
@@ -309,12 +385,19 @@ replacement rules. This suite supplies no duration estimates, giving all pairs
 the same frozen-deadline priority. Under available capacity, the initial admission
 order becomes Astra r1, Sol r1, Claude r1 before their second repetitions.
 
+This changes the shared admission comparator's policy, including reserve and
+rerun-lineage ordering in other suites. Keep a total order over valid primary,
+reserve, and lineage IDs, update its contract documentation, and test real
+first-six activations as well as unequal estimates and resource backfill.
+
 This is three overlapping paired comparisons, not a six-arm atomic block or a
 wave barrier. Preparation and provider constraints may affect actual start times.
 Record actual overlap, exposure skew, and contention. Qualify mixed-harness
 overlap with real attempt lifetimes; configured capacity alone is insufficient.
 Do not silently describe a two-slot fallback as six-slot readiness. If six is
-unavailable, present the actual constraint and revise the run configuration.
+unavailable, halt and present the actual constraint. No automatic lower-cap,
+relaxed-skew, endpoint, reserve, or replacement fallback is authorized. A changed
+experiment requires an explicit decision and fresh registration.
 
 Six-way execution should shorten elapsed turnaround compared with twelve serial
 jobs. Two nominal 40-minute waves give a useful planning shape, not a completion
@@ -324,16 +407,13 @@ where the existing guard timing evidence supports it.
 
 ## Appliance preparation and spending
 
-The installed command derives campaigns from `<configured evals.path>/campaigns`;
-there is no separate campaign-root knob to assume. Use a fresh configured Evals
-checkout for the V2 namespace after verifying the appliance is drained. Preserve
-the existing checkout and V1 artifacts untouched. Snapshot and verify configuration
-changes, results-root selection, credential projections, exact source refs, and
-image identity. Verify the installed helper's launcher resolves the qualified
-code and configuration as well as the attempt runtime; changing only a source
-checkout field is insufficient proof. This operational cutover needs explicit
-authorization; adding a V1 reader or moving historical evidence is not part of
-the repair.
+The installed command derives campaigns from `<configured evals.path>/campaigns`.
+Repair `campaign list` to fault-isolate unreadable entries, returning their
+selector and typed reason. Preserve exact-operation and ambiguous-prefix
+resolution. Add no V1 reader and do not migrate or discard historical evidence.
+The observed listing defect does not require an appliance-wide `evals.path`
+cutover. Verify installed helper resolution, exact source refs, results-root
+selection, credential projections, and image identity before qualification.
 
 Require working register/list/status/costs/report and exact cancellation on the
 qualified installation. A doctor pass alone is insufficient. Interrupted campaigns
@@ -344,6 +424,9 @@ Freeze a pricing snapshot covering Astra, Sol, Opus 5, Sonnet 5 and observed
 delegates, including endpoint-specific cache buckets. Verify actual pricing
 coverage in qualification. Missing prices remain explicit and do not become zero
 or silently change the campaign's behavioral inclusion rules.
+The implementation must deliver the pinned pricing bytes into the actual worker
+environment and authenticate their digest; an operator-home pricing file is not
+delivery proof.
 
 The prior eight samples reportedly cost $30.18; $46.56 was accounted against their
 historical $500 allowance including earlier attempts and reserves. These figures
@@ -361,15 +444,15 @@ Implementation is complete only when these contracts have evidence:
 | Layer | Required proof |
 |---|---|
 | Shared semantics | The same approval-chain cases produce equivalent outcomes through Codex and Claude adapters; existing strict Codex behavior is retained. |
-| Claude chronology | Real-format queue prefixes, UUID replays, split messages, multiple tool blocks, result-only user rows, duplicate/conflicting calls, and parent/child identities are handled without false approvals. |
+| Claude chronology | Real captured traces from the pinned build cover queue prefixes, UUID replays, compaction, split messages, multiple tool blocks, result-only user rows, conflicting calls, and parent/child identities without false approvals. |
 | Capture boundary | Uncaptured replies are blocked across all existing input routes; changing files/logs, symlinks, partial JSONL, and ambiguous source identity cannot yield valid evidence. Cancellation stays usable. |
 | Campaign paths | Full setup, guard, finalization, post-check and publication work with home outside the staged run. Published evidence scores identically after temporary paths disappear. |
 | Descendant effects | Child user messages cannot approve; linked review evidence is retained; unresolved child writes cannot establish a pass. |
 | Parallel behavior | Six simultaneous fake-provider attempts include all three comparisons, keep evidence and credentials separate, and enforce complete subject/grader demand. Ordering tests exercise admission behavior rather than matching generated scripts. |
 | Real boundary | The actual Quorum/Gauntlet input path works for both dialects in Linux containers, including guard failure and portable publication. Tests conditionally skipped without `GAUNTLET_ROOT` or Linux Docker are explicitly run in this gate. |
 | Termination | Existing cancellation and independent deadlines still terminate exact owned workers under concurrent load, including controller loss. Reuse qualified core tests and extend only uncovered integration cases. |
-| Reporting | Terminal scenario readout authenticates bundles, honors campaign cohorts, preserves strict/composed outcomes and missingness, and exposes cosmetic-edit diagnostics without changing scores. |
-| Installed readiness | Fresh V2 namespace, exact runtime, separate grader secret, six-way capacity, served models/effort, skill exposure, complete prices, and replayable evidence verified on the appliance. |
+| Reporting | Primary strict pair and unchanged composed cohorts have separate denominators; authenticated review coverage, conflicts, missingness, and cosmetic annotations never change sealed scores. |
+| Installed readiness | List fault isolation, exact runtime, separate grader secret, six-way capacity, served models and honest effort evidence, skill exposure, worker prices, and portable evidence verified on the appliance. |
 
 Run focused behavioral tests during implementation, then the normal Evals checks,
 scenario validation, and required cross-repository/Linux qualification. Do not
@@ -378,6 +461,18 @@ treat portable fixtures as installed or provider proof.
 Paid qualification is a separate fresh six-arm, one-repetition diagnostic
 execution after the offline/Linux gates and spending approval. It verifies the
 actual target mix concurrently; it is not pooled into the measured results.
+Acceptance requires 3/3 valid pairs, all six subject exposures recorded and
+overlapping, complete all-call observer review within the window, no invalidating
+skew/contention/exposure/telemetry condition, and no grader 429 latch. Report
+observed margins against the frozen 60-second skew bound and host thresholds.
+
+One clean diagnostic does not establish rare dialect behavior. Use captured
+traces from the pinned build and deterministic replay/contract fixtures derived
+from them. Earlier-build traces are shape references, not proof of the selected
+build. If required coverage is missing after the diagnostic, readiness remains
+NO-GO: name the missing evidence and present a bounded targeted qualification
+request. Do not buy extra samples automatically or knowingly carry an unresolved
+observer case into the measured cohort.
 Every measured run receives independent raw-evidence review before interpretation.
 Start the twelve measured samples only after the diagnostic evidence establishes
 readiness and the runtime/instrument is frozen. A failed qualification stays
@@ -385,11 +480,14 @@ recorded; no automatic replacement or expanded screen is purchased.
 
 ## Delivery boundary
 
-One implementation plan should cover the observer binding/adapters, portable
-bundle and scenario readout, the admission tie-break, scenario/arm/suite/pricing
-configuration, and the qualification runbook. Keep operational cutover and paid
-executions as explicit later gates with exact inputs and evidence to approve.
+Implementation plans cover four tracks after their shared interfaces are frozen:
+evidence binding/adapters and runner finalization; scoring and reviewed readout;
+campaign admission/preflight/list/pricing configuration; and qualification fixtures
+and runbook. Shared-file integration has one owner. Each track has focused
+behavioral tests and a task review before integration. Installed changes,
+credential issuance, and paid executions remain explicit later gates with exact
+inputs and evidence to approve.
 
-Approval of this written spec precedes implementation planning. The next review
+The reconciled spec is approved for implementation planning and source work. The next review
 should be able to identify the behavior being built, its acceptance evidence,
 and the remaining environment prerequisites without reading this conversation.
