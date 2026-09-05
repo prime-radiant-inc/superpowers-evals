@@ -317,6 +317,82 @@ test('identical ID-less native calls remain separate calls', () => {
   ]);
 });
 
+const nativeIdCases: Array<[string, JsonValue, JsonValue]> = [
+  [
+    'local_shell_call',
+    {
+      type: 'local_shell_call',
+      call_id: 'native-call',
+      action: { type: 'exec', command: ['pwd'] },
+    },
+    {
+      type: 'local_shell_call',
+      call_id: 'native-call',
+      action: { type: 'exec', command: ['ls'] },
+    },
+  ],
+  [
+    'web_search_call',
+    {
+      type: 'web_search_call',
+      call_id: 'native-call',
+      action: { type: 'search', query: 'observer chronology' },
+    },
+    {
+      type: 'web_search_call',
+      call_id: 'native-call',
+      action: { type: 'search', query: 'changed query' },
+    },
+  ],
+];
+
+test.each(
+  nativeIdCases,
+)('%s preserves a supplied native ID for replay, conflicts, and results', (name, originalPayload, changedPayload) => {
+  const nativeCall = { type: 'response_item', payload: originalPayload };
+  const output = {
+    type: 'response_item',
+    payload: {
+      type: 'function_call_output',
+      call_id: 'native-call',
+      output: 'done',
+    },
+  };
+
+  const index = indexCodexTranscript(
+    source,
+    bytes([nativeCall, nativeCall, output]),
+  );
+  expect(index.entries).toEqual([
+    {
+      kind: 'call',
+      anchor: anchor(1),
+      call_id: 'native:native-call',
+      native_call_id: 'native-call',
+      name,
+      payload: originalPayload,
+    },
+    {
+      kind: 'replay',
+      anchor: anchor(2),
+      canonical_anchor: anchor(1),
+    },
+    {
+      kind: 'result',
+      anchor: anchor(3),
+      call_id: 'native:native-call',
+      call_anchor: anchor(1),
+      payload: output.payload,
+    },
+  ]);
+
+  expectEvidenceError(
+    [nativeCall, { type: 'response_item', payload: changedPayload }],
+    'replay_conflict',
+    anchor(2),
+  );
+});
+
 test('results require an earlier call and replay only with an identical payload', () => {
   expectEvidenceError([result], 'orphan_result', anchor(1));
 

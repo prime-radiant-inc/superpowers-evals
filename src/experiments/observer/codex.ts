@@ -274,7 +274,10 @@ function callShape(
         anchor,
       );
     }
-    return { name: type, nativeId: null };
+    return {
+      name: type,
+      nativeId: optionalNonemptyString(payload, 'call_id', anchor) ?? null,
+    };
   }
   if (type === 'web_search_call') {
     const action = requireObject(
@@ -283,7 +286,10 @@ function callShape(
       'Web search action',
     );
     requireNonemptyString(action['type'], anchor, 'Web search action type');
-    return { name: type, nativeId: null };
+    return {
+      name: type,
+      nativeId: optionalNonemptyString(payload, 'call_id', anchor) ?? null,
+    };
   }
   if (type === 'tool_search_call') {
     const nativeId = requireNonemptyString(
