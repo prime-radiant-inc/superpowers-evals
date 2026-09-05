@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Review Task 1 first; then run Tasks 2 and 3 in parallel in isolated worktrees with independent task reviews. The integration owner runs the full repository gate once after integration.
 
+**Status:** Source slice complete at `de769cca`; all task reviews and the final
+scoped fix review passed. Final verification: 3,599 core passes, 14 qualification
+skips, 144 dashboard passes, 88 scenario checks, no failures. The modules remain
+inactive; runtime integration and qualification are separate work. Full receipts
+and implementation decisions are recorded in
+[the experiment log](../../experiments/2026-09-05-pr2258-parallel-comparison.md).
+
 **Goal:** Build independently testable, offline Codex and Claude raw transcript indexes that preserve original chronology and expose unresolved identity and approval provenance honestly.
 
 **Architecture:** Both adapters take a supplied source description and raw bytes, parse the complete stream once, and maintain replay/call state inside that pass. They return the same strict schema-version-2 index with immutable source/line/block anchors; prefix verification operates on the actual bytes. These modules have no runtime consumers in this increment.
@@ -167,7 +174,7 @@ export function indexClaudeTranscript(source: RawSource,
   raw: Uint8Array): RawIndex;
 ```
 
-- [ ] **Step 1: Write parser and prefix failures before implementation.** Use `TextEncoder`, not string character counts. Include this fixture and checks:
+- [x] **Step 1: Write parser and prefix failures before implementation.** Use `TextEncoder`, not string character counts. Include this fixture and checks:
 
 ```ts
 const source = {
@@ -209,9 +216,9 @@ test.each([
 
 Also assert: wrong source ID, digest, byte count, line count, truncation, a prefix ending inside `é`, UTF-8 BOM, and changed early bytes reject. Empty input returns zero rows and a zero-byte/zero-line SHA-256 prefix; the adapters return unresolved identity for it. Reject non-finite numbers anywhere in parsed JSON rather than letting JSON stringify turn them into null.
 
-- [ ] **Step 2: Run `bun test test/observer-raw.test.ts`.** Expect missing-export/module failures before implementing Task 1.
+- [x] **Step 2: Run `bun test test/observer-raw.test.ts`.** Expect missing-export/module failures before implementing Task 1.
 
-- [ ] **Step 3: Implement strict contracts and complete-byte parsing.** Require nonempty source identity strings; require nonnegative safe integers for bytes/line counts, positive safe integers for anchor lines, nonnegative safe integers or null for block, and lowercase 64-hex digests. Require matching source IDs across the index, anchors, prefixes, result links, and replay links. Reject duplicate entry anchors, forward replay links, replay links that do not name an existing canonical non-replay entry, result links that do not identify an earlier call, and eligible assistant messages. Do not infer runtime from data or filenames.
+- [x] **Step 3: Implement strict contracts and complete-byte parsing.** Require nonempty source identity strings; require nonnegative safe integers for bytes/line counts, positive safe integers for anchor lines, nonnegative safe integers or null for block, and lowercase 64-hex digests. Require matching source IDs across the index, anchors, prefixes, result links, and replay links. Reject duplicate entry anchors, forward replay links, replay links that do not name an existing canonical non-replay entry, result links that do not identify an earlier call, and eligible assistant messages. Do not infer runtime from data or filenames.
 
 Whole-row UUID/message replay emits one alias per original block, each pointing directly to that block's canonical non-replay entry. The replay retains the current line and original block index; scalar or metadata rows use `block: null`. A row containing both new text and a replayed call stores a canonical target for each slot, so later UUID replay points directly to the original text/call entries, never to another replay. An exactly empty content array produces a validated `non_action` entry at the row anchor with record type `assistant.empty` or `user.empty`. Do not create extra row markers for records that contain actions. Test multi-block row replay against schema validation, not just adapter output.
 
@@ -255,11 +262,11 @@ export function canonicalJson(value: JsonValue): string {
 
 Test equal objects with different key order, unequal array order, unequal text, and nested values. Call it only with validated finite JSON. No timestamp or provenance fields are discarded when comparing duplicate raw rows.
 
-- [ ] **Step 4: Implement byte-prefix verification and the closed initial suffix policy.** SHA-256 uses `createHash('sha256').update(raw).digest('hex')`. `createRawPrefix` validates the entire bytes and counts parsed rows. `verifyRawPrefix` validates the supplied schema, matching source ID, length bound, and exact prefix bytes by calling `createRawPrefix(source, raw.subarray(0, prefix.bytes))`; all four fields must equal. Map mismatch or invalid claimed prefix to `prefix_mismatch`, retaining no fabricated replacement prefix. `verifyReviewedSuffix` first verifies the prefix, then rejects any `raw.length !== reviewed.bytes` with `unreviewed_suffix`. This intentionally accepts no nonempty suffix, even a familiar telemetry row; a later qualified grammar is separate source work.
+- [x] **Step 4: Implement byte-prefix verification and the closed initial suffix policy.** SHA-256 uses `createHash('sha256').update(raw).digest('hex')`. `createRawPrefix` validates the entire bytes and counts parsed rows. `verifyRawPrefix` validates the supplied schema, matching source ID, length bound, and exact prefix bytes by calling `createRawPrefix(source, raw.subarray(0, prefix.bytes))`; all four fields must equal. Map mismatch or invalid claimed prefix to `prefix_mismatch`, retaining no fabricated replacement prefix. `verifyReviewedSuffix` first verifies the prefix, then rejects any `raw.length !== reviewed.bytes` with `unreviewed_suffix`. This intentionally accepts no nonempty suffix, even a familiar telemetry row; a later qualified grammar is separate source work.
 
-- [ ] **Step 5: Run focused verification and review the contract.** Run `bun test test/observer-raw.test.ts` and `bun run typecheck`; expect success. Review safe-integer validation, byte-faithful hashing, no partial JSONL acceptance, and absence of filesystem imports.
+- [x] **Step 5: Run focused verification and review the contract.** Run `bun test test/observer-raw.test.ts` and `bun run typecheck`; expect success. Review safe-integer validation, byte-faithful hashing, no partial JSONL acceptance, and absence of filesystem imports.
 
-- [ ] **Step 6: Commit the independently tested contract.** Stage only the three Task 1 files. Use summary `feat: define strict raw observer index contracts` and a body explaining byte boundaries, immutable anchors, unresolved provenance, and intentional empty-suffix policy. Do not skip hooks. Task 2/3 implementation starts only after Task 1's public contract review.
+- [x] **Step 6: Commit the independently tested contract.** Stage only the three Task 1 files. Use summary `feat: define strict raw observer index contracts` and a body explaining byte boundaries, immutable anchors, unresolved provenance, and intentional empty-suffix policy. Do not skip hooks. Task 2/3 implementation starts only after Task 1's public contract review.
 
 ### Task 2: Stateful Codex raw index
 
@@ -271,7 +278,7 @@ Test equal objects with different key order, unequal array order, unequal text, 
 
 **Interfaces:** Consume all Task 1 types and `parseCompleteJsonl`/`createRawPrefix`/`canonicalJson`. Export exactly `indexCodexTranscript(source: RawSource, raw: Uint8Array): RawIndex`. Do not change existing normalizers to share projection helpers: physical payload indexing makes that dependency unnecessary.
 
-- [ ] **Step 1: Write tests for physical calls, results, and immutable prefix chronology.** Test fixtures are deliberately synthetic; the build label `fixture` is never a qualification receipt.
+- [x] **Step 1: Write tests for physical calls, results, and immutable prefix chronology.** Test fixtures are deliberately synthetic; the build label `fixture` is never a qualification receipt.
 
 ```ts
 const source = {
@@ -313,9 +320,9 @@ test('full physical scripts stay intact and results stay later', () => {
 
 Add explicit cases: duplicate native call with changed arguments rejects; result without a prior call rejects; repeated result with changed payload rejects; identical ID-less native calls on two lines remain two calls; assistant/user content blocks on one row retain separate block anchors; unknown `_call`, unknown `event_msg` subtype, and unknown content block reject. Test `function_call`, `custom_tool_call`, `local_shell_call`, `web_search_call`, `tool_search_call` and their supported result records as physical payloads, not rendered-script regex matches.
 
-- [ ] **Step 2: Run `bun test test/observer-codex.test.ts`.** Expect missing module/export failure.
+- [x] **Step 2: Run `bun test test/observer-codex.test.ts`.** Expect missing module/export failure.
 
-- [ ] **Step 3: Implement one forward pass with source-local maps.** Reject `source.runtime !== 'codex'`. Validate every present identity-bearing field against the supplied expected identity; missing identity remains unresolved, conflicting fields fail `identity_conflict`. Recognize `session_meta.payload.id` (and require equality when `session_id` is also present), `cwd`, `cli_version`, and `source`. Qualified historical parent shape `source: 'cli'` plus matching complete identity establishes `parent`; an object with `subagent` establishes `descendant`. Unknown source variants remain unresolved. A second metadata record cannot silently change any established field. Collect identity evidence at the metadata row's anchor.
+- [x] **Step 3: Implement one forward pass with source-local maps.** Reject `source.runtime !== 'codex'`. Validate every present identity-bearing field against the supplied expected identity; missing identity remains unresolved, conflicting fields fail `identity_conflict`. Recognize `session_meta.payload.id` (and require equality when `session_id` is also present), `cwd`, `cli_version`, and `source`. Qualified historical parent shape `source: 'cli'` plus matching complete identity establishes `parent`; an object with `subagent` establishes `descendant`. Unknown source variants remain unresolved. A second metadata record cannot silently change any established field. Collect identity evidence at the metadata row's anchor.
 
 Parenthood observed after a message must not retroactively make that earlier message eligible. Use identity established at the message's own position. A descendant source's user blocks are ineligible. A canonical parent `response_item.payload.type: 'message'` with explicit `role: 'user'` and `input_text` blocks uses `claimed_origin: 'external'`, `approval_eligibility: 'eligible'`; missing identity yields unresolved eligibility. Assistant `output_text` blocks are always ineligible. Never default a missing role to user. Never treat mirrored `event_msg` messages as approvals.
 
@@ -350,13 +357,13 @@ Recognized record grammar for this inactive index is closed at record/block disc
 
 This first grammar deliberately does not claim complete rollout coverage: `turn_context`, reasoning, token events, mirrored messages, and all other variants reject pending explicit contracts. No broad non-action category hides them. Ordinary metadata/call payload fields remain available unchanged as raw bytes; accepted calls also retain the complete physical payload in the index. The grammar does not execute or classify the semantic effects of tool arguments.
 
-- [ ] **Step 4: Add replay, identity, and shape regressions.** An exact repeat of a message payload bearing a stable `id` emits one replay per original content block, with the current line and the same block index, pointing to the original canonical block anchor. Scalar entries retain null block positions. Conflicting payload for that ID rejects. ID-less messages are distinct; repeated text is not replay proof. Keep this map separate from call IDs. A result cannot establish a new user message. Missing parent metadata, child metadata, wrong expected session/cwd/build, missing message role, missing arguments, null/array/number arguments, and invalid JSON-object argument strings each have explicit assertions for unresolved eligibility or the required error. A `tool_search_output` carrying only `output` instead of `tools` rejects.
+- [x] **Step 4: Add replay, identity, and shape regressions.** An exact repeat of a message payload bearing a stable `id` emits one replay per original content block, with the current line and the same block index, pointing to the original canonical block anchor. Scalar entries retain null block positions. Conflicting payload for that ID rejects. ID-less messages are distinct; repeated text is not replay proof. Keep this map separate from call IDs. A result cannot establish a new user message. Missing parent metadata, child metadata, wrong expected session/cwd/build, missing message role, missing arguments, null/array/number arguments, and invalid JSON-object argument strings each have explicit assertions for unresolved eligibility or the required error. A `tool_search_output` carrying only `output` instead of `tools` rejects.
 
 Read the checked-in Codex slice as shape evidence: assert that selected original `session_meta` and `custom_tool_call` rows retain the original script payload after indexing a test input assembled from those rows. Clearly label this test as a selected-row shape test, not full captured-stream qualification. Preserve the slice's declared build as the expected build in that test. Assert that attempting the entire existing slice rejects its first unsupported variant, with that raw anchor, rather than silently omitting it.
 
-- [ ] **Step 5: Run the task gate.** Run `bun test test/observer-raw.test.ts test/observer-codex.test.ts test/brainstorming-evidence.test.ts test/normalize.codex.test.ts` and `bun run typecheck`. Expect all assertions to pass. Review that unknown composite effects remain visible in the physical script, no script is executed, every result is anchored later, and no V1 runtime import changes occurred.
+- [x] **Step 5: Run the task gate.** Run `bun test test/observer-raw.test.ts test/observer-codex.test.ts test/brainstorming-evidence.test.ts test/normalize.codex.test.ts` and `bun run typecheck`. Expect all assertions to pass. Review that unknown composite effects remain visible in the physical script, no script is executed, every result is anchored later, and no V1 runtime import changes occurred.
 
-- [ ] **Step 6: Commit.** Stage only the two Task 2 files. Use summary `feat: index Codex observer raw chronology` and a body describing original anchors, native-call replay conflicts, complete physical scripts, and the deliberately incomplete inactive grammar. Do not skip hooks.
+- [x] **Step 6: Commit.** Stage only the two Task 2 files. Use summary `feat: index Codex observer raw chronology` and a body describing original anchors, native-call replay conflicts, complete physical scripts, and the deliberately incomplete inactive grammar. Do not skip hooks.
 
 ### Task 3: Stateful Claude raw index with honest provenance
 
@@ -368,7 +375,7 @@ Read the checked-in Codex slice as shape evidence: assert that selected original
 
 **Interfaces:** Consume Task 1 domain types, `parseCompleteJsonl`, and `canonicalJson`. Compute the prefix from validated rows/bytes; use `createRawPrefix` only as a test oracle. Export exactly `indexClaudeTranscript(source: RawSource, raw: Uint8Array): RawIndex`. No adapter activation or readiness boolean is exported.
 
-- [ ] **Step 1: Write split-message and replay tests first.** Use distinct UUIDs for split rows sharing a message ID. The later call and result must remain after the intervening user row.
+- [x] **Step 1: Write split-message and replay tests first.** Use distinct UUIDs for split rows sharing a message ID. The later call and result must remain after the intervening user row.
 
 ```ts
 const source = {
@@ -437,13 +444,13 @@ test('UUID replay aliases each original block rather than an absent row entry', 
 });
 ```
 
-- [ ] **Step 2: Run `bun test test/observer-claude.test.ts`.** Expect the missing module/export failure.
+- [x] **Step 2: Run `bun test test/observer-claude.test.ts`.** Expect the missing module/export failure.
 
-- [ ] **Step 3: Implement UUID, tool-use, and result state in a single forward pass.** Reject the wrong supplied runtime. Every supported row with a nonempty UUID is checked against a UUID map before block processing. Store recursively canonicalized complete row value and the canonical target for each emitted block/null slot after processing. An exact replay emits one `replay` per stored slot at the current line and same block index, each targeting an existing original non-replay entry, and skips block processing; a conflict throws `replay_conflict`. Do not ignore timestamp, parent, session, or provenance differences on duplicate UUIDs. Rows without UUID are processed individually; do not infer replay from text equality.
+- [x] **Step 3: Implement UUID, tool-use, and result state in a single forward pass.** Reject the wrong supplied runtime. Every supported row with a nonempty UUID is checked against a UUID map before block processing. Store recursively canonicalized complete row value and the canonical target for each emitted block/null slot after processing. An exact replay emits one `replay` per stored slot at the current line and same block index, each targeting an existing original non-replay entry, and skips block processing; a conflict throws `replay_conflict`. Do not ignore timestamp, parent, session, or provenance differences on duplicate UUIDs. Rows without UUID are processed individually; do not infer replay from text equality.
 
 Treat `message.id` solely as a label copied to message entries. Never use it as a mutable turn accumulator or a deduplication key. Each new text block keeps the current line and block position. Tool IDs use the same `native:<id>` naming as Codex and are deduplicated across the full stream using the complete tool-use block. A repeated tool-use block under a different UUID points to its original block anchor. A changed name/input/payload for that ID fails. A result requires an earlier matching tool-use ID; its own block position and full result block stay intact. Do not attach results by moving their contents into call entries. Preserve row-level `toolUseResult` in result payload as `{ block: originalBlock, tool_use_result: row.toolUseResult ?? null }` so success evidence is not lost. Use that complete result payload for replay/conflict checks.
 
-- [ ] **Step 4: Implement identity and message-origin interpretation without guessing TUI provenance.** Inspect every recognized identity-bearing row rather than the first row. Verify all present `sessionId`, `cwd`, and `version` values against source expectations and against earlier observed values; contradictions throw `identity_conflict`. Queue rows may contribute a session claim, but cannot establish parenthood or approvals. `isSidechain: true` or a nonempty `agentId` positively marks final source identity as `descendant`. Each message retains the eligibility computed when its physical row was encountered. Later descendant evidence must not rewrite earlier entries; prefix invariance includes appending late sidechain/agent markers. `isSidechain: false`, matching cwd/session, and null `parentUuid` leave `conversation: 'unresolved'`. There is no `parent` outcome for Claude in this slice, because the supplied fixtures do not establish authoritative current-TUI parent selection.
+- [x] **Step 4: Implement identity and message-origin interpretation without guessing TUI provenance.** Inspect every recognized identity-bearing row rather than the first row. Verify all present `sessionId`, `cwd`, and `version` values against source expectations and against earlier observed values; contradictions throw `identity_conflict`. Queue rows may contribute a session claim, but cannot establish parenthood or approvals. `isSidechain: true` or a nonempty `agentId` positively marks final source identity as `descendant`. Each message retains the eligibility computed when its physical row was encountered. Later descendant evidence must not rewrite earlier entries; prefix invariance includes appending late sidechain/agent markers. `isSidechain: false`, matching cwd/session, and null `parentUuid` leave `conversation: 'unresolved'`. There is no `parent` outcome for Claude in this slice, because the supplied fixtures do not establish authoritative current-TUI parent selection.
 
 On explicit user text blocks, `userType: 'external'` becomes `claimed_origin: 'external'`, not eligibility. `userType: 'internal'` becomes internal/ineligible. Missing or another user type is unclaimed/unresolved. User messages encountered after descendant identity is known are ineligible, regardless of the claim. Earlier unresolved entries remain unchanged; consumers must also check final source identity before using any source as approval authority. Recognized `isCompactSummary: true` user rows are non-action summary records and produce no approval message. The marker is a synthetic rejection invariant here, not proof of how the target CLI emits compaction. Assistant messages are always ineligible. Mixed tool-result/text user records emit separate entries. Preserve the observed row-level `userType` as `claimed_origin` on the text entry, including an external claim; its `approval_eligibility` remains unresolved unless a known internal/descendant rule makes it ineligible. A claim is not established provenance, and neither an adjacent result nor the row label can confer approval authority. Test the external-claim/unresolved-eligibility distinction explicitly. No message in this adapter is eligible yet.
 
@@ -461,7 +468,7 @@ The initial accepted grammar is explicitly limited:
 
 This grammar is enough to index the checked-in six-row 2.1.177 SDK shape fixture and synthetic chronological contracts. It deliberately rejects unspecified system/compaction/progress variants instead of blessing broad envelopes. Record acceptance in the reviewed index is not a suffix whitelist: Task 1 still rejects every nonempty suffix.
 
-- [ ] **Step 5: Add exact fixture and negative provenance checks.** Read `claude-2.1.177-real.jsonl` unchanged with these test expectations, copied from the inspected raw fixture:
+- [x] **Step 5: Add exact fixture and negative provenance checks.** Read `claude-2.1.177-real.jsonl` unchanged with these test expectations, copied from the inspected raw fixture:
 
 ```ts
 const sdkSource: RawSource = {
@@ -483,9 +490,9 @@ expect(index.entries.some(entry => entry.kind === 'message' &&
 
 Also verify an old UUID approval replay after an intervening capture prefix creates only an alias, new text under an old message ID stays later, a child with the same cwd/session/null parent UUID cannot approve, unknown variants reject, and an orphan tool result is not transformed into user text. Deep-compare full-prefix entries before and after appending all supported replay/result/split-message suffix cases.
 
-- [ ] **Step 6: Run the independent Claude task gate.** Run `bun test test/observer-raw.test.ts test/observer-claude.test.ts test/normalize.claude.test.ts` and `bun run typecheck`. Record actual results. Task 3 does not require Task 2's unintegrated files and does not own the full repository gate. Existing unrelated failures must be reported with their exact failing tests; do not alter V1 code to make this increment appear complete.
+- [x] **Step 6: Run the independent Claude task gate.** Run `bun test test/observer-raw.test.ts test/observer-claude.test.ts test/normalize.claude.test.ts` and `bun run typecheck`. Record actual results. Task 3 does not require Task 2's unintegrated files and does not own the full repository gate. Existing unrelated failures must be reported with their exact failing tests; do not alter V1 code to make this increment appear complete.
 
-- [ ] **Step 7: Commit.** Stage only Task 3 files. Use summary `feat: index Claude observer raw chronology` and a body describing UUID/call replay, no retroactive message bundling, block-specific results, SDK fixture provenance limits, and the absence of runtime activation. Do not skip hooks.
+- [x] **Step 7: Commit.** Stage only Task 3 files. Use summary `feat: index Claude observer raw chronology` and a body describing UUID/call replay, no retroactive message bundling, block-specific results, SDK fixture provenance limits, and the absence of runtime activation. Do not skip hooks.
 
 ## Review and subsequent integration boundary
 

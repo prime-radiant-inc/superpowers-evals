@@ -153,12 +153,65 @@ reproduced four such cases before the explicit object guard fixed them.
 A separate regression caught BOM stripping at a later physical line. The
 corrected contract passed scoped re-review before adapter implementation began.
 
-Codex and Claude adapters are running in independent worktrees against that
-fixed contract. Native Codex calls without a name retain their raw discriminant;
-this avoids inventing a normalized semantic label. If that choice proves awkward
-for reviewers, a later display mapping can use the retained complete payload.
-No adapter implementation or integrated completion is claimed by this interim
-receipt.
+Both adapters were implemented in independent worktrees against that fixed
+contract and passed their task reviews after targeted fixes:
+
+| Task | Integrated commits | Focused verification reported |
+| --- | --- | --- |
+| Shared raw contract | `ec069d5a`, `9b4b959f` | 29 passes, 101 assertions |
+| Codex raw index | `6a0e247b`, `097c970b` | 135 passes, 466 assertions including shared/V1 regressions |
+| Claude raw index | `7a12467e`, `bddd84ec` | 94 passes, 296 assertions including shared/normalizer regressions |
+
+Codex review found that local-shell and web-search calls dropped supplied native
+IDs, breaking replay/conflict detection and result linkage. Both variants now
+retain supplied IDs and otherwise use original-anchor IDs. Claude review found
+that a late sidechain marker rewrote earlier entries and that non-message
+envelopes could hide result metadata. Regressions reproduced those failures;
+the fixes preserve occurrence-time entries and reject the hidden metadata.
+Task re-reviews found those issues addressed. Final review resolved the minor
+ID-less web-search coverage note: the all-supported-variants test checks the
+anchor-derived ID and payload, and repeated fallback behavior is covered.
+
+Implementation decisions recorded during the slice:
+
+- Native calls without a name retain their raw discriminant. This avoids invented
+  semantic labels; a future display mapping may still be needed.
+- Each adapter builds its prefix from the same validated bytes and row count
+  rather than parsing twice. Two small assemblies could drift, so tests compare
+  their output with the shared prefix helper and use the same strict schema.
+- Mixed Claude text/result rows retain the observed external-origin claim, but
+  that claim never grants approval authority. Consumers must keep those distinct;
+  no Claude entry is eligible in this increment.
+- Later descendant evidence updates final source identity without changing prior
+  entry values. Consumers must check both final identity and occurrence-time
+  eligibility; the index does not manufacture earlier provenance.
+
+The integrated source at `097c970b` passed `bun run check`: lint/typecheck,
+3,597 core passes with 14 qualification skips and no failures (173.41 seconds),
+and 144 dashboard passes with no failures. `bun run quorum check` passed all
+88 checks and `git diff --check` was clean.
+
+Final whole-slice review then found that the installed Zod record parser drops
+valid own `__proto__` keys inside opaque raw payloads. It also found missing
+multibyte/CRLF coverage in the two adapter prefix-parity tests. The single fix wave at `de769cca` (worker `25754ed7`) validates opaque JSON
+without reconstructing it. Both adapters now test nested call/result own-key
+preservation and absence of prototype pollution; both prefix tests include
+multibyte UTF-8 and CRLF. Reported verification went from 50 passes/two expected
+failures to 52 passes/no failures; the covering observer suite passed all
+81 tests with 383 assertions. Lint and typecheck passed. Scoped re-review marked both findings addressed,
+with no new breakage or out-of-scope observations.
+
+Final integrated `bun run check` at `de769cca` exited successfully: lint/typecheck
+passed, core tests had 3,599 passes, the same 14 qualification skips and no
+failures (173.39 seconds), and dashboard tests had 144 passes and no failures.
+`bun run quorum check` passed all 88 checks, and `git diff --check` was clean.
+These final receipts supersede the earlier totals while retaining the negative
+review findings and regression history. All three raw-index plan tasks and
+the final review gate are complete. The modules remain inactive and offline;
+full observer support and the six-arm comparison remain unfinished. The Codex grammar deliberately rejects the complete
+checked-in slice at its first unsupported `turn_context` row; selected-row tests
+are shape evidence only. Nonempty reviewed suffixes are always rejected until a
+separate exact-build grammar is qualified.
 
 A concrete [Gauntlet termination design](../superpowers/specs/2026-09-05-gauntlet-observer-termination-design.md)
 proposes a Linux child-subreaper around the entire invocation. This cross-repo
@@ -172,8 +225,10 @@ during the continuation; tracking stays with the existing PRI-3097 record.
 Source tests, cross-repository Linux instrument tests, installed appliance proof,
 and paid model samples are distinct. Still required after foundation work:
 
-- V2 shared raw adapters/binding, portable finalization, strict scorer/readout,
-  authenticated independent-review sidecars, and dialect-aware observer workflow.
+- Runtime source discovery/binding, complete qualified raw grammar coverage,
+  portable finalization, strict scorer/readout, authenticated independent-review
+  sidecars, and dialect-aware observer workflow. The offline raw-index slice above
+  supplies the tested starting point for these consumers.
 - Pinned-build Claude traces covering replay, compaction, split blocks and
   parent/child identity; earlier-build traces alone do not qualify a new build.
 - Six-arm declarations and no-spend preflight of every credential projection,
