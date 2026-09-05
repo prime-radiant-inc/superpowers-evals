@@ -1,7 +1,8 @@
 # Campaign consolidation: one execution model, useful comparisons
 
 **Date:** 2026-09-04
-**Status:** direction approved by Drew; implementation and review in progress.
+**Status:** Tasks 1–9 implemented and reviewed; portable gate passed at `7c693999`.
+Final cross-cutting review and separate operational qualification remain pending.
 Resume/restart and coordinated subject lifecycle/error reporting are deferred.
 **Scope:** consolidation of the campaign kernel and appliance V2 roadmap.
 **Source baseline:** main `f8e1889c`; appliance work `65c28448` on
