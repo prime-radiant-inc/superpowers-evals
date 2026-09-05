@@ -122,7 +122,8 @@ export const ANTIGRAVITY_VISIBLE_LAUNCH_RECORD =
 // PATH probe for the agy binary, via Bun.which behind an injectable seam so the
 // hermetic gate (no agy on PATH) can stub it.
 type AgyWhichProbe = () => boolean;
-const defaultAgyWhich: AgyWhichProbe = () => Bun.which('agy') !== null;
+const defaultAgyWhich: AgyWhichProbe = () =>
+  Bun.which('agy', { PATH: getEnv('PATH') ?? '' }) !== null;
 let agyWhichProbe: AgyWhichProbe = defaultAgyWhich;
 
 /** Override the agy PATH probe (tests only). Pass null to restore the default. */

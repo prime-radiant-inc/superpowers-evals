@@ -98,7 +98,7 @@ function runChild(
         QUORUM_LIVE_SPEND_LOCK: SPEND_LOCK,
         QUORUM_HOST_STATS_PROBE_FIXTURE: HOST_STATS_FIXTURE,
 
-        PATH: `${mockGauntletDir(fixture)}:${process.env['PATH'] ?? ''}`,
+        PATH: `${mockGauntletDir(fixture)}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         AWS_BEARER_TOKEN_BEDROCK: 'bedrock-key-test',
         SUPERPOWERS_ROOT: mkdtempSync(join(tmpdir(), 'sproot-')),

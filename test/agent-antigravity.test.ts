@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -655,6 +656,33 @@ test('provision throws ProvisionError when agy is not on PATH', () => {
       expect(runner.calls.length).toBe(0);
     });
   } finally {
+    cleanup();
+  }
+});
+
+test('provision resolves agy from the current explicit PATH', () => {
+  const { home, cleanup } = makeTempHome();
+  const spRoot = makeSpRoot(home);
+  const bin = mkdtempSync(join(tmpdir(), 'agy-path-'));
+  const previousPath = process.env['PATH'];
+  try {
+    setAgyWhichForTesting(null);
+    process.env['PATH'] = bin;
+    withRoot(spRoot, () => {
+      const agent = new AntigravityAgent(ANTIGRAVITY_CONFIG);
+      expect(() =>
+        agent.provision(home, new FakeCommandRunner(happyResponder)),
+      ).toThrow('agy not found on PATH');
+      writeFileSync(join(bin, 'agy'), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(bin, 'agy'), 0o755);
+      expect(() =>
+        agent.provision(home, new FakeCommandRunner(happyResponder)),
+      ).not.toThrow();
+    });
+  } finally {
+    if (previousPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = previousPath;
+    rmSync(bin, { recursive: true, force: true });
     cleanup();
   }
 });

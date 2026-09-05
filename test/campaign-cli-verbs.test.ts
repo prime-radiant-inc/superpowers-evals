@@ -68,33 +68,32 @@ function git(dir: string, args: string[]): string {
   return res.stdout.trim();
 }
 
-/** A real tmp gauntlet checkout at one commit — $GAUNTLET_ROOT must point at
- * a git repo for register's ref resolution (R-REG-8). */
-function gauntletRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'gauntlet-repo-'));
-  git(dir, ['init', '-q']);
+/** Register resolves both source checkouts at main (R-REG-8). */
+function sourceRepo(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `${name}-repo-`));
+  git(dir, ['init', '-q', '-b', 'main']);
   git(dir, ['config', 'user.email', 't@t']);
   git(dir, ['config', 'user.name', 't']);
-  writeFileSync(join(dir, 'README.md'), 'gauntlet fixture\n');
+  writeFileSync(join(dir, 'README.md'), `${name} fixture\n`);
   // The snapshot's bun install --frozen-lockfile runs inside EVERY
   // checked-out tree, so the fixture needs a committed lockfile.
   writeFileSync(
     join(dir, 'package.json'),
-    JSON.stringify({ name: 'gauntlet-fixture', version: '0.0.0' }),
+    JSON.stringify({ name: `${name}-fixture`, version: '0.0.0' }),
   );
   const install = spawnSync('bun', ['install'], {
     cwd: dir,
     encoding: 'utf8',
   });
   if (install.status !== 0)
-    throw new Error(`gauntlet fixture bun install failed: ${install.stderr}`);
+    throw new Error(`${name} fixture bun install failed: ${install.stderr}`);
   git(dir, ['add', '.']);
   git(dir, ['commit', '-qm', 'fixture']);
   return dir;
 }
 
-const GAUNTLET_ROOT = gauntletRepo();
-const SUPERPOWERS_ROOT = mkdtempSync(join(tmpdir(), 'sproot-'));
+const GAUNTLET_ROOT = sourceRepo('gauntlet');
+const SUPERPOWERS_ROOT = sourceRepo('superpowers');
 
 /** The estimates artifact (the task-5d fixture shape, inside staleness). */
 function writeEstimates(dir: string): string {
