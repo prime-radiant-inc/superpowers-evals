@@ -46,6 +46,24 @@ test('container Dockerfile does not duplicate the base image harness layer', () 
   }
 });
 
+test('container Dockerfile routes /usr/bin/timeout to GNU coreutils before checking it', () => {
+  const source = dockerfileSource();
+
+  // The base image defaults to uutils coreutils and ships GNU coreutils with a
+  // `gnu` prefix; the campaign attempt deadline needs GNU timeout at the exact
+  // entrypoint path the spawner pins, so the build must re-route it first.
+  const divert = source.indexOf(
+    'dpkg-divert --local --rename --divert /usr/bin/timeout.uutils /usr/bin/timeout',
+  );
+  const link = source.indexOf('ln -s gnutimeout /usr/bin/timeout');
+  const check = source.indexOf(
+    "/usr/bin/timeout --version | grep -F 'timeout (GNU coreutils)'",
+  );
+  expect(divert).toBeGreaterThan(-1);
+  expect(link).toBeGreaterThan(divert);
+  expect(check).toBeGreaterThan(link);
+});
+
 test('container Dockerfile keeps the serf build pinned by SERF_REF', () => {
   const source = dockerfileSource();
 

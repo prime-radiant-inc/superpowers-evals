@@ -21,8 +21,13 @@ FROM ghcr.io/prime-radiant-inc/everyharness-container@sha256:de1026a0580ce2956ab
 # harness CLIs on PATH; the evals layers below rely on that inherited state.
 
 # The independent attempt deadline requires GNU timeout as init's direct child.
-# The immutable base digest pins the coreutils binary; fail the build if absent.
-RUN test -x /usr/bin/timeout \
+# The base image defaults /usr/bin to uutils coreutils and ships GNU coreutils
+# alongside with a `gnu` prefix, so route the pinned entrypoint path to the GNU
+# binary (diverting the uutils link the way dpkg expects), then fail the build
+# unless GNU timeout answers at that path.
+RUN dpkg-divert --local --rename --divert /usr/bin/timeout.uutils /usr/bin/timeout \
+  && ln -s gnutimeout /usr/bin/timeout \
+  && test -x /usr/bin/timeout \
   && /usr/bin/timeout --version | grep -F 'timeout (GNU coreutils)'
 
 ARG SERF_REF=0a459b633629cd034aa8a800c77bcd75a76496e8
