@@ -462,11 +462,13 @@ Private helpers reuse the existing greedy admission order and demand evaluator. 
 
 ## Task 8: Publish the comparison and all-attempt accounting report
 
-**Files:** Modify `src/campaign/report-evidence.ts`, `report.ts`, `seal.ts`, `src/contracts/campaign/report.ts`; create `test/fixtures/core-comparison/{campaign.json,transitions.json,evidence.json,expected-report.json}`; extend report/evidence tests.
+Completed through `1c70d4a4`; the full task review and scoped fix review are accepted. Reports preserve the literal fixed-denominator/matched-pair oracle, authenticated independent accounting, explicit named comparison roles and a single committed-prefix anchor. Sealing rederives the canonical report and complete evidence inventory before publication. The final task group reported 250 passing tests; the fix group reported 101 passing tests, with lint/typecheck and independent arithmetic/render inspection passing. Public helper wiring and the full portable gate remain Task 9.
+
+**Files:** Modify `src/campaign/report-evidence.ts`, `report.ts`, `report-publication.ts`, `seal.ts`, `src/contracts/campaign/report.ts`; create `test/fixtures/core-comparison/{campaign.json,transitions.json,evidence.json,expected-report.json}`; extend report/evidence tests.
 
 **Interfaces:** `readAttemptEvidence({resultsRoot, expectedIdentity, artifacts}): AttemptEvidence`, where `AttemptEvidence` contains observed outcome, Gauntlet judgment, checks, wall duration, role usage/cost, versions and field missingness. `foldComparisonReport({experiment, state, evidenceByAttempt}): ComparisonReport` is pure. `publishReport` freezes the canonical anchor; `renderReportMd` consumes that same JSON. Cost/usage types come from existing captured economics and `TokenUsage`.
 
-- [ ] Encode the worked fixture and literal expected numbers above. Include unaccepted orphan accounting, malformed field, absent price, changed identity and cross-block pairing tests. Do not derive expected values using the production aggregation functions.
+- [x] Encode the worked fixture and literal expected numbers above. Include unaccepted orphan accounting, malformed field, absent price, changed identity and cross-block pairing tests. Do not derive expected values using the production aggregation functions.
 
 ```ts
 test('cost pairs are matched per quantity', () => {
@@ -477,7 +479,7 @@ test('cost pairs are matched per quantity', () => {
 });
 ```
 
-- [ ] Run report/evidence tests; change joins from sample-only to execution-attempt identity. Validate each artifact before reading existing verdict/economics fields. A valid role subtotal survives another missing role, while corrupt identity invalidates the artifact. No read from raw transcripts or current pricing tables.
+- [x] Run report/evidence tests; change joins from sample-only to execution-attempt identity. Validate each artifact before reading existing verdict/economics fields. A valid role subtotal survives another missing role, while corrupt identity invalidates the artifact. No read from raw transcripts or current pricing tables.
 
 ```ts
 const pairs = selectedCoherentDeterminatePairs(experiment, state, evidenceByAttempt);
@@ -486,7 +488,7 @@ const costSummary = summarizeMatchedPairs(matched, (a) => a.subject_cost_usd);
 ```
 
 Private report helpers implement complete-pair selection, observed-value narrowing and arithmetic means; empty cohorts yield explicit missing summary with `n: 0`, never zero-valued averages. Account across all execution attempts separately.
-- [ ] Render the fixture JSON and Markdown, manually inspect counts/units/coverage/reasons/links, and independently calculate the golden totals. Permit interrupted prefix-bound reports; active status remains behavior-blind. Commit report and fixtures.
+- [x] Render the fixture JSON and Markdown, manually inspect counts/units/coverage/reasons/links, and independently calculate the golden totals. Permit interrupted prefix-bound reports; active status remains behavior-blind. Commit report and fixtures.
 
 ## Task 9: Complete the helper journey and remove retired runtime paths
 
@@ -569,3 +571,5 @@ Task 7 checkpoint: the sole-projection controller is complete through source `b8
 The main affected receipt was 380 passing tests, followed by 116- and 68-test passing affected groups. Fix regressions cover final-audit reserve telemetry, actual composer output, real harmless Gauntlet processes, strict publication, ambiguous exits, valid-result preservation, tamper and precedence. Lint/typecheck pass. The final expanded runner group is not green: 99 passed and two existing gauntlet-env integration cases timed out. A later isolated Claude/env diagnostic passed without identifying the cause; Copilot was not rerun. These are not proven unrelated and remain required Task 9 final-gate work. The scoped review records no open code findings while retaining this verification debt. Linux container, installed appliance and live provider proof remain unrun.
 
 Task 8 consumes campaignDir-relative immutable validity receipts and resultsRoot-relative attempt refs, with separate authentication. Runtime AttemptMonitor.startedAt is required and records the successful Docker-start receipt before follower startup. Publication mutation/durability failures have a typed retained-cause category consumed by controller and cancellation. Task 9 must preserve these reviewed producer contracts while removing the temporary budgeted runtime and wiring the public helper.
+
+Task 8 checkpoint: authenticated evidence and canonical comparison reporting are accepted at `1c70d4a4`. The independent review found and the scoped review confirmed fixes for caller-controlled seal measurements/inventory and missing named comparison roles. Active readouts hide behavioral data; interrupted visibility requires conclusive loss of the exact anchored process. Per-artifact corruption preserves independently authenticated artifacts, while failed manifest/identity invalidates publication. Partial known role spend remains visible without becoming complete matched cost. Raw bytes are authenticated before text decoding, and completed sealing uses the same final committed prefix plus the full rederived evidence inventory. The passing task/fix receipts do not close Task 7’s runner timeout debt or establish Linux/installed proof.
