@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   ts:
-    name: ts
+    name: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

@@ -67,7 +67,22 @@ together: Evals' existing CLI/Copilot fixtures and Gauntlet's new subprocess
 fixtures. The guard fixture also exposed a file-creation-before-write race in
 its completion signal; that signal is now atomic. Keep these failed receipts
 alongside subsequent results under the private `capture-repair/` evidence dir.
-Full merge qualification and final main SHAs are recorded when available.
+Local qualification: Gauntlet's complete `bun run check` passed 1,300 tests
+with 2 provider-key skips, including both typechecks and UI builds. Evals' core
+run passed 3,544 tests, skipped 2, and timed out in two existing CLI/Copilot
+fixtures while suites overlapped. Both affected files then passed all 37 tests
+when rerun. The dashboard check passed 144 tests; lint, typecheck, scenario
+validation and all 15 pricing probes passed. The actual cross-repository
+integration passed again from the main-based Evals integration branch.
+
+Main integration uses [Gauntlet PR 16](https://github.com/prime-radiant-inc/gauntlet/pull/16)
+and [Evals PR 47](https://github.com/prime-radiant-inc/superpowers-evals/pull/47).
+The Evals branch contains only this task's commits; the separate campaign-design
+commit and uncommitted kernel documents are excluded. Evals' main rules require
+a `test` status and one approving review. Its workflow's displayed job name is
+aligned with that required status; the actual check commands are unchanged.
+Linux CI and normal repository merge requirements govern landing these fixes.
+Final merged revisions belong in the next run's pinned manifest.
 
 No paid run was launched during this repair. Prior canonical receipts and the
 $4.7709727 observed estimate plus $10 cancellation reserve remain unchanged.
