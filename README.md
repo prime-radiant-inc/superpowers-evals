@@ -438,13 +438,19 @@ transcripts, credentials, tool calls, and filesystem state.
 These are the checks expected in CI and on routine PRs:
 
 ```bash
-bun run check          # biome ci . && tsc --noEmit && bun test — the full gate
+bun run check          # lint, typecheck, root tests and dashboard checks
 bun run quorum check   # validate every scenario directory
 ```
 
 `bun run check` is the single gate (Biome lint/format + full-strict `tsc` +
-`bun test`); individual steps are `bun run lint`, `bun run typecheck`, and
-`bun test`.
+root and dashboard tests); individual steps are `bun run lint`,
+`bun run typecheck`, and `bun run test`. Pass files or Bun test options through,
+for example `bun run test test/runner-unit.test.ts`.
+
+The test launcher gives each test invocation a private temporary directory outside Git
+checkouts, independent of inherited app temp paths. This keeps accumulated system
+temp entries from dominating Bun subprocess startup. Passing runs remove their
+scratch directory; failed or cancelled runs retain it and print its location.
 
 ## Architecture
 

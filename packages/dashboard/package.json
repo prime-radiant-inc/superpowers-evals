@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit && bun test",
-    "test": "bun test",
+    "check": "tsc --noEmit && bun run test",
+    "test": "bun ../../test/run.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
