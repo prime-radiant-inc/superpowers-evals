@@ -82,6 +82,10 @@ export const NEGATIVE_COVERED: {
   // that asserts passed:false AND negated:false against a real defect —
   // all in test/check-tool.test.ts unless noted otherwise.
   fs: [
+    // test/brainstorming-evidence.test.ts: 'real scenario setup and post checks
+    // preserve pass, fail, and missing-evidence outcomes' drives runPhase's real
+    // prelude/CLI and asserts a non-negated failure for missing execution choice.
+    'brainstorming-review',
     // 'E2E planted negative: baseline-manifest fails on a drifted worktree'
     'baseline-manifest',
     // 'E2E: file-exists miss exits 1 with a detail string'

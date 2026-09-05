@@ -11,6 +11,8 @@ import { repoRoot } from '../src/paths.ts';
 // decision — this frozen allowlist makes any silent (un)pin land RED instead of
 // quietly changing matrix coverage. Verified against the live scenarios dir on disk.
 const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
+  // PR 2258 pilot uses Codex rollout anchors and its xhigh config fragment.
+  'brainstorming-todo-shared-intent',
   'codex-windows-session-start-hook',
   'codex-subagent-wait-mapping',
   'codex-tool-mapping-comprehension',

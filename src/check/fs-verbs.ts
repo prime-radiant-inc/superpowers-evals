@@ -19,6 +19,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { envSnapshot, getEnv } from '../env.ts';
+import { scoreEvidenceDirectory } from '../experiments/brainstorming-evidence.ts';
 import { posixToJsRegex } from './regex.ts';
 
 /** A verb's verdict. `broken` routes through the non-invertible 127 band. */
@@ -340,6 +341,20 @@ export function verbCommandSucceeds(
   const combined = `${proc.stdout ?? ''}${proc.stderr ?? ''}`;
   const detail = combined.slice(0, 500).replace(/\n+$/, '');
   return fail(`exit non-zero: ${detail}`);
+}
+
+// An observer evidence error must compose indeterminate, not a subject failure.
+export function verbBrainstormingReview(
+  args: string[],
+  ctx: CheckContext,
+): CheckOutcome {
+  const runDir = ctx.env('QUORUM_RUN_DIR');
+  if (args.length || !runDir)
+    return broken('brainstorming-review needs QUORUM_RUN_DIR and no arguments');
+  const score = scoreEvidenceDirectory(join(runDir, 'brainstorming-evidence'));
+  const detail = JSON.stringify(score);
+  if (score.status === 'indeterminate') return broken(detail);
+  return score.status === 'pass' ? pass(detail) : fail(detail);
 }
 
 // ---------------------------------------------------------------------------
