@@ -435,7 +435,7 @@ These private functions are the steps inside `cancelCampaign`; each failure retu
 
 **Interfaces:** `runCampaignDispatch` consumes authenticated `Experiment`, `JournalWriter` with shared projection, compiled policy, `AttemptRuntime`, clock/sampler and cancellation signal. It returns a terminal/incomplete execution result. Remove `resumeAdmission` and `repairSnapshot`. Reuse `compareAdmissionOrder`, complete demand, pool spacing/latches, key selection, skew/contention evaluator and telemetry capture; policy is frozen, not rederived.
 
-- [ ] Write a deterministic fake-runtime session with a two-arm block, instrument failure, one whole-block reserve replacement and another never-started primary after cancellation. Assert each new attempt consumes a number/reserve; behavioral failure creates no retry; no replacement starts before every predecessor is dead and terminal transition committed.
+- [x] Write a deterministic fake-runtime session with a two-arm block, instrument failure, one whole-block reserve replacement and another never-started primary after cancellation. Assert each new attempt consumes a number/reserve; behavioral failure creates no retry; no replacement starts before every predecessor is dead and terminal transition committed.
 
 ```ts
 test('unknown price changes accounting, never admission', async () => {
@@ -446,7 +446,7 @@ test('unknown price changes accounting, never admission', async () => {
 });
 ```
 
-- [ ] Run the focused dispatch tests; replace local sample/reentry routing with reads from `writer.readProjection()`. Commit activation before effects; commit closure before release; commit replacement identity/selection/allowance in one transition.
+- [x] Run the focused dispatch tests; replace local sample/reentry routing with reads from `writer.readProjection()`. Commit activation before effects; commit closure before release; commit replacement identity/selection/allowance in one transition.
 
 ```ts
 const candidate = nextEligibleBlock(writer.readProjection(), frozenPolicy, clock.now());
@@ -457,8 +457,8 @@ if (candidate) {
 ```
 
 Private helpers reuse the existing greedy admission order and demand evaluator. They must not reconstruct a dispatcher after restart. The controller's single mutation queue rechecks fence/cancel before effects and after await boundaries.
-- [ ] Implement the qualified failure table, including permanent grader configuration/billing failure, invalid telemetry, uncertain death and ENOSPC. Preserve conservative outcomes for the subject producers Drew deferred. Remove dollar budget stops, amendments, in-flight dollar reservations and price gates from this path. Keep observed economics collection.
-- [ ] Run fake-clock fairness/cap/spacing and fault-cut tests. Confirm no behavior changes in the run-all scheduler. Commit the connected session.
+- [x] Implement the qualified failure table, including permanent grader configuration/billing failure, invalid telemetry, uncertain death and ENOSPC. Preserve conservative outcomes for the subject producers Drew deferred. Remove dollar budget stops, amendments, in-flight dollar reservations and price gates from this path. Keep observed economics collection.
+- [x] Run fake-clock fairness/cap/spacing and fault-cut tests. Confirm no behavior changes in the run-all scheduler. Commit the connected session.
 
 ## Task 8: Publish the comparison and all-attempt accounting report
 
@@ -563,3 +563,9 @@ Normal completion calls `completeControllerTermination` with the current control
 Attempt artifact references are `<runId>/<file>` relative to the configured shared `resultsRoot`, including the manifest. Control/process evidence references remain relative to `campaignDir`. The helper resolves and passes the shared root through controller, cancellation and report readers; it does not create campaign-local results or move old artifacts. Publication retains ENOSPC causes so cancellation stops the full inventory and records emergency evidence instead of reporting ordinary missing output.
 
 Report integration must also preserve partially priced role subtotals: existing captured usage can carry known cost with unpriced models. Keep that known spend in all-attempt accounting with incomplete coverage; it cannot participate as a complete role total in matched cost comparisons. This reads frozen values and flags, without repricing.
+
+Task 7 checkpoint: the sole-projection controller is complete through source `b8362d43` and scope amendment `c743789f`, with an independent task review and fresh scoped fix review. Final-audit replacement retains the live telemetry sampler until durable ended. Actual Gauntlet child code/signal is retained in strict frozen process_exit facts, and only the qualified no-result intrinsic-signal subset supports grader-crash replacement. The actual composer checks-stage producer supports check-manifest mismatch. Drew explicitly deferred coordinated subject lifecycle/error reporting; unsupported actor claims stay indeterminate without cause-derived retry or latch.
+
+The main affected receipt was 380 passing tests, followed by 116- and 68-test passing affected groups. Fix regressions cover final-audit reserve telemetry, actual composer output, real harmless Gauntlet processes, strict publication, ambiguous exits, valid-result preservation, tamper and precedence. Lint/typecheck pass. The final expanded runner group is not green: 99 passed and two existing gauntlet-env integration cases timed out. A later isolated Claude/env diagnostic passed without identifying the cause; Copilot was not rerun. These are not proven unrelated and remain required Task 9 final-gate work. The scoped review records no open code findings while retaining this verification debt. Linux container, installed appliance and live provider proof remain unrun.
+
+Task 8 consumes campaignDir-relative immutable validity receipts and resultsRoot-relative attempt refs, with separate authentication. Runtime AttemptMonitor.startedAt is required and records the successful Docker-start receipt before follower startup. Publication mutation/durability failures have a typed retained-cause category consumed by controller and cancellation. Task 9 must preserve these reviewed producer contracts while removing the temporary budgeted runtime and wiring the public helper.
