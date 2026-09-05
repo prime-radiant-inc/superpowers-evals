@@ -124,13 +124,13 @@ does not verify final absence after SIGKILL, and can treat process enumeration
 failure as an empty list. Gauntlet exit or stable transcript bytes therefore
 cannot establish the termination proof required by the amended spec.
 
-The evidence implementation must add an actual Gauntlet-owned, run-bound
-lifecycle/containment proof and have Evals validate it before successful observer
-finalization. A receipt wrapped around the existing unchecked shutdown is
-insufficient. Ambiguous or unproven ownership/termination remains unusable
-evidence. The host controller's container-stop proof is a separate acceptance gate.
-The five-second hard-kill grace remains unchanged; no partial bundle is published
-by omission or completed by hand.
+The initial proposed response was a Gauntlet-owned lifecycle supervisor. Drew
+challenged its complexity and approved a simpler replacement: retain candidate
+capture/scoring in the worker, then verify the bound source state against that
+candidate after the existing exact container-stop proof and before publication.
+The publisher refuses mismatches rather than repairing evidence. This supersedes
+the in-worker termination-proof requirement and retires the supervisor proposal
+before implementation. The five-second hard-kill grace remains unchanged.
 
 ## Raw observer and termination work
 
@@ -213,12 +213,38 @@ checked-in slice at its first unsupported `turn_context` row; selected-row tests
 are shape evidence only. Nonempty reviewed suffixes are always rejected until a
 separate exact-build grammar is qualified.
 
-A concrete [Gauntlet termination design](../superpowers/specs/2026-09-05-gauntlet-observer-termination-design.md)
-proposes a Linux child-subreaper around the entire invocation. This cross-repo
-runtime mechanism is pending Drew's architectural choice; raw indexing does not
-depend on accepting it. The existing Gauntlet checkout was read only, and its
-unrelated untracked files remain untouched. Linear returned an upstream 502
-during the continuation; tracking stays with the existing PRI-3097 record.
+The [Gauntlet termination proposal](../superpowers/specs/2026-09-05-gauntlet-observer-termination-design.md)
+was retired after Drew's simplification decision. The Gauntlet checkout was read
+only; its unrelated untracked files remain untouched. Linear returned an upstream
+502 during the earlier continuation; tracking stays with the existing PRI-3097
+record.
+
+## Final-state verification amendment
+
+Drew approved using the existing stopped-container publication boundary. Source
+inspection at `1b913a93` confirms that `publishExecution` requires the exact
+`inspected_stopped` identity before invoking `publishAttempt`, which verifies the
+manifest/inventory and atomically moves staging. The new evidence check belongs
+before that move. Its required source roots and observer expectation must come
+from trusted execution/binding data so a missing candidate cannot disable it.
+
+Candidate scoring remains provisional until full bound raw-log and terminal
+artifact inventories match the final source state. Late appends, changed bytes,
+source replacements, additions/deletions, unreadable state, and incomplete or
+missing candidates make evidence unusable. No host repair, manifest rewrite,
+rescoring or automatic replacement is allowed. Even a harmless late flush can
+therefore lose a sample; that explicit limitation is accepted instead of adding
+a process-management subsystem. Final-state equality does not prove absence of
+intermediate writes; live receipts and raw chronology still carry that evidence.
+
+Required targeted evidence includes unchanged publication, a deliberate late
+writer refused before rename, source/identity substitution, an added/deleted
+artifact, a hard-kill partial candidate, and copied-bundle replay after private
+source paths disappear. No source or live qualification of this amendment is
+claimed by this documentation update. The next [source plan](../superpowers/plans/2026-09-05-pr2258-final-state-verification.md)
+builds the shared filesystem capture/verification primitive as one task. Runtime
+activation stays with the complete V2 binding/candidate producer so an optional
+missing bundle cannot bypass the eventual publication check.
 
 ## Remaining qualification gates
 

@@ -4,7 +4,8 @@
 
 **Status:** Staff-panel reconciliation incorporated; Drew approved amendment and
 implementation on September 5. Installed qualification and paid execution remain
-separate gates.
+separate gates. Drew subsequently approved final source verification after
+container shutdown, replacing the proposed in-worker termination supervisor.
 
 **Source inspected:** Evals `672a0ad2580b75153e1a954ae3a8cad4c1e97b90`.
 
@@ -206,16 +207,47 @@ the selected raw transcript after presentation and before approval. Preserve
 distinct observations even when document bytes repeat. Raw mutation or replay
 cannot turn an old receipt into a later approval boundary.
 
-Finalization belongs to the runner and covers normal, error, cancellation, and
-stop paths; a hook reached only through post-checks is insufficient. In the worker,
-prove termination of the subject and owned descendants using exact process
-identity, then take the final artifact snapshot and freeze source evidence under
-`<run>/brainstorming-evidence/`. Stable consecutive reads prove byte stability,
-not process termination. The controller's existing journaled container-stop proof
-separately gates terminal acceptance; namespace death is not required before the
-worker writes its manifest. The post-check scores only those frozen source
-bytes and adds its derived score; the attempt manifest then authenticates the
-complete self-contained bundle. Include:
+The runner writes a candidate evidence bundle under
+`<run>/brainstorming-evidence/` on normal, error, cancellation, and stop paths;
+a hook reached only through post-checks is insufficient. Existing post-checks
+score only the candidate's frozen source bytes, and the attempt manifest
+covers that bundle and its derived score. Worker completion does not yet make
+that evidence authoritative.
+
+The campaign publisher first requires its existing exact inspected container-stop
+proof. Before moving staging or accepting any behavioral score, it re-reads the
+bound source state and verifies that the candidate matches the final state:
+
+- the exact bound parent and relevant descendant source inventory, identities,
+  full byte counts and hashes;
+- the complete bound terminal artifact inventory, including additions, deletions
+  and changed file bytes under the existing scope/exclusion rules;
+- the candidate's run/attempt binding and ordinary manifest authentication.
+
+The expected observer requirement and roots come from the pinned execution and
+runner binding, not from an optional candidate file. Omitting the candidate or a
+required source cannot bypass verification. Resolve sources only beneath those
+trusted attempt roots, refuse symlinks/replacements and missing or unreadable
+state, and never read or publish the whole credential-bearing home. Compare full
+source bytes, not merely the previously reviewed prefix. A late telemetry append
+also invalidates a candidate that did not capture it; the reviewer-suffix grammar
+cannot waive a mismatch against the final source state.
+
+On any mismatch, refuse publication and record unusable/missing evidence through
+the existing controller path. Do not repair the bundle, regenerate the score,
+rewrite the manifest, or buy a replacement attempt. On a match, the already
+computed score applies to the verified final bytes, so the existing publisher can
+publish the unchanged candidate. Publication is the final acceptance boundary.
+This is a final-state equality check, not a claim that no intermediate write ever
+occurred; raw chronology and live input receipts retain their separate duties.
+
+Use the existing campaign container boundary for this first comparison. Do not
+add a Gauntlet supervisor, process-ownership receipt protocol, delegated cgroup,
+or new runtime dependency. Standalone host runs cannot claim this campaign
+acceptance proof. Local filesystem tests exercise comparison/refusal behavior;
+actual Linux container tests qualify the shutdown boundary.
+
+The self-contained candidate bundle includes:
 
 - versioned source/attempt binding and adapter identity;
 - byte-faithful parent raw transcript and relevant linked descendant logs;
@@ -225,7 +257,7 @@ complete self-contained bundle. Include:
 - enough identity and hashes to reconstruct the same index and score offline.
 
 The actor review binds a complete raw prefix by byte count and digest.
-Finalization verifies every review/receipt prefix against the frozen raw bytes
+Candidate construction verifies every review/receipt prefix against the frozen raw bytes
 and retains the entire suffix. Accept a suffix only through a closed,
 per-dialect/build grammar of proven non-action records. Broad `event_msg` or
 `system` families are not sufficient: they can contain actions. Unknown or
@@ -238,8 +270,9 @@ The existing five-second hard-kill grace is unchanged. Finalization on a hard
 timeout is bounded best effort and cannot extend the deadline. Missing or partial
 evidence cannot be scored, synthesized, or completed by hand. Publication still
 requires a complete valid manifest and strict inventory; otherwise refuse it and
-record an explicit no-usable-result attempt. Test graceful termination and a
-wedged hard-kill path, including report missingness.
+record an explicit no-usable-result attempt. Test graceful termination, a late
+writer after candidate capture, and a wedged hard-kill path, including report
+missingness and proof that refusal leaves staging unpublished.
 
 The existing manifest and publisher authenticate these ordinary run artifacts.
 Do not publish the whole home, auth files, or credential projections. Raw evidence
@@ -452,6 +485,7 @@ Implementation is complete only when these contracts have evidence:
 | Descendant effects | Child user messages cannot approve; linked review evidence is retained; unresolved child writes cannot establish a pass. |
 | Parallel behavior | Six simultaneous fake-provider attempts include all three comparisons, keep evidence and credentials separate, and enforce complete subject/grader demand. Ordering tests exercise admission behavior rather than matching generated scripts. |
 | Real boundary | The actual Quorum/Gauntlet input path works for both dialects in Linux containers, including guard failure and portable publication. Tests conditionally skipped without `GAUNTLET_ROOT` or Linux Docker are explicitly run in this gate. |
+| Final-state acceptance | After exact container shutdown, unchanged candidate evidence publishes; appended logs, changed/replaced sources, added/deleted artifacts, missing bundles and hard-kill partial output refuse publication without repair. |
 | Termination | Existing cancellation and independent deadlines still terminate exact owned workers under concurrent load, including controller loss. Reuse qualified core tests and extend only uncovered integration cases. |
 | Reporting | Primary strict pair and unchanged composed cohorts have separate denominators; authenticated review coverage, conflicts, missingness, and cosmetic annotations never change sealed scores. |
 | Installed readiness | List fault isolation, exact runtime, separate grader secret, six-way capacity, served models and honest effort evidence, skill exposure, worker prices, and portable evidence verified on the appliance. |
