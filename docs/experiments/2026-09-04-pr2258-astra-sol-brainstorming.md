@@ -1,13 +1,12 @@
 # PR 2258: Astra and Sol brainstorming evaluation
 
-**Status:** Pilot paused after its first matched-attempt candidate exposed an
-observer stop-policy failure. Astra did not discover the learning purpose before
-writing a spec, but the observer approved that spec and continued. The run is
-retained as diagnostic evidence and excluded from the matched comparison. The
-remaining seven runs were not launched. Observer instructions have been clarified
-for review before any replacement runs. Mantle routing is verified; the $500
-allowance remains, with observed estimated usage of $1.6717225 across both
-cancelled attempts and the connectivity check, plus unrecorded in-flight usage.
+**Status:** Drew authorized restarting eight fresh pilot runs with the corrected
+observer under the existing $500 total allowance. The fresh Astra baseline is
+job-20260905T021332Z-bf8a, submitted at 02:13:32 UTC September 5. Runtime is
+pinned to a39346053ffb124f1f7b76e6a7f49f256623c083. Review the first Astra
+base/head pair before admitting the remaining six. Both previous cancellations
+remain excluded diagnostics; their observed usage and unresolved in-flight
+reserve remain inside the same budget. No matched effect estimate exists yet.
 
 **Question:** Does [Superpowers PR 2258](https://github.com/obra/superpowers/pull/2258)
 make Astra establish and preserve shared understanding through brainstorming,
@@ -747,3 +746,30 @@ only docker-init and sleep; guarded restoration then succeeded at 01:55:16 UTC.
 Original source refs, exact configuration bytes/mode, and pricing-file absence
 were restored; doctor passed with no run/sync locks. The isolated pilot bundle
 and frozen runtime remain available for the next authorized run.
+
+
+## Authorized restart with clarified observer
+
+Drew explicitly approved restarting with "go ahead" after reviewing the stopped
+candidate and observer correction. This authorizes eight fresh candidate slots,
+not an automatic replacement policy for subsequent failures. Preserve the first
+Astra pair gate, exact model/effort and skill revisions, serial admission, and
+complete accounting before each next run. Prior candidate files stay under
+sample-1/; new evidence lands in results/pri3097-pilot/observer-restart/.
+
+The observer runtime is a39346053ffb124f1f7b76e6a7f49f256623c083, privately
+staged from a Git bundle with SHA256
+343d56f997a175cda83da66a8f09cf6c8758762096c5791b9f4aef4c1d82e8b2.
+The appliance helper's prepare receipt resolved the exact runtime, baseline
+Superpowers fd02874aa5c55ba3c2bca431253b48e0e4c8be5a, Gauntlet
+fb34bcd03cc169f8841a2e4c8cf1d9173a229f18, existing Codex 0.146.0 image,
+and isolated credential bundle pri3097-mantle-20260905. Linux scenario
+validation, all 22 chronology tests, and all 15 pricing probes passed before
+submission. These checks do not establish live observer compliance.
+
+First submission: job-20260905T021332Z-bf8a, Astra r1 base, explicit Mantle
+grader anthropic.claude-sonnet-5. Before admission, observed estimated usage
+was $1.6717225 plus a conservative $10 unresolved-usage reserve within $500.
+The ledger preserves both earlier cancellations, the verification request, and
+the eight fresh slots. The current source revision for the run stays pinned
+even when this operational log receives later commits.
