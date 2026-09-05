@@ -21,9 +21,15 @@ test('the supported helper exposes the complete finite campaign journey', () => 
   ]);
 });
 
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { checkArmSuiteFiles } from '../src/campaign/arm-suite-check.ts';
 
 test('active configuration validation rejects historical budgeted suites', () => {
@@ -129,6 +135,120 @@ async function waitUntil(fn: () => boolean) {
     await Bun.sleep(20);
   }
 }
+
+function copyFrozenCampaign(source: string, target: string): void {
+  for (const name of [
+    'campaign.json',
+    'journal.db',
+    'journal.db-shm',
+    'journal.db-wal',
+  ]) {
+    const sourcePath = join(source, name);
+    if (existsSync(sourcePath)) copyFileSync(sourcePath, join(target, name));
+  }
+}
+
+test('campaign list isolates mixed unreadable entries without changing their documents', () => {
+  const f = helperFixture();
+  const registered = f.commands.register({ suite: f.suite, json: true });
+  const campaignsRoot = join(f.loaded.config.evals.path, 'campaigns');
+  const historicalDir = join(campaignsRoot, 'historical');
+  const malformedDir = join(campaignsRoot, 'malformed');
+  const corruptJournalDir = join(campaignsRoot, 'corrupt-journal');
+  const unsafeNameDir = join(campaignsRoot, 'unsafe entry');
+  for (const dir of [
+    historicalDir,
+    malformedDir,
+    corruptJournalDir,
+    unsafeNameDir,
+  ])
+    mkdirSync(dir);
+
+  const historicalPath = join(historicalDir, 'campaign.json');
+  const malformedPath = join(malformedDir, 'campaign.json');
+  const corruptJournalPath = join(corruptJournalDir, 'campaign.json');
+  const unsafeNamePath = join(unsafeNameDir, 'campaign.json');
+  writeFileSync(
+    historicalPath,
+    '{"schema_version":1,"campaign_id":"historical"}\n',
+  );
+  writeFileSync(malformedPath, '{broken json\n');
+  copyFileSync(
+    join(registered.campaignDir, 'campaign.json'),
+    corruptJournalPath,
+  );
+  writeFileSync(join(corruptJournalDir, 'journal.db'), 'not sqlite');
+  copyFileSync(join(registered.campaignDir, 'campaign.json'), unsafeNamePath);
+  symlinkSync(registered.campaignDir, join(campaignsRoot, 'linked'));
+
+  const documents = new Map(
+    [historicalPath, malformedPath, corruptJournalPath, unsafeNamePath].map(
+      (path) => [path, readFileSync(path)] as const,
+    ),
+  );
+
+  const rows = f.commands.list();
+  expect(
+    rows.some(
+      (row) =>
+        'campaign_id' in row &&
+        row.campaign_id === registered.experiment.campaign_id,
+    ),
+  ).toBe(true);
+  for (const selector of ['historical', 'malformed', 'corrupt-journal'])
+    expect(rows.find((row) => row.selector === selector)).toMatchObject({
+      state: 'unreadable',
+      reason: { code: 'invalid_campaign', message: expect.any(String) },
+    });
+  for (const selector of ['linked', 'unsafe entry'])
+    expect(rows.find((row) => row.selector === selector)).toMatchObject({
+      state: 'unreadable',
+      reason: { code: 'unsafe_path', message: expect.any(String) },
+    });
+  for (const [path, before] of documents)
+    expect(readFileSync(path)).toEqual(before);
+
+  expect(() =>
+    f.commands.status({ campaignSelector: '../escape', json: true }),
+  ).toThrow(/closed basename/);
+  expect(() =>
+    f.commands.status({ campaignSelector: 'linked', json: true }),
+  ).toThrow(/symlink/);
+});
+
+test('campaign list reads prefix-related basenames exactly while execution keeps ambiguous-prefix refusal', () => {
+  const f = helperFixture();
+  const registered = f.commands.register({ suite: f.suite, json: true });
+  const campaignsRoot = join(f.loaded.config.evals.path, 'campaigns');
+  const registeredSelector = basename(registered.campaignDir);
+  const brokenSelector = `${registeredSelector}-broken`;
+  const relatedSelector = `${registeredSelector}-related`;
+  const brokenDir = join(campaignsRoot, brokenSelector);
+  const relatedDir = join(campaignsRoot, relatedSelector);
+  mkdirSync(brokenDir);
+  mkdirSync(relatedDir);
+  writeFileSync(join(brokenDir, 'campaign.json'), '{broken json');
+  copyFrozenCampaign(registered.campaignDir, relatedDir);
+
+  const rows = f.commands.list();
+  expect(rows.filter((row) => 'campaign_id' in row)).toHaveLength(2);
+  expect(rows.find((row) => row.selector === brokenSelector)).toMatchObject({
+    state: 'unreadable',
+    reason: { code: 'invalid_campaign' },
+  });
+  expect(rows.map((row) => row.selector)).toEqual([
+    registeredSelector,
+    brokenSelector,
+    relatedSelector,
+  ]);
+  rmSync(brokenDir, { recursive: true });
+  expect(() =>
+    f.commands.status({
+      campaignSelector: registered.experiment.campaign_id,
+      json: true,
+    }),
+  ).toThrow(/ambiguous/);
+});
 
 test('campaign registration refuses an arm absent from isolated frozen intake without publishing or launching', () => {
   const f = helperFixture();
