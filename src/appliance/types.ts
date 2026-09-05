@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { ApplianceErrorCodeSchema } from './errors.ts';
 
+export const GraderModelSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/);
+
 // --- persisted credential request -------------------------------------------
 // The durable mirror of src/credentials/scope.ts. A job's credential authority
 // is persisted once, in the job record, and read back by preflight and the
