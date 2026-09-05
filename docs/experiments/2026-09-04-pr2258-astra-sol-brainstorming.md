@@ -2,7 +2,7 @@
 
 **Status:** The eight-run pilot is authorized with a $500 budget under
 [PRI-3097](https://linear.app/prime-radiant/issue/PRI-3097/evaluate-pr-2258-brainstorming-with-astra-and-sol),
-and paused after Drew requested provider verification. One admitted job was
+and paused for a grader-routing correction identified during verification. One admitted job was
 cancelled before any recorded Coding-Agent interaction; no behavioral sample
 is available. Both subject models are configured for the direct OpenAI
 Responses API, and the appliance key can retrieve both model IDs. Inference
@@ -599,3 +599,40 @@ UTC, the rehearsed restoration returned shared evals, Superpowers, config bytes
 and mode, and pricing-file absence to their recorded baseline. Doctor passed
 with no run/sync locks. The pilot remains paused; the $500 authorization is
 unchanged, and no replacement is silently added to the eight-attempt scope.
+
+
+## Mantle verification
+
+Drew authorized a provider verification after the pause. The blessed bundle
+contains a nonempty QUORUM_GRADER_ANTHROPIC_API_KEY distinct from its Bedrock
+credential, no grader base-URL alias, and no proxy override. The helper copies
+those aliases faithfully, and Gauntlet's SDK therefore selects the default
+Anthropic endpoint. This is a bundle/model-selection mismatch, not a dropped
+endpoint in the runner. No credential values were printed or changed.
+
+At 01:18:33 UTC September 5, a separate one-request connectivity check used the
+frozen Gauntlet client at fb34bcd03cc169f8841a2e4c8cf1d9173a229f18, the existing
+appliance Bedrock credential, and
+`https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages`.
+The request model was `anthropic.claude-sonnet-5`; HTTP 200 returned model
+`claude-sonnet-5` and reply OK. The real client's adaptive thinking and medium
+effort request settings were retained. The probe allowed no network retry or
+tool execution and held appliance mutation locks plus the live-spend lock.
+
+The returned usage is 33 input and four output tokens, no cache tokens, Standard
+service. The frozen pricing snapshot estimates $0.000106 with no unpriced
+models. This verification request is charged against the approved contingency,
+kept separate from the eight pilot attempts, and is not a behavioral sample.
+Private request/usage/cost receipts are in results/pri3097-pilot/ and the remote
+experiment directory. Doctor passed afterward with no run/sync locks; shared
+configuration, source revisions, and credential material were unchanged.
+
+Before resuming, the pilot needs the Mantle grader endpoint and credential
+aliases plus the prefixed request model, `anthropic.claude-sonnet-5`.
+The installed Phase 1 run helper has no grader-model option, while its Quorum
+runtime defaults to the bare `claude-sonnet-5` ID. Merely swapping credentials
+would not establish the verified request configuration. Use a pilot-specific
+bundle so the shared default and credential separation for other subject
+families are preserved, and expose the existing Quorum grader-model selection
+through the helper before freezing a replacement runtime. No such change or
+pilot restart occurred during this verification.
