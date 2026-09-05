@@ -228,6 +228,11 @@ recovery is required to expose this partial readout. Include validated cost
 observations independently of behavioral acceptance, and report missing
 accounting as missing instead of reconstructing an apparently complete run.
 
+Analytical acceptance requires the completed validity audit for the selected
+block. A durable raw observation with pending validity remains readable but
+is not yet usable analysis. Record positive audit completion and any later
+block invalidation explicitly; neither depends on replacement capacity.
+
 **Separate execution from analytical inclusion.** The primary sample inventory,
 frozen after eligibility, defines the planned slots and their denominator. A
 reserve block supplies replacement capacity; it adds no planned slots. Every

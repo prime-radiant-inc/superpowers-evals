@@ -25,25 +25,30 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
 });
 
-function fixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'input-capture-'));
-  dirs.push(dir);
+function fixture(campaign = false) {
+  const attempt = mkdtempSync(join(tmpdir(), 'input-capture-'));
+  dirs.push(attempt);
+  const dir = campaign ? join(attempt, 'staging', 'run') : attempt;
   const workdir = join(dir, 'coding-agent-workdir');
-  const logs = join(dir, 'home', '.codex', 'sessions');
-  mkdirSync(workdir);
+  const home = join(campaign ? attempt : dir, 'home');
+  const logs = join(home, '.codex', 'sessions');
+  mkdirSync(workdir, { recursive: true });
   mkdirSync(logs, { recursive: true });
   writeFileSync(join(workdir, 'README.md'), 'Empty app fixture');
   const evidence = join(dir, 'brainstorming-evidence');
   mkdirSync(evidence);
-  installInputCapture(workdir);
+  installInputCapture(workdir, home);
   const log = join(logs, 'main.jsonl');
   const spec = join(workdir, 'spec.md');
   const raw = `${JSON.stringify({ type: 'session_meta', payload: { id: 'parent', cwd: workdir, source: 'cli' } })}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Please review spec.md.' }] } })}\n`;
   return { dir, workdir, logs, evidence, log, spec, raw };
 }
 
-test('installed guard allows an unchanged fixture at startup and fails closed after log loss', () => {
-  const f = fixture();
+test.each([
+  false,
+  true,
+])('installed guard follows the selected subject home and fails closed after log loss (campaign=%s)', (campaign) => {
+  const f = fixture(campaign);
   const guard = join(f.dir, 'gauntlet-agent', 'tui-input-guard');
   const invoke = () =>
     spawnSync(guard, [], {

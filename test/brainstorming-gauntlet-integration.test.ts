@@ -29,8 +29,11 @@ test.skipIf(!gauntletRoot)(
         'scenarios',
         'brainstorming-todo-shared-intent',
       );
-      runSetup(scenarioDir, workdir);
-      const logDir = join(runDir, 'home', '.codex', 'sessions');
+      const codingAgentHome = join(runDir, 'home');
+      runSetup(scenarioDir, workdir, {
+        QUORUM_CODING_AGENT_HOME: codingAgentHome,
+      });
+      const logDir = join(codingAgentHome, '.codex', 'sessions');
       mkdirSync(logDir, { recursive: true });
       const rawLog = join(logDir, 'main.jsonl');
       const spec = join(workdir, 'spec.md');

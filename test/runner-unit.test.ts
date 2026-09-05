@@ -212,6 +212,7 @@ async function runWithMockGauntlet(
   scenarioDir: string,
   fixture: string,
   gauntletBin?: string,
+  campaignAttemptDir?: string,
 ): Promise<Awaited<ReturnType<typeof runScenario>>> {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const keys = [
@@ -233,6 +234,7 @@ async function runWithMockGauntlet(
       codingAgentsDir: REAL_CODING_AGENTS,
       outRoot,
       gauntletBin,
+      campaignAttemptDir,
     });
   } finally {
     for (const [k, v] of saved) {
@@ -245,7 +247,10 @@ async function runWithMockGauntlet(
   }
 }
 
-test('runner enables a scenario-installed input guard at the grader boundary', async () => {
+test.each([
+  false,
+  true,
+])('runner supplies the subject home to a scenario-installed input guard (campaign=%s)', async (campaign) => {
   const scenario = makeManifestScenario();
   writeFileSync(
     join(scenario, 'setup.sh'),
@@ -254,6 +259,7 @@ set -euo pipefail
 printf x > present.txt
 capture_run_dir="$(dirname "$QUORUM_WORKDIR")"
 mkdir -p "$capture_run_dir/gauntlet-agent"
+printf '%s' "$QUORUM_CODING_AGENT_HOME" > "$capture_run_dir/gauntlet-agent/subject-home"
 cat > "$capture_run_dir/gauntlet-agent/tui-input-guard" <<'GUARD'
 #!/bin/sh
 touch "$(dirname "$0")/input-captured"
@@ -270,10 +276,21 @@ exec bun '${join(MOCK_GAUNTLET_DIR, 'input-guard.ts')}' "$@"
 `,
     { mode: 0o755 },
   );
-  const { runDir } = await runWithMockGauntlet(scenario, 'pass', fake);
+  const attemptDir = campaign
+    ? mkdtempSync(join(tmpdir(), 'guard-attempt-'))
+    : undefined;
+  const { runDir } = await runWithMockGauntlet(
+    scenario,
+    'pass',
+    fake,
+    attemptDir,
+  );
   expect(existsSync(join(runDir, 'gauntlet-agent', 'input-captured'))).toBe(
     true,
   );
+  expect(
+    readFileSync(join(runDir, 'gauntlet-agent', 'subject-home'), 'utf8'),
+  ).toBe(join(attemptDir ?? runDir, 'home'));
 }, 30_000);
 
 test('campaign attempt execution routes agent and provenance home outside staging', async () => {

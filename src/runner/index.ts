@@ -1637,6 +1637,7 @@ async function runInnerBody(
     {
       QUORUM_REPO_ROOT: repoRoot(),
       QUORUM_CODING_AGENT: a.codingAgent,
+      QUORUM_CODING_AGENT_HOME: runHomeDir,
     },
     a.superpowers,
   );

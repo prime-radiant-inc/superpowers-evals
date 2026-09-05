@@ -417,7 +417,7 @@ The implementation consists of:
   and the explicit Responses credentials openai_responses_6astra and
   openai_responses_56sol. Both share the existing 15-slot credential limiter;
   that limit is not the pilot's proposed concurrency.
-- [Eight-run suite](../../suites/pr2258_brainstorming_pilot.yaml), with two
+- [Eight-run manifest](2026-09-04-pr2258-brainstorming-pilot.yaml), with two
   within-model comparisons, one scenario, and two repetitions per arm. The
   fixed grader is sonnet5_bedrock / anthropic.claude-sonnet-5.
 

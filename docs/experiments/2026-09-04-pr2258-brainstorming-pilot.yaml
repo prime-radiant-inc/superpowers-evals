@@ -1,3 +1,5 @@
+# Historical Phase 1 manifest for eight serial helper jobs, not a V2 campaign
+# suite. Preserve the launch order and manual admission in the experiment log.
 # Approved pilot: $500 total budget, no extra runs. Original todo reproduction,
 # two independent repetitions per arm, eight total subject runs. xhigh is
 # supplied identically by the scenario's codex.config.toml. See the experiment

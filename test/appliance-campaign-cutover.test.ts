@@ -130,6 +130,26 @@ async function waitUntil(fn: () => boolean) {
   }
 }
 
+test('campaign registration refuses an arm absent from isolated frozen intake without publishing or launching', () => {
+  const f = helperFixture();
+  try {
+    writeFileSync(
+      f.suite,
+      f.r.suiteRaw.replace('baseline: arm_a', 'baseline: missing_arm'),
+    );
+    expect(() => f.commands.register({ suite: f.suite, json: true })).toThrow(
+      /arm missing_arm is absent from arms\//,
+    );
+    expect(f.commands.list()).toEqual([]);
+    expect(existsSync(join(f.loaded.config.evals.path, 'campaigns'))).toBe(
+      false,
+    );
+    expect(f.launches()).toBe(0);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test('production command journey registers a fresh identity, gates one real controller, reads and seals its result', async () => {
   const f = helperFixture();
   const registration = f.commands.register({ suite: f.suite, json: true });

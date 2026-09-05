@@ -47,12 +47,19 @@ function statePath(workdir: string): string {
   return join(dirname(workdir), 'gauntlet-agent', 'input-capture-state.json');
 }
 
-export function installInputCapture(workdir: string): void {
+export function installInputCapture(
+  workdir: string,
+  codingAgentHome: string,
+): void {
   workdir = resolve(workdir);
   mkdirSync(dirname(statePath(workdir)), { recursive: true });
   writeFileSync(
     statePath(workdir),
-    JSON.stringify({ initial_files: inventory(workdir), raw_log: null }),
+    JSON.stringify({
+      initial_files: inventory(workdir),
+      raw_log: null,
+      coding_agent_home: resolve(codingAgentHome),
+    }),
     { flag: 'wx', mode: 0o600 },
   );
   // JSON string literals quote both the import path and workdir inside JS;
@@ -80,7 +87,7 @@ export interface InputObservation {
 
 export function readInputObservation(workdir: string): InputObservation {
   const state = JSON.parse(readFileSync(statePath(workdir), 'utf8'));
-  const root = join(dirname(workdir), 'home', '.codex', 'sessions');
+  const root = join(state.coding_agent_home, '.codex', 'sessions');
   const target = realpathSync(workdir);
   const matches = files(root)
     .filter((path) => path.endsWith('.jsonl'))

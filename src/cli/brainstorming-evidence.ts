@@ -16,14 +16,14 @@ function arg(index: number): string {
   return value;
 }
 try {
-  if (command === 'install' && args.length === 1) {
+  if (command === 'install' && args.length === 2) {
     const workdir = resolve(arg(0));
     const runDir = dirname(workdir);
     const context = join(runDir, 'gauntlet-agent', 'context');
     const evidence = join(runDir, 'brainstorming-evidence');
     mkdirSync(context, { recursive: true });
     mkdirSync(evidence, { recursive: true });
-    installInputCapture(workdir);
+    installInputCapture(workdir, arg(1));
     copyFileSync(
       new URL(
         '../../scenarios/brainstorming-todo-shared-intent/observer.md',
@@ -102,7 +102,7 @@ cannot establish a pass. Keep the original Gauntlet verdict and the audit sideca
       score.status === 'pass' ? 0 : score.status === 'fail' ? 1 : 127;
   } else {
     throw new Error(
-      'Usage: brainstorming-evidence.ts install WORKDIR | snapshot RAW_LOG ARTIFACT RECEIPT | index RAW_LOG | score EVIDENCE_DIR',
+      'Usage: brainstorming-evidence.ts install WORKDIR CODING_AGENT_HOME | snapshot RAW_LOG ARTIFACT RECEIPT | index RAW_LOG | score EVIDENCE_DIR',
     );
   }
 } catch (error) {
