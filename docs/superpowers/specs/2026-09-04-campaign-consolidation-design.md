@@ -1,8 +1,9 @@
 # Campaign consolidation: one execution model, useful comparisons
 
 **Date:** 2026-09-04
-**Status:** Tasks 1–9 implemented and reviewed; portable gate passed at `7c693999`.
-Final cross-cutting review and separate operational qualification remain pending.
+**Status:** Local implementation and final staff review complete; all findings
+corrected and re-reviewed. The full portable gate passed at `560ebeb1`.
+Separate Linux, installed-appliance and usability qualification remain pending.
 Resume/restart and coordinated subject lifecycle/error reporting are deferred.
 **Scope:** consolidation of the campaign kernel and appliance V2 roadmap.
 **Source baseline:** main `f8e1889c`; appliance work `65c28448` on
@@ -101,6 +102,19 @@ and dispatch consume the same map and the same complete demand vector,
 including both subject and grader use when they share a pool. Per-key limits
 remain subordinate constraints. No phase chooses the first matching arm or
 invents a different default.
+
+Current and prospective key grants share the resource identity `(logical pool,
+public key env name)`, independently of role credential projection. Reordered or
+overlapping alias inventories are valid when their derived per-key limits agree;
+registration rejects contradictory limits for the same shared key. This includes
+singleton API-key and bearer-key inventories. Secret values do not define pool
+identity.
+
+Retain the live resource floors and registered-versus-live CPU/memory fingerprint
+comparison under the current ownership fence before admission. Telemetry older
+than two sampler cadences refuses new work, including after slow preparation and
+at create/start boundaries. Loss of admission freshness does not revoke the
+authority needed to stop already owned work.
 
 **Bound work directly.** Freeze finite planned samples, replacement/reserve
 allowances, attempt-count limits, and per-attempt execution limits. A new
@@ -273,7 +287,12 @@ fully observed pairs. The first supported report contains:
 Use existing captured fields; extend capture only where a required quantity
 is absent. Do not introduce a second token-accounting implementation. Duration
 definitions are explicit: attempt wall time includes runner setup/drive/capture;
-campaign elapsed time is reported separately.
+campaign elapsed time is reported separately, from the frozen start claim through
+the committed ended transition. Later termination verification does not extend
+that interval. Missing endpoints produce an unknown duration, not an elapsed value
+that changes with the time of reading. Each descriptive mean uses its own available
+complete values among selected determinate samples; partial known cost remains in
+all-attempt accounting without becoming a complete-value mean.
 
 Sealing anchors immutable measurement data, inclusion decisions, and the
 versioned report fold. Missing costs can coexist with complete behavioral
@@ -281,6 +300,14 @@ execution. Cancelled or interrupted campaigns produce explicitly incomplete
 readouts. Sealing never certifies that the scenario's checks match its intent.
 Human formatting is derived from canonical data; changing presentation does
 not reinterpret or invalidate that data.
+
+Eligible provisional readouts publish immutable snapshots at
+`report-snapshots/<last_sequence>-<report_digest>/report.json` and `report.md`.
+Sequence and content digest distinguish both later journal prefixes and changed
+evidence availability at the same prefix. The campaign-root canonical files are
+reserved for completed, analytically complete, termination-verified publication
+and sealing. Inspecting an early prefix cannot occupy those final filenames or
+overwrite any earlier snapshot.
 
 An optional future decision module consumes these same rows and explicit
 analysis parameters. Parameters for a pre-registered analysis are frozen

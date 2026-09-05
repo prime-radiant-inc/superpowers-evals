@@ -10,7 +10,9 @@
 
 **Spec:** [Campaign consolidation design](../specs/2026-09-04-campaign-consolidation-design.md).
 
-**Tracking:** [PRI-2874](https://linear.app/prime-radiant/issue/PRI-2874/quorum-overhaul-campaign-platform-comparative-evals-as-configuration), selected by Drew, In Dev.
+**Tracking:** [PRI-2874](https://linear.app/prime-radiant/issue/PRI-2874/quorum-overhaul-campaign-platform-comparative-evals-as-configuration), selected by Drew, In Review.
+
+**Status:** Local implementation, final staff review and portable verification complete at `560ebeb1`. Task 10's Linux, installed-appliance and timed usability gates remain unperformed.
 
 ## Global Constraints
 
@@ -519,8 +521,9 @@ test('a changed comparison needs configuration only', async () => {
 
 **Interfaces:** No new feature. Produces separate receipts for portable contracts, Linux container boundary and installed appliance path.
 
-- [ ] Perform one narrow staff review of the final implementation against single launch, termination cuts, fixed denominators, matched comparison quantities and removed responsibilities. Fix concrete findings and rerun only affected checks before final full portable gates.
-- [ ] Record portable check results and exact integrated commit. Keep existing Linux fake runtime/provider fixtures. Test real runner setup/drive/capture in a Linux container with local fake provider; verify whole namespace death after killed controller, including daemonized signal-ignoring worker, and ownership retention on unknown runtime responses.
+- [x] Perform one narrow staff review of the final implementation against single launch, termination cuts, fixed denominators, matched comparison quantities and removed responsibilities. Fix concrete findings and rerun only affected checks before final full portable gates.
+- [x] Record portable check results and exact integrated commit. Preserve and typecheck the existing Linux fake runtime/provider fixtures; record their execution separately.
+- [ ] Test real runner setup/drive/capture in a Linux container with local fake provider; verify whole namespace death after killed controller, including daemonized signal-ignoring worker, and ownership retention on unknown runtime responses.
 
 ```sh
 bun test test/linux/campaign-attempt-docker.test.ts
@@ -529,7 +532,7 @@ bun test test/linux/campaign-attempt-docker.test.ts
 This command belongs on the explicitly selected Linux environment with Docker access and the pinned test image. Do not silently run it through Docker Desktop or switch to a remote host. If that environment is not authorized/available, mark Linux proof pending and present the concrete command/image/expected checks for Drew's final operational approval after local work is reviewable.
 - [ ] On the prepared appliance, time one maintainer's changed supported question from blank editor to accepted registration; target under 30 minutes, record setup time separately. A unit-test fixture is not that usability measurement.
 - [ ] Only after separate operational authorization, run a small installed comparison and record artifact/report identities, role cost coverage, elapsed time and failures. Do not use a paid run to compensate for missing local fault tests. Do not drain/retire V1 or migrate artifacts as part of the coding task.
-- [ ] Final readout states what is implemented, which checks ran, what remains unverified, and the surviving responsibilities. Never claim eight-hour workload readiness from simulation or the old sentinel run.
+- [x] Final readout states what is implemented, which checks ran, what remains unverified, and the surviving responsibilities. Never claim eight-hour workload readiness from simulation or the old sentinel run.
 
 ## Plan self-review and progress
 
@@ -577,3 +580,9 @@ Task 8 checkpoint: authenticated evidence and canonical comparison reporting are
 Task 9 checkpoint: the canonical seven-verb helper journey, checked comparison examples, V1 runtime removal and retained-test mapping are accepted at `7c693999`. The independent task review found lost registration eligibility/directive coverage and incorrect generic show guidance; the scoped fix review accepted the compact V2 matrix, actual frozen-source directive tests, command correction and test-only diagnostics with no new findings. The full portable gate on the frozen source passed: lint/typecheck, 3403 root tests (13 platform skips, 19387 assertions) and 144 dashboard tests. Scenario/config validation and the actual macOS fake CLI smoke also pass. Two earlier full-gate timeouts and the separate registration/operator/environment negatives remain documented with no established cause or repair claim.
 
 The removal preserves direct development execution, Phase 0 analysis and shared runner, capture, credential, identity, storage and admission responsibilities. Report publication/sealing belongs to the report command. Active presets use a separately keyed direct Anthropic grader with conservative declared capacities; this changes the route and is not throughput or numerical-continuity proof. The converted full-runner Linux fixture is source-prepared only. Final cross-cutting review and Linux/installed/usability qualification remain Task 10; see `docs/experiments/2026-09-04-core-comparison-validation.md` for exact receipts and the separate Linux gate.
+
+Task 10 local checkpoint: the final cross-cutting staff review recommends keeping the foundation and found four Important defects plus one Minor Linux-fixture defect. The corrections restore admission resource/fingerprint/freshness guards, count key grants across shared-pool aliases, preserve immutable provisional report snapshots without blocking final sealing, and complete per-arm descriptive/accounting and campaign-elapsed output. The Linux assertion now uses V2 runtime bindings. Root's independent arithmetic/render inspection also corrected one inherited synthetic missing-publication annotation. Fresh scoped review accepted all six findings with no new findings; no further broad review was needed.
+
+The final source is `560ebeb1ece1501ddd136db4a74a82219d8bc2bf`. Its focused correction receipt has 188 pass, 12 Linux skips and 908 assertions; the final fixture-only check has 11 pass and 55 assertions. The final full portable gate ran on clean, frozen source and exited zero: lint/typecheck, 3423 root tests (13 skips, 19509 assertions, 364.85s) and 144 dashboard tests (393 assertions, 1.088s). Logs and trace hashes are retained locally. Earlier subprocess stalls remain unexplained; no timeout increase or automatic retry was added.
+
+Local implementation and review are complete. Task 10's actual Linux fixture, installed helper/paid comparison, real lease timing and timed maintainer usability remain unperformed. Supported comparison configuration and shared reporting are implemented, but under-30-minute setup and same-workday/eight-hour readiness remain measurements to obtain. Resume/restart and coordinated subject reporting remain deferred. The dated validation record is the final local readout; no deployment, artifact migration, push or merge is implied by this checkpoint.

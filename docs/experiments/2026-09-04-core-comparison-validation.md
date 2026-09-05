@@ -4,9 +4,10 @@
 
 **Tracking:** [PRI-2874](https://linear.app/prime-radiant/issue/PRI-2874/quorum-overhaul-campaign-platform-comparative-evals-as-configuration)
 
-**Status:** Tasks 1–9 implemented and reviewed; full portable gate passed. The final
-cross-cutting staff review is pending. Linux, installed-appliance, paid comparison
-and timed usability checks remain unperformed.
+**Status:** Local implementation and final staff review complete; all final review
+findings corrected and independently re-reviewed. The full portable gate passed on
+`560ebeb1`. Linux, installed-appliance, paid comparison and timed usability checks
+remain unperformed.
 
 ## Question and scope
 
@@ -36,6 +37,11 @@ They cannot resume dispatch under the old identity.
 - Task 9 initial source: `33acfd66dbb906ae0e4a77ec3c257143081dafcf`.
 - Accepted Task 9 source: `7c693999afda04033b10aaae0ddd19933d891a81`.
 - Task 9 base: `401d9f34f71b76ca39204d39badec86eaf30554c`.
+- Final reviewed checkpoint/correction base: `0c42cf7728b026b083423ca99e2c48436d02b463`.
+- Final correction commits: `31e784b302a1d4245d32e1faa241a38a421f6eaf` and
+  `560ebeb1ece1501ddd136db4a74a82219d8bc2bf`.
+- Accepted executable/test source: `560ebeb1ece1501ddd136db4a74a82219d8bc2bf`;
+  the final plan/spec/validation checkpoint is documentation only.
 - Local runtime: Bun 1.3.14 on macOS. No Docker, remote or installed-appliance
   operation was performed. No existing campaign/results artifacts were migrated.
 
@@ -43,7 +49,8 @@ Task-specific reports, review findings and full logs are retained locally under
 `.superpowers/sdd/2026-09-04-core-comparison/`. Task 9's report includes exact deleted
 paths, retained responsibilities, replacement/rejection coverage and external test
 seams. This record summarizes those receipts; overlapping test groups must not be
-added into a unique-test total. Final cross-cutting review remains pending.
+added into a unique-test total. The final review, scoped correction review, literal
+report oracle and final gate receipts are retained there as Task 10 artifacts.
 
 ## Implemented core
 
@@ -51,11 +58,11 @@ added into a unique-test total. Final cross-cutting review remains pending.
 |---|---|
 | Work definition | Strict finite experiment/suite, independent campaign UUID and deterministic input digest; primary slots fix planned denominators |
 | Execution authority | Atomic journal groups and one fold; one consumed start; private gated controller; exact process/worker identity; durable host claim |
-| Admission | Whole-block subject/grader/global demand against frozen pool policy; finite attempts/reserves/deadlines; price does not decide inclusion |
+| Admission | Whole-block subject/grader/global demand against frozen pool policy; shared pool/key grants; live resource/fingerprint and telemetry freshness guards; finite attempts/reserves/deadlines; price does not decide inclusion |
 | Attempt boundary | Prepared private authority and selected credential registry outside writable output; exact container inspection; independent deadline; publication after proven namespace death |
 | Loss and cancellation | Durable cancel intent, full inventory settlement, unknown-state ownership retention; no adoption, replacement controller or continuation |
-| Measurement | Immutable accepted observations, positive validity evidence, coherent matched quantities, fixed denominators and separate all-attempt role costs/missingness |
-| Readout | Shared status/cost/report readers; active behavior hidden; canonical report and complete evidence inventory rederived before sealing |
+| Measurement | Immutable accepted observations, positive validity evidence, coherent matched quantities, fixed denominators, determinate per-arm summaries, all-attempt arm/role costs and separate elapsed time |
+| Readout | Shared status/cost/report readers; active behavior hidden; immutable provisional snapshots; final canonical report and complete evidence inventory rederived before sealing |
 | Operator path | `campaign register/list/status/run/cancel/costs/report`; generic job receipts cannot override campaign authority; four checked configuration examples |
 
 Retired responsibilities include dollar admission/priceability gates, budget amendments,
@@ -80,6 +87,9 @@ Historical artifacts have no runtime compatibility reader in this increment.
 | Full check 1 | Final Task 9 executable source | Lint/typecheck pass; 3388 pass, 13 skip, 1 fail; 19321 assertions; 241 files; 422.83s; exit 1 |
 | Full check 2 | Final Task 9 executable source | Lint/typecheck pass; 3388 pass, 13 skip, 1 fail; 19322 assertions; 241 files; 343.55s; exit 1 |
 | Full check after review fixes | `7c693999`; `QUORUM_TEST_TRACE_ROOT=/tmp/task9-fix1-full-traces bun run check` | Exit 0; lint/typecheck pass; root 3403 pass, 13 skip, 0 fail; 19387 assertions; 242 files; 349.87s; dashboard 144 pass, 0 fail, 393 assertions, 1.085s |
+| Final correction focused group | `31e784b3` | 188 pass, 12 Linux skips, 0 fail; 908 assertions; 13 files; 46.82s; lint/typecheck and 85 scenarios plus registries pass |
+| Final fixture correction | `560ebeb1` | 11 report tests pass, 0 fail; 55 assertions; 87ms; regenerated single-arm rendering inspected |
+| Final full portable gate | `560ebeb1`; `QUORUM_TEST_TRACE_ROOT=/tmp/task10-fix1-full-traces bun run check` | Exit 0; lint/typecheck pass; root 3423 pass, 13 skip, 0 fail; 19509 assertions; 242 files; 364.85s; dashboard 144 pass, 0 fail, 393 assertions, eight files, 1.088s |
 | Separate dashboard check | `cd packages/dashboard && bun run check` | Typecheck and 144 tests pass; 393 assertions; eight files; 1.09s |
 | Scenario/config validation | `bun run quorum check` | 85 scenarios plus credentials and arms/suites pass |
 | Real local fake CLI smoke | `bun test test/cli-run-superpowers.test.ts -t '^--no-superpowers: provenance null'` | 1 pass, 4 assertions, 2.75s; actual macOS CLI/setup/capture/verdict with fake commands/keys |
@@ -106,6 +116,52 @@ preparation-produced authority/registry, publisher, readers and seal. External w
 effects, host probe and controller time are fake. An internal launch dependency selects
 the test fixture while asserting the production target remains fixed. These are useful
 portable contracts, not execution of the production container entrypoint on Linux.
+
+## Final review and architectural judgment
+
+Keep this foundation. The retained runner, checks, provisioning and capture remain
+the useful execution substrate. One atomic execution history, finite controller and
+common report fold replace competing campaign lifecycle paths. Frozen public inputs,
+private attempt authority, ownership records and published evidence have distinct
+responsibilities; collapsing them would recreate ambiguity about who may launch
+work and which outcomes belong in a comparison. This is a sound evolution, not a
+promise that no further implementation increment will be needed.
+
+The final cross-cutting review covered the integrated baseline through `0c42cf77`
+and found four Important defects and one Minor fixture defect, with no Critical
+finding. Its corrections are local to the intended boundaries:
+
+| Finding | Accepted correction and meaningful check |
+|---|---|
+| An early report occupied immutable final filenames and blocked later publication | Eligible provisional reports use `report-snapshots/<last_sequence>-<report_digest>/`; final filenames remain available for a completed, complete, termination-verified seal. Public command tests cover loss/report/cancel/report and ended/report/termination/seal while preserving earlier bytes. |
+| Retained host checks had lost their admission callers | Live resource floors and frozen/live hardware fingerprint comparison run before admission; freshness is checked after slow preparation and at create/start boundaries. Controller tests refuse changed hardware, below-floor resources and stale telemetry, while cleanup remains authorized. |
+| Credential aliases sharing a quota pool could overuse one key | Current and prospective grants share `(logical pool, public key env)` loads. Registration permits reordered or overlapping inventories with consistent derived key limits and rejects contradictory limits. Actual concurrent grants in the four-alias case stay at two per key. |
+| Reports lacked required per-arm summaries, arm accounting and campaign elapsed time | The existing fold/schema/renderer now provide determinate rates, independent complete-value means/counts, every attempt's arm accounting and start-claim-to-ended elapsed time. Existing matched cohorts remain unchanged. |
+| The Linux fixture expected a retired journal event | It now checks V2 `runtime_bound` identities and runtime-spec digests against the projection; execution remains unrun on Linux. |
+
+Root's independent arithmetic/render inspection found one additional Minor fixture
+annotation error: a valid synthetic publication retained its inherited missing-
+publication reason. The one-line fixture correction clears that reason while
+preserving partial cost and independent token missingness. The single-arm oracle
+has a determinate pass rate of 1/2, subject cost mean 5 across two samples, grader
+cost mean 1 across one complete sample, all-attempt subject cost 110 and known grader
+cost 10.5 with only two of three grader costs complete. Campaign elapsed is 24 seconds;
+overlapping attempt wall times total 40 seconds. Literal arithmetic was computed
+independently of the production fold and both generated Markdown fixtures inspected.
+
+Fresh scoped review accepted all six corrections with no new Critical, Important or
+Minor finding. The final full gate then ran on clean, frozen `560ebeb1` and exited
+zero; no source or HEAD change occurred during it. Its original log is
+`/tmp/task10-fix1-full-check.log`, with external traces under
+`/tmp/task10-fix1-full-traces`. Copies, 24 trace files and a SHA-256 receipt are retained
+in `task-10-fix-1-logs/` under the local task evidence directory. Log SHA-256:
+`bbb639ea03cfdbcc5b5dfe327c437276e1d5b4c87f3259d63ff1f3a4a5c7784d`.
+
+This closes local code/review acceptance. Supported refs, harnesses, model/endpoint
+credentials and skill presence are configuration inputs; single-arm and matched
+reports no longer require a separate extractor. The remaining usability and same-
+workday speed claims need the operational measurements below. Resume/restart and
+coordinated subject error reporting remain deferred by Drew.
 
 ## Negative results and unresolved failures
 
@@ -151,7 +207,17 @@ Concrete Task 9 integration defects did receive regressions and corrections:
 - A missing configured results directory was a fixture defect; creating it did not
   weaken publisher storage-error handling.
 - Alias-local key capacity could exceed the frozen aggregate pool policy. Selection
-  now consumes the aggregate capacity, with least-load/tie/exhaustion coverage retained.
+  consumes the aggregate capacity, with least-load/tie/exhaustion coverage retained.
+  The final review additionally found the separate alias-local load-accounting gap;
+  the shared pool/key correction above closes that gap.
+
+The final correction round also exposed test-fixture mistakes. Adding the live
+preflight probe advanced a fake clock twice and made missing telemetry overlap
+zero-duration attempts; the fixture now keeps preflight sampling instantaneous,
+without relaxing production validity. A new alias regression initially lacked
+required frozen refs. Both fixtures were corrected before their covering green
+receipts. A Bun matcher type mismatch was corrected with a direct byte-equality
+assertion. These explained failures do not explain any historical subprocess stall.
 
 Immediate cancellation after exact controller death still refuses a fresh live-spend
 lease until its 150-second stale threshold. The portable test first asserts refusal,
@@ -185,7 +251,8 @@ binding and uncertain-client cuts; they do not alone prove the real runner bound
 After separate authorization, use an explicitly selected actual Linux amd64 host,
 Docker, the final committed evals source, Bun at the repository floor, and a selected
 pinned Gauntlet checkout. The fixture requires the canonical image ID to match
-`superpowers-evals:local`. Source was checked at `33acfd66`; no host or digest has
+`superpowers-evals:local`. Fixture source and types were checked through `560ebeb1`;
+all 12 Linux cases were skipped in the focused macOS receipt. No host or digest has
 been selected or built here.
 
 ```sh
