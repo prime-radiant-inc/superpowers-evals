@@ -21,9 +21,9 @@ const common = {
   isSidechain: false,
   parentUuid: null,
 };
-const bytes = (rows: unknown[]) =>
+const bytes = (rows: unknown[], lineEnding = '\n') =>
   new TextEncoder().encode(
-    `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+    `${rows.map((row) => JSON.stringify(row)).join(lineEnding)}${lineEnding}`,
   );
 
 function evidenceError(operation: () => unknown): ObserverEvidenceError {
@@ -220,6 +220,70 @@ test('calls and results retain complete physical payloads at occurrence anchors'
       approval_eligibility: 'unresolved',
     },
   ]);
+});
+
+test('call and result payloads preserve nested own __proto__ keys', () => {
+  const callInput = JSON.parse(
+    '{"nested":{"__proto__":{"call_marker":"kept"}}}',
+  );
+  const toolUseResult = JSON.parse(
+    '{"nested":{"__proto__":{"result_marker":"kept"}}}',
+  );
+  const index = indexClaudeTranscript(
+    source,
+    bytes([
+      {
+        ...common,
+        uuid: 'call-row',
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'proto', name: 'Read', input: callInput },
+          ],
+        },
+      },
+      {
+        ...common,
+        uuid: 'result-row',
+        type: 'user',
+        toolUseResult,
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'proto', content: 'done' },
+          ],
+        },
+      },
+    ]),
+  );
+  const callEntry = index.entries[0];
+  const resultEntry = index.entries[1];
+  if (callEntry?.kind !== 'call' || resultEntry?.kind !== 'result') {
+    throw new Error('Expected indexed call and result entries.');
+  }
+
+  const indexedCallInput = (callEntry.payload as { input: typeof callInput })
+    .input;
+  const indexedToolUseResult = (
+    resultEntry.payload as { tool_use_result: typeof toolUseResult }
+  ).tool_use_result;
+  expect(Object.hasOwn(indexedCallInput.nested, '__proto__')).toBe(true);
+  expect(
+    Object.getOwnPropertyDescriptor(indexedCallInput.nested, '__proto__')
+      ?.value,
+  ).toEqual({ call_marker: 'kept' });
+  expect(Object.hasOwn(indexedToolUseResult.nested, '__proto__')).toBe(true);
+  expect(
+    Object.getOwnPropertyDescriptor(indexedToolUseResult.nested, '__proto__')
+      ?.value,
+  ).toEqual({ result_marker: 'kept' });
+  expect(Object.getPrototypeOf(indexedCallInput.nested)).toBe(Object.prototype);
+  expect(Object.getPrototypeOf(indexedToolUseResult.nested)).toBe(
+    Object.prototype,
+  );
+  expect(({} as { call_marker?: unknown }).call_marker).toBeUndefined();
+  expect(({} as { result_marker?: unknown }).result_marker).toBeUndefined();
 });
 
 test('tool-use and result identities replay directly or reject conflicts', () => {
@@ -745,7 +809,7 @@ test('appending supported rows does not change earlier indexed entries', () => {
       uuid: 'prompt',
       userType: 'external',
       type: 'user',
-      message: { role: 'user', content: 'Review this.' },
+      message: { role: 'user', content: 'Réview this. 🧪' },
     },
     {
       ...common,
@@ -792,8 +856,8 @@ test('appending supported rows does not change earlier indexed entries', () => {
       },
     },
   ];
-  const prefix = indexClaudeTranscript(source, bytes(rows.slice(0, 2)));
-  const fullRaw = bytes(rows);
+  const prefix = indexClaudeTranscript(source, bytes(rows.slice(0, 2), '\r\n'));
+  const fullRaw = bytes(rows, '\r\n');
   const full = indexClaudeTranscript(source, fullRaw);
 
   expect(full.entries.filter((entry) => entry.anchor.line <= 2)).toEqual(

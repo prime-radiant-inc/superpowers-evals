@@ -152,16 +152,52 @@ export const SourceIdentitySchema: z.ZodType<SourceIdentity> = z
   })
   .strict();
 
-const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.boolean(),
-    z.number().finite(),
-    z.string(),
-    z.array(JsonValueSchema),
-    z.record(JsonValueSchema),
-  ]),
-);
+function isJsonValue(
+  value: unknown,
+  ancestors = new Set<object>(),
+): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'string'
+  ) {
+    return true;
+  }
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || ancestors.has(value)) return false;
+
+  ancestors.add(value);
+  let valid: boolean;
+  if (Array.isArray(value)) {
+    valid = Reflect.ownKeys(value).length === value.length + 1;
+    for (let index = 0; valid && index < value.length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      valid =
+        descriptor?.enumerable === true &&
+        Object.hasOwn(descriptor, 'value') &&
+        isJsonValue(descriptor.value, ancestors);
+    }
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    valid =
+      (prototype === Object.prototype || prototype === null) &&
+      Reflect.ownKeys(value).every((key) => {
+        if (typeof key !== 'string') return false;
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        return (
+          descriptor?.enumerable === true &&
+          Object.hasOwn(descriptor, 'value') &&
+          isJsonValue(descriptor.value, ancestors)
+        );
+      });
+  }
+  ancestors.delete(value);
+  return valid;
+}
+
+const JsonValueSchema: z.ZodType<JsonValue> = z.custom<JsonValue>(isJsonValue, {
+  message: 'Expected a finite JSON value.',
+});
 
 const RawEntrySchema: z.ZodType<RawEntry> = z.discriminatedUnion('kind', [
   z

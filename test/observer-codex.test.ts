@@ -18,8 +18,10 @@ const source: RawSource = {
 };
 
 const encode = (text: string) => new TextEncoder().encode(text);
-const bytes = (rows: unknown[]) =>
-  encode(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`);
+const bytes = (rows: unknown[], lineEnding = '\n') =>
+  encode(
+    `${rows.map((row) => JSON.stringify(row)).join(lineEnding)}${lineEnding}`,
+  );
 const anchor = (line: number, block: number | null = null) => ({
   source_id: 'main',
   line,
@@ -99,9 +101,19 @@ test('empty input returns a valid unresolved index', () => {
 });
 
 test('full physical scripts stay intact and results stay later', () => {
-  const prefixBytes = bytes([meta, call]);
+  const unicodeCall = {
+    ...call,
+    payload: {
+      ...call.payload,
+      input: 'await tools.exec_command({cmd:"printf café 🧪"});',
+    },
+  };
+  const prefixBytes = bytes([meta, unicodeCall], '\r\n');
   const prefix = indexCodexTranscript(source, prefixBytes);
-  const full = indexCodexTranscript(source, bytes([meta, call, result, call]));
+  const full = indexCodexTranscript(
+    source,
+    bytes([meta, unicodeCall, result, unicodeCall], '\r\n'),
+  );
 
   expect(prefix.prefix).toEqual(createRawPrefix(source, prefixBytes));
   expect(full.entries.filter((entry) => entry.anchor.line <= 2)).toEqual(
@@ -114,7 +126,7 @@ test('full physical scripts stay intact and results stay later', () => {
       call_id: 'native:c',
       native_call_id: 'c',
       name: 'exec',
-      payload: call.payload,
+      payload: unicodeCall.payload,
     },
   ]);
   expect(full.entries.find((entry) => entry.kind === 'result')).toEqual({
@@ -252,6 +264,67 @@ test('all supported physical call and result records retain their payloads', () 
     },
   ]);
   expect(RawIndexSchema.parse(index)).toEqual(index);
+});
+
+test('call and result payloads preserve nested own __proto__ keys', () => {
+  const callArguments = JSON.parse(
+    '{"nested":{"__proto__":{"call_marker":"kept"}}}',
+  );
+  const resultOutput = JSON.parse(
+    '{"nested":{"__proto__":{"result_marker":"kept"}}}',
+  );
+  const index = indexCodexTranscript(
+    source,
+    bytes([
+      {
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'exec_command',
+          call_id: 'proto',
+          arguments: callArguments,
+        },
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'proto',
+          output: resultOutput,
+        },
+      },
+    ]),
+  );
+  const callEntry = index.entries[0];
+  const resultEntry = index.entries[1];
+  if (callEntry?.kind !== 'call' || resultEntry?.kind !== 'result') {
+    throw new Error('Expected indexed call and result entries.');
+  }
+
+  const indexedCallArguments = (
+    callEntry.payload as { arguments: typeof callArguments }
+  ).arguments;
+  const indexedResultOutput = (
+    resultEntry.payload as { output: typeof resultOutput }
+  ).output;
+  expect(Object.hasOwn(indexedCallArguments.nested, '__proto__')).toBe(true);
+  expect(
+    Object.getOwnPropertyDescriptor(indexedCallArguments.nested, '__proto__')
+      ?.value,
+  ).toEqual({ call_marker: 'kept' });
+  expect(Object.hasOwn(indexedResultOutput.nested, '__proto__')).toBe(true);
+  expect(
+    Object.getOwnPropertyDescriptor(indexedResultOutput.nested, '__proto__')
+      ?.value,
+  ).toEqual({ result_marker: 'kept' });
+  expect(Object.getPrototypeOf(indexedCallArguments.nested)).toBe(
+    Object.prototype,
+  );
+  expect(Object.getPrototypeOf(indexedResultOutput.nested)).toBe(
+    Object.prototype,
+  );
+  expect(({} as { call_marker?: unknown }).call_marker).toBeUndefined();
+  expect(({} as { result_marker?: unknown }).result_marker).toBeUndefined();
 });
 
 test('native calls replay only when the complete payload is identical', () => {
