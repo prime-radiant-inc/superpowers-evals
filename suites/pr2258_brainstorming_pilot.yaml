@@ -1,11 +1,11 @@
-# Proposal only: no live-spend authorization. Original todo reproduction,
+# Approved pilot: $500 total budget, no extra runs. Original todo reproduction,
 # two independent repetitions per arm, eight total subject runs. xhigh is
 # supplied identically by the scenario's codex.config.toml. See the experiment
 # log for venue preparation, pricing, limits, and the separate future screen.
 schema_version: 1
 name: pr2258_brainstorming_pilot
 kind: exploratory
-budget_usd: 100
+budget_usd: 500
 grader:
   credential: sonnet5_bedrock
   model: anthropic.claude-sonnet-5
