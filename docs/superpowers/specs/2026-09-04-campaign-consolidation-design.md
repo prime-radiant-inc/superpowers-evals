@@ -1,9 +1,8 @@
 # Campaign consolidation: one execution model, useful comparisons
 
 **Date:** 2026-09-04
-**Status:** direction approved by Drew; core scope narrowed after staff review
-to defer resume/restart until the next increment. Detailed design amended for
-review. Implementation has not started.
+**Status:** direction approved by Drew; implementation and review in progress.
+Resume/restart and coordinated subject lifecycle/error reporting are deferred.
 **Scope:** consolidation of the campaign kernel and appliance V2 roadmap.
 **Source baseline:** main `f8e1889c`; appliance work `65c28448` on
 `drew/child1-tasks-15-17-recut`. Recorded tests and live runs are evidence
@@ -111,6 +110,27 @@ session and its frozen failure policy. There are no cross-session retries.
 An enforced whole-attempt deadline covers setup, drive, and capture, survives
 controller death, and terminates the complete worker namespace after bounded
 graceful shutdown. Automatic container restart is disabled.
+
+**Qualify failure causes at their producer.** Drew selected conservative
+outcomes for subject spawn/crash/rate-limit cases whose actor evidence is
+unavailable. They remain indeterminate; those signals alone authorize no
+automatic retry or pool latch. Coordinated Coding-Agent lifecycle and provider
+error reporting belongs to a later increment. Quorum's aggregate stderr and
+exit status describe a process that also hosts runner and grader failures;
+they cannot establish a subject failure. Gauntlet's intentional subject
+teardown also prevents treating every subject signal as an unexpected crash.
+
+The core retains authenticated grader rate/billing evidence and typed
+setup/capture/check/misconfiguration failures. Check-manifest mismatches already
+carry the composer's checks stage. A grader crash additionally requires frozen
+runner-observed Gauntlet process facts: an indeterminate invocation without a
+parseable result and an intrinsic fatal signal (`SIGABRT`, `SIGSEGV`, `SIGBUS`,
+`SIGILL`, `SIGFPE`, `SIGTRAP`, or `SIGSYS`). Preserve stopped and permanent
+misconfiguration precedence. A valid result, arbitrary nonzero exit code,
+timeout-shaped code, or HUP/INT/TERM/KILL does not establish this cause.
+Independently established validity failures retain their own bounded policy;
+missing actor evidence never substitutes for such a finding. All attempts
+remain available for accounting.
 
 **Consume one run authorization.** Under shared exclusion, atomically record
 that the campaign has started before launching its controller. Only a

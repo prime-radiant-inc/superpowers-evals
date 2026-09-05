@@ -149,12 +149,13 @@ The positive `block_validated` receipt is required for analytical inclusion; pen
 
 ### Failure policy
 
-Use `classifyFailure()`'s existing first-match rows, then apply this session policy. Do not make retry depend on pass/fail or on cost.
+Use `classifyFailure()`'s first-match rows only with qualified production evidence, then apply this session policy. Do not make retry depend on pass/fail or on cost. Drew explicitly deferred subject lifecycle/error reporting after review established that aggregate Quorum stderr, process exit, and Gauntlet teardown cannot authenticate the required subject causes. Retained classifier names alone are not supported capabilities.
 
 | Evidence/cause | Behavior and execution action |
 |---|---|
 | Valid pass/fail; unknown indeterminate with no recognized instrument cause | Accept observation; no replacement. |
-| `grader_rate_limited`, `subject_rate_limited`, `subject_spawn_failed`, `subject_crashed`, `grader_crashed`, `setup_failed`, `capture_failed`, `checks_crashed` | Verify/stop the whole block; retain every observation/cost; select a whole-block successor only if both finite allowances permit. Preserve existing pool latch/spacing behavior. |
+| Authenticated `grader_rate_limited`, qualified `grader_crashed`, `setup_failed`, `capture_failed`, `checks_crashed` | Verify/stop the whole block; retain every observation/cost; select a whole-block successor only if both finite allowances permit. Preserve existing pool latch/spacing behavior. |
+| Subject spawn/crash/rate-limit claims without reliable actor evidence | Indeterminate; no automatic retry or pool latch from that claim. Coordinated subject lifecycle/error producers are deferred by Drew. |
 | `grader_billing_exhausted`, `grader_misconfigured`, public credential revocation | End session incomplete and stop owned workers. Repeating a known unusable configuration cannot buy useful evidence. |
 | Sustained contention, failed exposure/skew validity | Exclude affected coherent blocks, preserve costs, use bounded whole-block successor if legal. Missing required telemetry is an invalid observation, never silent validity. |
 | Snapshot or frozen authority drift, storage failure, controller loss | End interrupted; no drift repair, pause, or recovery admission. |
@@ -162,6 +163,8 @@ Use `classifyFailure()`'s existing first-match rows, then apply this session pol
 | Runtime monitor failure, Docker-client timeout, unknown ownership | Stop/inspect; keep capacity and host guard until verified death. If death becomes known, retain an indeterminate observation; unknown cause does not become a retryable instrument error. |
 | Deadline, exit 124/137 without conclusive typed cause | Indeterminate; cost retained. Exit code alone does not prove which deadline or process caused it. No automatic replacement on ambiguous cause. |
 | Invalid/missing published evidence | Indeterminate with explicit missingness, or the existing typed capture/check failure if independently established. Never infer a pass or cost completeness. |
+
+The qualified grader-crash producer retains the actual Gauntlet child code and signal in the frozen verdict layer. It can establish `grader_crashed` only for an indeterminate invocation with no parseable Gauntlet result and an intrinsic fatal signal (`SIGABRT`, `SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGFPE`, `SIGTRAP`, or `SIGSYS`). Stopped/cancellation and permanent-misconfiguration precedence remain intact. A valid result, arbitrary nonzero code, 124/137/130, or HUP/INT/TERM/KILL does not buy a retry. Check-manifest mismatch already reaches `checks_crashed` through the actual composer's `checks` stage; no prose parser or synthetic manifest-mismatch sensor is needed. Independently established validity causes retain their existing policy and cannot be inferred from an unsupported actor claim.
 
 ## Runtime and ownership sequence
 
@@ -454,7 +457,7 @@ if (candidate) {
 ```
 
 Private helpers reuse the existing greedy admission order and demand evaluator. They must not reconstruct a dispatcher after restart. The controller's single mutation queue rechecks fence/cancel before effects and after await boundaries.
-- [ ] Implement the exact failure table, including permanent grader configuration/billing failure, invalid telemetry, uncertain death and ENOSPC. Remove dollar budget stops, amendments, in-flight dollar reservations and price gates from this path. Keep observed economics collection.
+- [ ] Implement the qualified failure table, including permanent grader configuration/billing failure, invalid telemetry, uncertain death and ENOSPC. Preserve conservative outcomes for the subject producers Drew deferred. Remove dollar budget stops, amendments, in-flight dollar reservations and price gates from this path. Keep observed economics collection.
 - [ ] Run fake-clock fairness/cap/spacing and fault-cut tests. Confirm no behavior changes in the run-all scheduler. Commit the connected session.
 
 ## Task 8: Publish the comparison and all-attempt accounting report
