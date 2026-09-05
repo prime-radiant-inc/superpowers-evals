@@ -144,6 +144,22 @@ The checked-in Claude `2.1.177` trace identifies `entrypoint: sdk-cli` and
 parent-TUI identity and external approval eligibility remain unqualified.
 Synthetic fixtures must be labeled separately from captured evidence.
 
+The [raw-index plan](../superpowers/plans/2026-09-05-pr2258-raw-observer-index.md)
+was committed at `202d722f`. Its shared contract is implemented at `ec069d5a`
+with the reviewed primitive-row correction at `9b4b959f`. The implementer
+reported 29 focused passes, 101 assertions, clean lint and typecheck. Review
+found that the first parser accepted scalar JSON records; the regression
+reproduced four such cases before the explicit object guard fixed them.
+A separate regression caught BOM stripping at a later physical line. The
+corrected contract passed scoped re-review before adapter implementation began.
+
+Codex and Claude adapters are running in independent worktrees against that
+fixed contract. Native Codex calls without a name retain their raw discriminant;
+this avoids inventing a normalized semantic label. If that choice proves awkward
+for reviewers, a later display mapping can use the retained complete payload.
+No adapter implementation or integrated completion is claimed by this interim
+receipt.
+
 A concrete [Gauntlet termination design](../superpowers/specs/2026-09-05-gauntlet-observer-termination-design.md)
 proposes a Linux child-subreaper around the entire invocation. This cross-repo
 runtime mechanism is pending Drew's architectural choice; raw indexing does not
