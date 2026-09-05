@@ -44,6 +44,25 @@ test('key_pool holds env-var names', () => {
   ]);
 });
 
+test.each([
+  {
+    delivery: 'api_key_env',
+    credential: { ...BASE, api_key_env: 'OBOL_PRICING_DIR' },
+  },
+  {
+    delivery: 'key_pool',
+    credential: {
+      ...BASE,
+      api_key_env: undefined,
+      key_pool: ['GRADER_KEY_1', 'OBOL_PRICING_DIR'],
+    },
+  },
+])('$delivery cannot override the selected pricing directory', ({
+  credential,
+}) => {
+  expect(() => CredentialSchema.parse(credential)).toThrow(/OBOL_PRICING_DIR/);
+});
+
 test('key_pool is mutually exclusive with api_key_env', () => {
   expect(() =>
     CredentialSchema.parse({ ...BASE, key_pool: ['K1', 'K2'] }),
