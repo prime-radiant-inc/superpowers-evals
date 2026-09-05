@@ -236,9 +236,8 @@ export function buildChildRunArgs(args: InvokeChildArgs): string[] {
 export function invokeChild(args: InvokeChildArgs): Promise<ChildResult> {
   // Children never acquire (R-LCK-2): runBatch holds the host-wide
   // live-spend lock for the whole drive, so its children ride the holder's
-  // accounting via the same explicit marker channel the campaign spawner
-  // uses (src/campaign/spawn.ts). Without it the child's shared run entry
-  // would refuse against its own parent's lock.
+  // accounting via the explicit parent-covered marker. Without it the child's
+  // shared run entry would refuse against its own parent's lock.
   const env: Record<string, string | undefined> = {
     ...envSnapshot(),
     [COVERED_BY_LOCK_ENV]: '1',

@@ -230,6 +230,11 @@ test('controller loss permits termination-only cancel, incomplete report and a f
     await expect(action({ id: receipt.job_id, json: true })).rejects.toThrow(
       /invocation receipt/,
     );
+  await expect(
+    actions.show({ id: receipt.job_id, json: true }),
+  ).rejects.toThrow(
+    'evals-appliance campaign report with the campaign identity',
+  );
   await expect(cancelJob(loaded, receipt.job_id, f.r.runner)).rejects.toThrow(
     /campaign invocation/,
   );

@@ -650,7 +650,7 @@ export function createApplianceActions(
       const loaded = deps.loadStateConfig();
       if (readJob(loaded, args.id).kind === 'campaign-run')
         throw new Error(
-          'campaign invocation receipt is not lifecycle authority; use evals-appliance campaign show with the campaign identity',
+          'campaign invocation receipt is not lifecycle authority; use evals-appliance campaign report with the campaign identity',
         );
       return showPayload(loaded, args.id, args.json);
     },

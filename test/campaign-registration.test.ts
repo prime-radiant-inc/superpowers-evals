@@ -23,6 +23,11 @@ import {
   experimentRegisterArgs,
   probeRunner,
 } from './fixtures/core-comparison/registration.ts';
+import {
+  subprocessTraceDir,
+  traceError,
+  writeSubprocessTrace,
+} from './fixtures/subprocess-trace.ts';
 
 function experimentInput(
   overrides: Partial<ExperimentRegistrationInput> = {},
@@ -155,6 +160,145 @@ test('V2 Linux preparation excludes an explicit Darwin arm before compatibility 
       reason: expect.stringMatching(/arm arm_a.*darwin.*campaign.*linux/),
     },
   ]);
+});
+
+// An eligible control keeps the denominator observable when either paired arm
+// is incompatible: exclusion must remove the whole cell, including reserves.
+test.each([
+  [
+    'stock adapter',
+    {
+      capability: (family: string) => ({ ref: true, none: family !== 'codex' }),
+    },
+    /arm arm_b.*adapter capability/,
+  ],
+  [
+    'ref adapter',
+    {
+      arms: {
+        arm_a: arm('arm_a'),
+        arm_b: arm('arm_b', {
+          agent: 'codex',
+          credential: 'cred_b',
+          superpowers: 'pinned-ref',
+        }),
+      },
+      refs: {
+        evals: 'a'.repeat(40),
+        gauntlet: 'b'.repeat(40),
+        superpowers_by_arm: { arm_a: null, arm_b: 'c'.repeat(40) },
+      },
+      capability: (family: string) => ({ ref: family !== 'codex', none: true }),
+    },
+    /arm arm_b.*adapter capability/,
+  ],
+  [
+    'credential OS',
+    {
+      credentials: {
+        cred_a: credential(),
+        cred_b: credential({ harnesses: ['codex'], os_support: ['darwin'] }),
+      },
+    },
+    /arm arm_b.*unsupported by credential cred_b/,
+  ],
+  [
+    'agent OS',
+    {
+      agentOsSupport: (agent: string) =>
+        agent === 'codex' ? ['darwin'] : ['linux'],
+    },
+    /arm arm_b.*unsupported by agent codex/,
+  ],
+  [
+    'credential harness',
+    { credentials: { cred_a: credential(), cred_b: credential() } },
+    /cred_b.*does not support harness codex/,
+  ],
+  [
+    'scenario OS',
+    {
+      scenarios: [scenario('paired', { os: ['darwin'] }), scenario('control')],
+    },
+    /unsupported by scenario paired/,
+  ],
+  [
+    'restrictive directive',
+    {
+      scenarios: [
+        scenario('paired', { coding_agents: ['claude'] }),
+        scenario('control'),
+      ],
+    },
+    /agent codex.*coding-agents directive/,
+  ],
+  [
+    'empty directive',
+    {
+      scenarios: [
+        scenario('paired', { coding_agents: [] }),
+        scenario('control'),
+      ],
+    },
+    /agent claude.*coding-agents directive/,
+  ],
+  [
+    'accepted directives',
+    {
+      scenarios: [
+        scenario('paired', {
+          os: ['linux'],
+          coding_agents: ['claude', 'codex'],
+        }),
+        scenario('control'),
+      ],
+    },
+    null,
+  ],
+] as const)('V2 paired eligibility: %s', (_name, overrides, reason) => {
+  const base = experimentInput();
+  const prepared = prepareExperimentRegistration(
+    experimentInput({
+      suite: {
+        ...base.suite,
+        comparisons: [
+          {
+            baseline: 'arm_a',
+            treatment: 'arm_b',
+            scenarios: ['paired'],
+            n: 1,
+          },
+          { arm: 'arm_a', scenarios: ['control'], n: 1 },
+        ],
+      },
+      arms: {
+        arm_a: arm('arm_a'),
+        arm_b: arm('arm_b', { agent: 'codex', credential: 'cred_b' }),
+      },
+      credentials: {
+        cred_a: credential(),
+        cred_b: credential({ harnesses: ['codex'] }),
+      },
+      agentFamily: (agent) => agent,
+      scenarios: [scenario('paired'), scenario('control')],
+      ...overrides,
+    }),
+  );
+  expect(prepared.excluded_cells).toEqual(
+    reason === null
+      ? []
+      : [{ cell: 'c1:paired', reason: expect.stringMatching(reason) }],
+  );
+  expect(
+    prepared.cells.map((cell) => `${cell.comparison_id}:${cell.scenario}`),
+  ).toEqual(reason === null ? ['c1:paired', 'c2:control'] : ['c2:control']);
+  expect(prepared.planned_slots.map((slot) => slot.sample_id)).toEqual([
+    ...(reason === null ? ['c1:paired:arm_a:r1', 'c1:paired:arm_b:r1'] : []),
+    'c2:control:arm_a:r1',
+  ]);
+  expect(prepared.reserve_slots.map((slot) => slot.reserve_id)).toEqual(
+    reason === null ? ['c1:paired:x1', 'c2:control:x1'] : ['c2:control:x1'],
+  );
 });
 
 test('V2 preparation refuses a non-Linux campaign target', () => {
@@ -474,7 +618,13 @@ test('buildContentionBlock freezes G, thresholds, sampler parameters, tolerances
   });
 });
 
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { CommandRunner } from '../src/agents/command-runner.ts';
 import { loadFrozenCampaign as loadExperiment } from '../src/campaign/campaign-document.ts';
@@ -567,4 +717,114 @@ test('registration never overwrites an unexpected published document', () => {
     /campaign.json already exists/,
   );
   expect(readFileSync(interloper, 'utf8')).toBe('interloper');
+});
+
+test.each([
+  '# coding-agents: codex',
+  '# coding-agents: ,',
+  '# os: windows',
+])('V2 freezes real checks.sh intake: %s', (directive) => {
+  const traceDir = subprocessTraceDir('registration-intake');
+  const real = probeRunner(0);
+  let nextCallId = 0;
+  const runner: CommandRunner = {
+    run(command, argv, options) {
+      const call_id = ++nextCallId;
+      const started = performance.now();
+      const operation = argv.find((part) =>
+        [
+          'init',
+          'add',
+          'commit',
+          'rev-parse',
+          'worktree',
+          'show',
+          'ls-tree',
+          'merge-base',
+          'install',
+          '--version',
+          'status',
+          'diff',
+        ].includes(part),
+      );
+      writeSubprocessTrace(traceDir, {
+        event: 'start',
+        call_id,
+        command,
+        operation,
+        cwd: options?.cwd,
+      });
+      try {
+        const result = real.run(command, argv, options);
+        writeSubprocessTrace(traceDir, {
+          event: 'end',
+          call_id,
+          elapsed_ms: performance.now() - started,
+          status: result.status,
+          ...(result.status === 0
+            ? {}
+            : { stderr: result.stderr.slice(0, 1024) }),
+        });
+        return result;
+      } catch (error) {
+        writeSubprocessTrace(traceDir, {
+          event: 'throw',
+          call_id,
+          elapsed_ms: performance.now() - started,
+          error: traceError(error),
+        });
+        throw error;
+      }
+    },
+  };
+  const args = experimentRegisterArgs({ runner });
+  const source = join(args.evalsCheckout, 'scenarios', 'scn-a');
+  cpSync(source, join(args.evalsCheckout, 'scenarios', 'control'), {
+    recursive: true,
+  });
+  const checks = join(source, 'checks.sh');
+  writeFileSync(checks, `${directive}\npre() { :; }\npost() { :; }\n`);
+  const git = (argv: string[]) => {
+    const result = args.runner.run('git', argv, { cwd: args.evalsCheckout });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git(['add', 'scenarios']);
+  git(['commit', '-qm', 'freeze restrictive scenario directive']);
+  const frozenRef = git(['rev-parse', 'HEAD']);
+  // The mutable checkout now permits Claude. Registration must still read the
+  // restrictive directive from the selected immutable object-store revision.
+  writeFileSync(
+    checks,
+    '# coding-agents: claude\npre() { :; }\npost() { :; }\n',
+  );
+  git(['add', 'scenarios']);
+  git(['commit', '-qm', 'allow Claude in later source']);
+  const result = registerExperimentCampaign({
+    ...args,
+    evalsRef: frozenRef,
+    suiteRaw: `${EXPERIMENT_SUITE_RAW}  - arm: arm_a\n    scenarios: [control]\n    n: 1\n`,
+  });
+  expect(result.experiment.refs.evals).toBe(frozenRef);
+  expect(result.experiment.excluded_cells).toEqual([
+    {
+      cell: 'c1:scn-a',
+      reason: expect.stringMatching(
+        directive.startsWith('# os:')
+          ? /unsupported by scenario/
+          : /coding-agents directive/,
+      ),
+    },
+  ]);
+  expect(
+    result.experiment.cells.map(
+      (cell) => `${cell.comparison_id}:${cell.scenario}`,
+    ),
+  ).toEqual(['c2:control']);
+  expect(result.experiment.planned_slots.map((slot) => slot.sample_id)).toEqual(
+    ['c2:control:arm_a:r1'],
+  );
+  expect(
+    result.experiment.reserve_slots.map((slot) => slot.reserve_id),
+  ).toEqual(['c2:control:x1']);
 });

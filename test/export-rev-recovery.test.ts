@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { CommandRunner } from '../src/agents/command-runner.ts';
 import { SpawnCommandRunner } from '../src/agents/command-runner.ts';
 import { envSnapshot } from '../src/env.ts';
 import {
@@ -10,10 +11,65 @@ import {
   recoverSuperpowersRev,
   skillsTreeSha,
 } from '../src/export-runs/rev-recovery.ts';
+import {
+  subprocessTraceDir,
+  traceError,
+  writeSubprocessTrace,
+} from './fixtures/subprocess-trace.ts';
 
-const runner = new SpawnCommandRunner();
+const realRunner = new SpawnCommandRunner();
+const traceDir = subprocessTraceDir('rev-recovery');
+let nextCallId = 0;
+// Only operation names are retained: no argv, environment, stdin or tree bytes.
+const operation = (args: readonly string[]) =>
+  args[0] === '--work-tree' ? 'add-archived-tree' : args[0];
+const runner: CommandRunner = {
+  run(command, args, options) {
+    const call_id = ++nextCallId;
+    const started = performance.now();
+    writeSubprocessTrace(traceDir, {
+      event: 'start',
+      call_id,
+      layer: 'production',
+      command,
+      operation: operation(args),
+      cwd: options?.cwd,
+    });
+    try {
+      const result = realRunner.run(command, args, options);
+      writeSubprocessTrace(traceDir, {
+        event: 'end',
+        call_id,
+        elapsed_ms: performance.now() - started,
+        status: result.status,
+        ...(result.status === 0
+          ? {}
+          : { stderr: result.stderr.slice(0, 1024) }),
+      });
+      return result;
+    } catch (error) {
+      writeSubprocessTrace(traceDir, {
+        event: 'throw',
+        call_id,
+        elapsed_ms: performance.now() - started,
+        error: traceError(error),
+      });
+      throw error;
+    }
+  },
+};
 
 function git(cwd: string, args: string[], date?: string): string {
+  const call_id = ++nextCallId;
+  const started = performance.now();
+  writeSubprocessTrace(traceDir, {
+    event: 'start',
+    call_id,
+    layer: 'fixture',
+    command: 'git',
+    operation: operation(args),
+    cwd,
+  });
   const proc = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
@@ -25,6 +81,15 @@ function git(cwd: string, args: string[], date?: string): string {
             GIT_AUTHOR_DATE: date,
             GIT_COMMITTER_DATE: date,
           },
+  });
+  writeSubprocessTrace(traceDir, {
+    event: 'end',
+    call_id,
+    elapsed_ms: performance.now() - started,
+    status: proc.status,
+    signal: proc.signal,
+    error: traceError(proc.error),
+    ...(proc.status === 0 ? {} : { stderr: proc.stderr.slice(0, 1024) }),
   });
   if (proc.status !== 0) {
     throw new Error(`git ${args.join(' ')}: ${proc.stderr}`);

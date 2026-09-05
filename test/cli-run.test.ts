@@ -6,10 +6,16 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import {
+  subprocessTraceDir,
+  traceError,
+  writeSubprocessTrace,
+} from './fixtures/subprocess-trace.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
@@ -54,7 +60,9 @@ function runCli(
   extraArgs: string[] = [],
 ): { status: number | null; stdout: string; diagnostic: string } {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
+  const traceDir = subprocessTraceDir('cli-run');
   const started = Date.now();
+  writeSubprocessTrace(traceDir, { event: 'cli-start', fixture, outRoot });
   const proc = spawnSync(
     'bun',
     [
@@ -78,7 +86,7 @@ function runCli(
         // The fixture selection rides in the generated gauntlet shim (the
         // runner's gauntlet-env projection strips a host-exported
         // MOCK_GAUNTLET_FIXTURE); MOCK still provides the `claude` shim.
-        PATH: `${mockGauntletDir(fixture)}:${MOCK}:${process.env['PATH'] ?? ''}`,
+        PATH: `${mockGauntletDir(fixture, traceDir === undefined ? {} : { traceDir })}:${MOCK}:${process.env['PATH'] ?? ''}`,
         ANTHROPIC_API_KEY: 'sk-test',
         // claude.yaml's default_credential is opus_bedrock (Mantle), whose
         // provision resolves this bearer; the mock-gauntlet never makes a real
@@ -91,6 +99,25 @@ function runCli(
       encoding: 'utf8',
     },
   );
+  writeSubprocessTrace(traceDir, {
+    event: 'cli-return',
+    elapsed_ms: Date.now() - started,
+    status: proc.status,
+    signal: proc.signal,
+    error: traceError(proc.error),
+  });
+  const markers = [
+    'shell-entry',
+    'bun-entry.json',
+    'fixture-complete.json',
+  ].map((name) => {
+    try {
+      if (traceDir === undefined) return { name, missing: true };
+      return { name, mtime_ms: statSync(join(traceDir, name)).mtimeMs };
+    } catch {
+      return { name, missing: true };
+    }
+  });
   const phases = readdirSync(outRoot).flatMap((name) => {
     try {
       return [
@@ -101,6 +128,9 @@ function runCli(
     }
   });
   const diagnostic = JSON.stringify({
+    traceDir,
+    markers,
+    error: traceError(proc.error),
     status: proc.status,
     signal: proc.signal,
     elapsed_ms: Date.now() - started,
@@ -114,7 +144,7 @@ function runCli(
 test('quorum run exits 1 on a fail verdict and prints run-id', () => {
   const { status, stdout, diagnostic } = runCli('fail-no-usage');
   expect(stdout, diagnostic).toContain('run-id:');
-  expect(status).toBe(1);
+  expect(status, diagnostic).toBe(1);
 });
 
 test('quorum run exits 0 on a pass verdict', () => {

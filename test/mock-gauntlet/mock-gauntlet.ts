@@ -17,6 +17,19 @@ import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
+function traceRunMarker(marker: string): void {
+  const dir = process.env['MOCK_GAUNTLET_TRACE_DIR'];
+  if (argv[0] !== 'run' || dir === undefined) return;
+  try {
+    writeFileSync(
+      join(dir, `${marker}.json`),
+      JSON.stringify({ marker, at_ms: Date.now(), pid: process.pid }),
+    );
+  } catch {
+    // Missing trace storage must not change fixture writes or process outcome.
+  }
+}
+traceRunMarker('bun-entry');
 const pdIdx = argv.indexOf('--project-dir');
 const projectDir = pdIdx >= 0 ? argv[pdIdx + 1] : undefined;
 const fixture = process.env['MOCK_GAUNTLET_FIXTURE'];
@@ -110,5 +123,6 @@ if (fixture === 'hang') {
     }
   }
 
+  traceRunMarker('fixture-complete');
   process.exit(0);
 }

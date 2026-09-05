@@ -17,7 +17,7 @@ import { shellSingleQuote } from '../../src/agents/index.ts';
 // token from the projected env). Callers own removing the returned dir.
 export function mockGauntletDir(
   fixture: string,
-  opts: { captureEnvKeys?: readonly string[] } = {},
+  opts: { captureEnvKeys?: readonly string[]; traceDir?: string } = {},
 ): string {
   const dir = mkdtempSync(join(tmpdir(), 'mock-gauntlet-'));
   const mock = resolve(import.meta.dir, 'mock-gauntlet.ts');
@@ -26,11 +26,19 @@ export function mockGauntletDir(
     opts.captureEnvKeys === undefined
       ? ''
       : `export MOCK_GAUNTLET_ENV_KEYS=${shellSingleQuote(opts.captureEnvKeys.join(','))}\n`;
+  const traceLine =
+    opts.traceDir === undefined
+      ? ''
+      : `if [ "\${1-}" = run ]; then\n` +
+        `  { : > ${shellSingleQuote(join(opts.traceDir, 'shell-entry'))}; } 2>/dev/null || :\n` +
+        `  export MOCK_GAUNTLET_TRACE_DIR=${shellSingleQuote(opts.traceDir)}\n` +
+        `fi\n`;
   writeFileSync(
     shim,
     '#!/usr/bin/env bash\n' +
       `export MOCK_GAUNTLET_FIXTURE=${shellSingleQuote(fixture)}\n` +
       captureLine +
+      traceLine +
       `exec bun ${shellSingleQuote(mock)} "$@"\n`,
   );
   chmodSync(shim, 0o755);
