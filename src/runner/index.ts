@@ -155,6 +155,7 @@ export interface GauntletArgvArgs {
   readonly runDir: string;
   readonly maxTime?: string | undefined;
   readonly projectPrompt?: string | undefined;
+  readonly tuiInputGuard?: string | undefined;
   // The Gauntlet-Agent (grader) model. Absent => the GRADER_MODEL default.
   readonly graderModel?: string | undefined;
 }
@@ -190,6 +191,7 @@ export function buildGauntletArgv(a: GauntletArgvArgs): string[] {
   if (a.projectPrompt) {
     argv.push('--project-prompt', a.projectPrompt);
   }
+  if (a.tuiInputGuard) argv.push('--tui-input-guard', a.tuiInputGuard);
   return argv;
 }
 
@@ -1908,6 +1910,11 @@ async function runInnerBody(
       runDir,
       maxTime,
       projectPrompt: cfg.project_prompt,
+      tuiInputGuard: existsSync(
+        join(runDir, 'gauntlet-agent', 'tui-input-guard'),
+      )
+        ? join(runDir, 'gauntlet-agent', 'tui-input-guard')
+        : undefined,
       graderModel: a.graderModel,
       launchCwd,
       runHomeDir,

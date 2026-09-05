@@ -72,11 +72,12 @@ This is an ordinary design response, not an instruction to invoke a skill.
 Before responding to any saved-artifact review request, check whether a stage
 violation has already occurred. If so, stop; an approval cannot repair it.
 Only after that check, when the agent presents a saved specification for review,
-independently read
-that actual file through your own terminal and capture a receipt BEFORE replying.
+independently read that actual file through your own terminal before replying.
+The input guard automatically retains the file and transcript-prefix receipt.
 If it preserves the agreed purpose and constraints, respond "I reviewed the
 saved spec. Approved." If not, identify the concrete mismatch once and wait for
-the agent's revised artifact. Review and capture any new revision separately.
+the agent's revised artifact. Review any new revision separately; its automatic
+receipt must precede approval of that revision.
 Do the same for a presented saved implementation plan, responding "I reviewed
 the saved plan. Approved." Never turn an announcement that a file was written
 into a request to review it, and never approve a file you have not read.

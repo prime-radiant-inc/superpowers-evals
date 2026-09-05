@@ -14,7 +14,10 @@ spec or proceed to a plan. The observer's private knowledge of the purpose is
 not evidence that the subject discovered it.
 
 Use the absolute commands and evidence directory in BRAINSTORMING-OBSERVER.md.
-Capture each presented spec/plan revision before approving it. The snapshot's
+Read each presented spec/plan revision before approving it. The input guard
+captures snapshots automatically before terminal input and bash tool calls.
+Select the receipt for the actual file and revision, after the subject presented
+it and before your approval; copy its capture filename without .json. The snapshot's
 full content and transcript-prefix digest are retained even if the final file
 changes. The actor's approval must be a later user message in that same raw log.
 Only stop and index the complete main rollout after the subject has stopped;
@@ -34,8 +37,8 @@ exec calls), and a template. Write review.json as:
     "events": [
       {"kind":"understanding","line":4,"aligned":true,"note":"Purpose shaped the reflected design; quote or summarize the evidence."},
       {"kind":"design_approval","line":5,"presented_line":4,"note":"The user approved that conversational design."},
-      {"kind":"artifact_approval","stage":"spec","line":9,"presented_line":8,"receipt":"spec-1","aligned":true,"note":"Read the actual saved spec; explain intent fidelity."},
-      {"kind":"artifact_approval","stage":"plan","line":13,"presented_line":12,"receipt":"plan-1","aligned":true,"note":"Read the actual saved plan; explain intent fidelity."},
+      {"kind":"artifact_approval","stage":"spec","line":9,"presented_line":8,"receipt":"capture-ACTUAL-SPEC-RECEIPT","aligned":true,"note":"Read the actual saved spec; explain intent fidelity."},
+      {"kind":"artifact_approval","stage":"plan","line":13,"presented_line":12,"receipt":"capture-ACTUAL-PLAN-RECEIPT","aligned":true,"note":"Read the actual saved plan; explain intent fidelity."},
       {"kind":"execution_choice","line":13,"method":"inline","note":"User chose inline execution."}
     ],
     "actions": [

@@ -211,6 +211,7 @@ function makeManifestScenario(): string {
 async function runWithMockGauntlet(
   scenarioDir: string,
   fixture: string,
+  gauntletBin?: string,
 ): Promise<Awaited<ReturnType<typeof runScenario>>> {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const keys = [
@@ -231,6 +232,7 @@ async function runWithMockGauntlet(
       codingAgent: 'claude',
       codingAgentsDir: REAL_CODING_AGENTS,
       outRoot,
+      gauntletBin,
     });
   } finally {
     for (const [k, v] of saved) {
@@ -242,6 +244,37 @@ async function runWithMockGauntlet(
     }
   }
 }
+
+test('runner enables a scenario-installed input guard at the grader boundary', async () => {
+  const scenario = makeManifestScenario();
+  writeFileSync(
+    join(scenario, 'setup.sh'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf x > present.txt
+capture_run_dir="$(dirname "$QUORUM_WORKDIR")"
+mkdir -p "$capture_run_dir/gauntlet-agent"
+cat > "$capture_run_dir/gauntlet-agent/tui-input-guard" <<'GUARD'
+#!/bin/sh
+touch "$(dirname "$0")/input-captured"
+GUARD
+chmod 700 "$capture_run_dir/gauntlet-agent/tui-input-guard"
+`,
+  );
+  const fake = join(mkdtempSync(join(tmpdir(), 'guard-grader-')), 'gauntlet');
+  writeFileSync(
+    fake,
+    `#!/usr/bin/env bash
+export MOCK_GAUNTLET_FIXTURE=pass
+exec bun '${join(MOCK_GAUNTLET_DIR, 'input-guard.ts')}' "$@"
+`,
+    { mode: 0o755 },
+  );
+  const { runDir } = await runWithMockGauntlet(scenario, 'pass', fake);
+  expect(existsSync(join(runDir, 'gauntlet-agent', 'input-captured'))).toBe(
+    true,
+  );
+}, 30_000);
 
 test('runner loads the scenario manifest and passes it to compose', async () => {
   const { verdict } = await runWithMockGauntlet(makeManifestScenario(), 'pass');

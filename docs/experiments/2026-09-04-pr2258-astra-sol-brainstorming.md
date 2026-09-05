@@ -8,12 +8,69 @@ only. The remaining six runs, including all Sol runs, were not admitted. No
 full-chain effect or performance comparison exists. Recorded estimated spend is
 $4.7709727 across all attempts/checks, with possible unrecorded in-flight usage
 and the existing $10 reserve inside the approved $500 allowance. The appliance
-is restored and idle. A separate scorer repair is committed at b4ca9d7a.
+was restored after cancellation. A separate scorer repair is committed at
+b4ca9d7a. Automatic capture is now implemented and under merge qualification;
+Drew requires both repositories' fixes on main before another pilot runtime.
 
 **Question:** Does [Superpowers PR 2258](https://github.com/obra/superpowers/pull/2258)
 make Astra establish and preserve shared understanding through brainstorming,
 specification, and planning? Does it also help Sol, and what does it cost in
 completion, latency, tokens, and human attention?
+
+## Automatic capture repair and main integration
+
+Drew approved repairing the observer omission, then explicitly required main
+integration rather than a pilot-only patch. The implementation plan is
+`docs/superpowers/plans/2026-09-04-pr2258-observer-capture.md`.
+
+Gauntlet adds an explicit absolute-path TUI input guard. It runs before typing,
+key presses, both legs of combined submit, and the shared bash tool. Capture
+failure blocks dispatch; Escape, Ctrl+C and cleanup remain usable. The hook's
+elapsed time is recorded separately for later accounting of observer overhead.
+Quorum's scenario installs that executable outside the subject workdir and
+passes it through the ordinary runner invocation. No runtime patch is required.
+
+The observer snapshots every regular Markdown document in the workdir against
+the main Codex TUI rollout, identified by cwd and parent source metadata. Review
+subagents cannot replace the parent. Two observations must match, including
+document additions/deletions and transcript changes. Each observation retains
+new immutable receipts, so identical bytes presented later get a valid later
+boundary. Missing-log startup requires an unchanged regular-file inventory;
+subsequent log loss, partial JSONL, symlinks and special files block input.
+
+This removes the manual snapshot action from the actor's protocol. It does not
+automate semantic review, stage/path identity, or truthful annotations. Shell
+commands that both rewrite documents and inject a reply remain invalid evidence.
+Independent review still checks the actual reply, document and revision.
+
+Offline tests cover omitted capture commands, varied reply wording, split and
+combined submit, newline typing, bash, capture failures, timeout, cancellation,
+parent/child logs, preserved revisions and file/log races. A cross-repository
+test runs the real Quorum setup/argv and Gauntlet CLI/run/TUI path with a scripted
+actor and a local subject that accepts a reply only after checking persisted
+receipt bytes. It passed without model calls. Run it with `GAUNTLET_ROOT` set to
+the candidate Gauntlet checkout:
+
+```sh
+bun test test/brainstorming-gauntlet-integration.test.ts
+```
+
+Independent review covered the capture patch and the full task source diff
+against Evals main `d2488ee5`. It found two defects, both corrected with red/green
+tests: a bare guard flag could resolve to the shell `true` command, and the
+startup check initially ignored non-Markdown product files. No production merge
+blocker remained. The cross-repository test and runner opt-in regression belong
+to the retained runner/setup test layer used by campaign consolidation.
+
+Initial full local verification found timing failures while both suites ran
+together: Evals' existing CLI/Copilot fixtures and Gauntlet's new subprocess
+fixtures. The guard fixture also exposed a file-creation-before-write race in
+its completion signal; that signal is now atomic. Keep these failed receipts
+alongside subsequent results under the private `capture-repair/` evidence dir.
+Full merge qualification and final main SHAs are recorded when available.
+
+No paid run was launched during this repair. Prior canonical receipts and the
+$4.7709727 observed estimate plus $10 cancellation reserve remain unchanged.
 
 ## Failure and hypotheses
 
