@@ -570,17 +570,19 @@ test('descendant and internal user messages cannot approve', () => {
   ).toBe(false);
 });
 
-test('a later sidechain claim makes every message in that source ineligible', () => {
+test('late descendant evidence preserves earlier entries and gates later messages', () => {
+  const early = {
+    ...common,
+    uuid: 'early',
+    userType: 'external',
+    type: 'user',
+    message: { role: 'user', content: 'Approved before marker.' },
+  };
+  const prefix = indexClaudeTranscript(source, bytes([early]));
   const index = indexClaudeTranscript(
     source,
     bytes([
-      {
-        ...common,
-        uuid: 'early',
-        userType: 'external',
-        type: 'user',
-        message: { role: 'user', content: 'Approved before marker.' },
-      },
+      early,
       {
         ...common,
         uuid: 'marker',
@@ -588,10 +590,24 @@ test('a later sidechain claim makes every message in that source ineligible', ()
         type: 'assistant',
         message: { role: 'assistant', content: 'Child response.' },
       },
+      {
+        ...common,
+        uuid: 'later',
+        userType: 'external',
+        type: 'user',
+        message: { role: 'user', content: 'Approved after marker.' },
+      },
     ]),
   );
   expect(index.identity.conversation).toBe('descendant');
+  expect(index.entries.filter((entry) => entry.anchor.line === 1)).toEqual(
+    prefix.entries,
+  );
   expect(index.entries[0]).toMatchObject({
+    claimed_origin: 'external',
+    approval_eligibility: 'unresolved',
+  });
+  expect(index.entries[2]).toMatchObject({
     claimed_origin: 'external',
     approval_eligibility: 'ineligible',
   });
@@ -698,6 +714,21 @@ test('action-bearing result metadata cannot disappear on a non-result row', () =
       type: 'assistant',
       isCompactSummary: true,
       message: { role: 'assistant', content: 'summary-shaped' },
+    },
+    {
+      type: 'queue-operation',
+      operation: 'enqueue',
+      toolUseResult: { stdout: 'hidden' },
+    },
+    {
+      type: 'attachment',
+      attachment: { type: 'skill_listing', content: 'skills' },
+      toolUseResult: { stdout: 'hidden' },
+    },
+    {
+      type: 'ai-title',
+      aiTitle: 'Title',
+      toolUseResult: { stdout: 'hidden' },
     },
   ]) {
     const error = evidenceError(() =>

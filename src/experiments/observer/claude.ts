@@ -284,6 +284,12 @@ export function indexClaudeTranscript(
         rowAnchor,
       );
     }
+    if (type !== 'user' && row['toolUseResult'] !== undefined) {
+      unknownRecord(
+        'Claude result metadata has no matching result block.',
+        rowAnchor,
+      );
+    }
 
     const conversationClaims = inspectConversationClaims(row, rowAnchor);
     if (
@@ -549,14 +555,6 @@ export function indexClaudeTranscript(
 
     if (typeof uuid === 'string') {
       seenUuids.set(uuid, { canonical_row: canonicalRow, targets });
-    }
-  }
-
-  if (descendant) {
-    for (const entry of entries) {
-      if (entry.kind === 'message' && entry.role === 'user') {
-        entry.approval_eligibility = 'ineligible';
-      }
     }
   }
 
