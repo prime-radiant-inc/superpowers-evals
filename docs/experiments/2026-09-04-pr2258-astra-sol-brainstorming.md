@@ -1,12 +1,13 @@
 # PR 2258: Astra and Sol brainstorming evaluation
 
-**Status:** The eight-run pilot is running with a $500 total allowance under
-[PRI-3097](https://linear.app/prime-radiant/issue/PRI-3097/evaluate-pr-2258-brainstorming-with-astra-and-sol).
-Both subjects use the direct OpenAI Responses API at xhigh; the grader uses
-Sonnet 5 through Mantle. The cancelled pre-verification attempt is retained
-separately, and the first Astra pair must pass evidence review before the
-remaining six runs. No behavioral outcome is claimed yet. Fractals and the
-broader screen remain subsequent work.
+**Status:** Pilot paused after its first matched-attempt candidate exposed an
+observer stop-policy failure. Astra did not discover the learning purpose before
+writing a spec, but the observer approved that spec and continued. The run is
+retained as diagnostic evidence and excluded from the matched comparison. The
+remaining seven runs were not launched. Observer instructions have been clarified
+for review before any replacement runs. Mantle routing is verified; the $500
+allowance remains, with observed estimated usage of $1.6717225 across both
+cancelled attempts and the connectivity check, plus unrecorded in-flight usage.
 
 **Question:** Does [Superpowers PR 2258](https://github.com/obra/superpowers/pull/2258)
 make Astra establish and preserve shared understanding through brainstorming,
@@ -674,3 +675,75 @@ $500 allowance, rather than being treated as zero or a measured total. The
 $0.000106 verification request is also included in the allowance. All new
 sample costs must be complete before further admission, with the existing
 $50-or-twice-the-largest-run reserve and first-pair review preserved.
+
+
+## First live attempt: diagnostic result and observer failure
+
+The Astra baseline candidate ran from 01:44:39 to 01:50:14 UTC September 5,
+then was cancelled through the helper after an observer violation was detected.
+Its canonical verdict remains **indeterminate: run stopped before completion**.
+No candidate-head or Sol run was admitted. Independent diagnostic review is
+separate from that original verdict; there is no matched effect estimate.
+
+The main raw Codex transcript preserves the following chronology (raw line
+numbers refer to response_item records):
+
+| Raw line | Observation | Interpretation |
+| ---: | --- | --- |
+| 7 | Exact todo opener | Opening protocol followed. |
+| 34 | Features/storage proposal and scope question | No purpose discovery. |
+| 40 | Actor narrows features and storage | Scope-response wording was ambiguous; this departed from the intended exact scope-only reply. |
+| 48–49 | Agent reflects feature scope and marks clarification complete | Learning purpose still absent. |
+| 55, 61 | Concrete conversational design and exact scope approval | Conversational design approval exists. |
+| 70, 72 | Agent writes a spec; tool confirms success | First stage violation: shared learning purpose was never elicited or reflected. |
+| 82 | Observer snapshot boundary | Spec receipt prefix digest matches the stopped raw log. |
+| 86 | Actor approves the saved spec | Definite observer failure: it should already have stopped at the spec write. |
+
+The successful snapshot proves the file-read/capture mechanism worked; the
+problem was semantic enforcement. An "Intent" heading about todo functionality
+was insufficient evidence of the user's learning purpose. Subsequent planning
+work cannot repair the first violation, and its time/cost cannot represent the
+prescribed endpoint. Both independent reviewers classified the trace as
+diagnostic only. The first reviewer saw a model-bearing path in the attempted
+blind export; a second, fresh reviewer saw a corrected export and reported no
+subject-model or tested-ref identity. Preserve that blinding limitation for the
+first review, rather than relabeling it as blind.
+
+Original logs, verdict, spec receipt, SHA256 manifest, cost sidecars, and separate
+adjudication are retained privately under results/pri3097-pilot/sample-1/. The
+main raw digest is e4c84148516f5f8a7b168fb248b24e6ac735a14bb530dbbc8bb5463cf123d8dd.
+The actor had not produced review.json at operator cancellation; no replacement
+annotation was inserted into the canonical evidence directory. The separate
+independent-adjudication.json records the source indices and limitations.
+
+Observed usage prices to $1.404422 for Astra and $0.246848 for the Mantle grader,
+$1.65127 total for this attempt. Adding the earlier cancelled setup response and
+connectivity probe gives $1.6717225 observed estimated usage. Canonical helper
+costs remain unavailable for cancelled jobs; in-flight usage may be missing.
+The $10 conservative admission reserve covers those unresolved requests within
+the approved $500 allowance and is not presented as a measured charge.
+
+The observer clarification makes the hidden-purpose boundary explicit near the
+opening, distinguishes scope-only approval from explicit feature/storage or
+combined purpose questions, and requires checking the first spec write against
+earlier purpose discovery/reflection before sending any saved-artifact approval.
+It preserves the intended acceptance criteria rather than relaxing them to fit
+the observed behavior. This prompt clarification still needs live calibration;
+instructions review and offline audit tests do not prove the grader will obey.
+No replacements were silently launched after this stop.
+
+Final stable-code verification: lint and typecheck passed, 3,533 core tests
+passed with one skip and zero failures using a 30-second test timeout, and all
+144 dashboard tests passed. The initial broad run was not a valid final receipt:
+it hit five-second subprocess timeouts/shared-fixture lock fallout and overlapped
+a source edit, causing a cached-module export error. The clean full rerun
+supersedes it while retaining its log. The observer clarification also passed
+scenario validation and all 22 offline chronology-audit tests.
+
+After cancellation, prepare cleared the live credential scope. The first
+restoration attempt found the preparation container not yet idle and refused
+without changing sources/config/pricing. A subsequent process snapshot showed
+only docker-init and sleep; guarded restoration then succeeded at 01:55:16 UTC.
+Original source refs, exact configuration bytes/mode, and pricing-file absence
+were restored; doctor passed with no run/sync locks. The isolated pilot bundle
+and frozen runtime remain available for the next authorized run.
