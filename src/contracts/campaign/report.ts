@@ -115,6 +115,21 @@ export const ComparisonReportSchema = z
                 fail: Count,
                 indeterminate: Count,
                 no_usable_result: Count,
+                pass_rate: z
+                  .object({
+                    n: Count,
+                    rate: FiniteNumberSchema.min(0).max(1).nullable(),
+                  })
+                  .strict(),
+                means: z
+                  .object({
+                    subject_cost_usd: Quantity,
+                    grader_cost_usd: Quantity,
+                    wall_seconds: Quantity,
+                    subject_tokens: Quantity,
+                    grader_tokens: Quantity,
+                  })
+                  .strict(),
                 available: z
                   .object({
                     subject_cost_usd: Count,
@@ -130,7 +145,15 @@ export const ComparisonReportSchema = z
                 (a) =>
                   a.pass + a.fail + a.indeterminate + a.no_usable_result ===
                     a.denominator &&
-                  Object.values(a.available).every((n) => n <= a.denominator),
+                  a.pass_rate.n === a.pass + a.fail &&
+                  a.pass_rate.rate ===
+                    (a.pass_rate.n ? a.pass / a.pass_rate.n : null) &&
+                  Object.entries(a.available).every(
+                    ([key, n]) =>
+                      n <= a.pass_rate.n &&
+                      (n === 0) ===
+                        (a.means[key as keyof typeof a.means] === null),
+                  ),
                 'outcome counts must preserve planned denominator',
               ),
           ),
@@ -162,6 +185,24 @@ export const ComparisonReportSchema = z
         }, 'comparison roles must identify the exact arm inventory; single arms have no pairs'),
     ),
     accounting: AccountingSchema,
+    arm_accounting: z.array(
+      z.object({ arm: z.string(), accounting: AccountingSchema }).strict(),
+    ),
+    elapsed: z
+      .object({
+        started_at: z.string().datetime().nullable(),
+        ended_at: z.string().datetime().nullable(),
+        seconds: Quantity,
+      })
+      .strict()
+      .refine(
+        (e) =>
+          e.seconds ===
+          (e.started_at !== null && e.ended_at !== null
+            ? (Date.parse(e.ended_at) - Date.parse(e.started_at)) / 1000
+            : null),
+        'elapsed requires both frozen execution endpoints',
+      ),
     excluded_accounting: z
       .object({
         superseded: AccountingSchema,
@@ -190,6 +231,14 @@ export const ComparisonReportSchema = z
   })
   .strict()
   .superRefine((r, ctx) => {
+    if (
+      new Set(r.arm_accounting.map((a) => a.arm)).size !==
+      r.arm_accounting.length
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'arm accounting identities must be unique',
+      });
     if (
       new Set(r.attempts.map((a) => a.execution_attempt_id)).size !==
       r.attempts.length

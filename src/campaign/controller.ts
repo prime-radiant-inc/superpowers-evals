@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { userInfo } from 'node:os';
+import { cpus, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { defaultCommandRunner } from '../agents/command-runner.ts';
 import {
@@ -45,9 +45,17 @@ import {
   ContentionSampler,
   evaluateContention,
   parseSidecar,
+  samplerStaleMs,
 } from './contention.ts';
 import type { CampaignProjection } from './execution-state.ts';
-import { type HostStatsProbe, hostStatsProbeForCli } from './host-stats.ts';
+import {
+  assertFingerprintMatch,
+  DEFAULT_RESOURCE_FLOORS,
+  fingerprintFromStats,
+  type HostStatsProbe,
+  hostStatsProbeForCli,
+  preflightResourceFloors,
+} from './host-stats.ts';
 import type { SnapshotHandle } from './instrument-snapshot.ts';
 import { createDurableMarker } from './journal.ts';
 import { resolveKeyForSpawn } from './key-select.ts';
@@ -96,6 +104,7 @@ export interface SessionDependencies {
   runtime(authority: RuntimeAuthority): Runtime;
   publish: typeof publishExecution;
   probe: HostStatsProbe;
+  hostCpu(): { cpu_model: string; cpu_cores: number };
   cancelIntent(): {
     ref: ArtifactRef;
     controllerLoss: boolean;
@@ -208,6 +217,10 @@ function productionDependencies(
     },
     publish: publishExecution,
     probe: hostStatsProbeForCli(context.campaignDir),
+    hostCpu() {
+      const cpu = cpus();
+      return { cpu_model: cpu[0]?.model ?? '', cpu_cores: cpu.length };
+    },
     cancelIntent() {
       const intent = readCancelIntent(context.campaignDir);
       if (!intent) return null;
@@ -285,7 +298,7 @@ export async function runCampaignDispatch(
       }
   )[] = [];
   const signal = () => wake?.();
-  const keyGrants = new Map<string, { credential: string; env: string }[]>();
+  const keyGrants = new Map<string, { pool: string; env: string }[]>();
   const latches = new Map<string, number>();
   const policy = new Map(experiment.pool_policy.map((p) => [p.pool_id, p]));
   let registry: Readonly<Record<string, Credential>> = {};
@@ -329,8 +342,17 @@ export async function runCampaignDispatch(
     writer.assertCurrentOwner();
     assertCredentialAuthority(deps.registry(), experiment);
   };
-  const assertIntent = (prepared: PreparedExecution) => {
+  const admissionGuard = () => {
     guard();
+    const age = samplerStaleMs(
+      parseSidecar(context.campaignDir).lines,
+      clock.now() * 1000,
+    );
+    if (age > 2 * experiment.contention.cadence_ms)
+      throw Error(`stale telemetry (${age}ms); refusing admission`);
+  };
+  const assertIntent = (prepared: PreparedExecution) => {
+    admissionGuard();
     const a = projection().attempts.get(
       prepared.intent.identity.execution_attempt_id,
     );
@@ -839,6 +861,16 @@ export async function runCampaignDispatch(
         policy,
         experiment.contention.global_run_cap,
       );
+    const stats = deps.probe.sample(clock.now() * 1000);
+    const cpu = deps.hostCpu();
+    guard();
+    preflightResourceFloors(stats, DEFAULT_RESOURCE_FLOORS);
+    assertFingerprintMatch(
+      experiment.contention.host_fingerprint,
+      fingerprintFromStats(stats, cpu.cpu_model, cpu.cpu_cores),
+      experiment.contention,
+    );
+    guard();
     samplerLoop = sampler.start();
     for (;;) {
       guard();
@@ -990,7 +1022,7 @@ export async function runCampaignDispatch(
         continue;
       }
       deps.verifySnapshot();
-      guard();
+      admissionGuard();
       const activation: BlockActivation = {
         block_id: candidate.reserve ?? candidate.primary,
         primary_block_id: candidate.primary,
@@ -999,18 +1031,18 @@ export async function runCampaignDispatch(
         attempts: [],
       };
       const keyLoads = new Map<string, Record<string, number>>();
-      const loadsFor = (credential: string) => {
-        let loads = keyLoads.get(credential);
+      const loadsFor = (pool: string) => {
+        let loads = keyLoads.get(pool);
         if (!loads) {
           loads = {};
-          keyLoads.set(credential, loads);
+          keyLoads.set(pool, loads);
         }
         return loads;
       };
       for (const [id, grants] of keyGrants)
         if (!projection().attempts.get(id)?.stopped)
-          for (const { credential, env } of grants) {
-            const loads = loadsFor(credential);
+          for (const { pool, env } of grants) {
+            const loads = loadsFor(pool);
             loads[env] = (loads[env] ?? 0) + 1;
           }
       for (const slot of experiment.planned_slots.filter(
@@ -1024,19 +1056,20 @@ export async function runCampaignDispatch(
             )
           : undefined;
         const grant = (name: string) => {
+          const pool = poolKey(required(registry[name]), name);
           const selection = resolveKeyForSpawn({
             cred: required(registry[name]),
             credentialName: name,
             poolCapacity: required(
               policy.get(poolKey(required(registry[name]), name)),
             ).max_concurrency,
-            inFlight: loadsFor(name),
+            inFlight: loadsFor(pool),
           });
           if (selection.kind === 'wait')
             throw Error('aggregate admission exceeded per-key capacity');
           if (selection.kind === 'native') return undefined;
           const env = selection.grant.envName;
-          const loads = loadsFor(name);
+          const loads = loadsFor(pool);
           loads[env] = (loads[env] ?? 0) + 1;
           return env;
         };
@@ -1051,16 +1084,16 @@ export async function runCampaignDispatch(
           ...(graderKeyEnv ? { graderKeyEnv } : {}),
         });
         guard();
+        admissionGuard();
         activation.attempts.push(prepared.intent);
         keyGrants.set(prepared.intent.identity.execution_attempt_id, [
           ...(subjectKeyEnv
-            ? [{ credential: credentialFor(slot), env: subjectKeyEnv }]
+            ? [{ pool: subjectPool(slot.sample_id), env: subjectKeyEnv }]
             : []),
-          ...(graderKeyEnv
-            ? [{ credential: experiment.grader.credential, env: graderKeyEnv }]
-            : []),
+          ...(graderKeyEnv ? [{ pool: graderPool, env: graderKeyEnv }] : []),
         ]);
       }
+      admissionGuard();
       commit(
         candidate.reason ? 'block_replaced' : 'block_activated',
         candidate.reason
@@ -1075,6 +1108,7 @@ export async function runCampaignDispatch(
         )
           continue;
         guard();
+        admissionGuard();
         const bound = await runtime.create({ intent });
         guard();
         commit('runtime_bound', {
@@ -1108,6 +1142,7 @@ export async function runCampaignDispatch(
         )
           continue;
         guard();
+        admissionGuard();
         const monitor = await runtime.start(bound);
         writer.assertCurrentOwner();
         const receiptAttempt = projection().attempts.get(

@@ -492,3 +492,33 @@ test('seal rejects a forged analytical completeness claim despite authentic arti
   ).toThrow('canonical');
   expect(existsSync(join(f.campaignDir, 'report.json'))).toBe(false);
 });
+
+test('same-prefix evidence changes get distinct immutable snapshot bytes', () => {
+  const first = report();
+  const a = publication.publishReportSnapshot(first);
+  const directory = (digest: string) =>
+    join(
+      first.campaignDir,
+      'report-snapshots',
+      `${first.report.anchor.last_sequence}-${digest}`,
+    );
+  const original = readFileSync(join(directory(a.digest), 'report.json'));
+  const changed = mixedComparisonFixture();
+  changed.evidenceByAttempt.get('c1-r1-b-1')!.subject_cost_complete = false;
+  const next = { ...first.report, report: foldComparisonReport(changed) };
+  expect(next.report.comparisons[0]!.arms[0]!.available.subject_cost_usd).toBe(
+    1,
+  );
+  const b = publication.publishReportSnapshot({ ...first, report: next });
+  expect(b.digest).not.toBe(a.digest);
+  expect(readFileSync(join(directory(a.digest), 'report.json'))).toEqual(
+    original,
+  );
+  expect(
+    readFileSync(join(directory(b.digest), 'report.json')).equals(
+      publication.canonicalReportBytes(next),
+    ),
+  ).toBe(true);
+  expect(publication.publishReportSnapshot(first).digest).toBe(a.digest);
+  expect(existsSync(join(first.campaignDir, 'report.json'))).toBe(false);
+});

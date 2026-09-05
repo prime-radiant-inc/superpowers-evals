@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test';
 import { createApplianceProgram } from '../src/appliance/cli.ts';
+import {
+  canonicalReportBytes,
+  digestReportBytes,
+} from '../src/campaign/report-publication.ts';
 
 test('the supported helper exposes the complete finite campaign journey', () => {
   const program = createApplianceProgram();
@@ -59,7 +63,7 @@ import {
   FAKE_PROBE,
 } from './fixtures/core-comparison/registration.ts';
 
-function helperFixture() {
+function helperFixture(exportName = 'controller') {
   const r = experimentRegisterArgs();
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'campaign-operator-')));
   const bundle = join(root, 'bundle');
@@ -98,7 +102,7 @@ function helperFixture() {
     module: realpathSync(
       join(import.meta.dir, 'fixtures/core-comparison/operator-controller.ts'),
     ),
-    exportName: 'controller',
+    exportName,
   };
   let launches = 0;
   const commands = campaignCommands({
@@ -245,6 +249,15 @@ test('controller loss permits termination-only cancel, incomplete report and a f
   expect(readProjection(registered.campaignDir).termination).toBeNull();
   process.kill(p.controller!.pid, 'SIGKILL');
   await waitUntil(() => commands.status(args).state === 'interrupted');
+  const early = commands.report(args);
+  const snapshotDir = join(
+    registered.campaignDir,
+    'report-snapshots',
+    `${early.anchor.last_sequence}-${digestReportBytes(canonicalReportBytes(early))}`,
+  );
+  const earlyBytes = readFileSync(join(snapshotDir, 'report.json'));
+  expect(commands.report(args)).toEqual(early);
+  expect(existsSync(join(registered.campaignDir, 'report.json'))).toBe(false);
   expect((await commands.run(args)).kind).toBe('refused');
   expect(await commands.cancel(args)).toMatchObject({
     kind: 'unresolved',
@@ -265,6 +278,11 @@ test('controller loss permits termination-only cancel, incomplete report and a f
   const report = commands.report(args);
   expect(report.report.complete).toBe(false);
   expect(report.report.status).toBe('interrupted');
+  expect(report.anchor.last_sequence).toBeGreaterThan(
+    early.anchor.last_sequence,
+  );
+  expect(readFileSync(join(snapshotDir, 'report.json'))).toEqual(earlyBytes);
+  expect(commands.report(args)).toEqual(report);
   expect(existsSync(join(registered.campaignDir, 'report-seal.json'))).toBe(
     false,
   );
@@ -315,4 +333,52 @@ test('a different model comparison requires configuration only', async () => {
   await waitUntil(() => f.commands.status(args).next_action === 'report');
   expect(f.commands.report(args).report.comparisons).toHaveLength(1);
   rmSync(f.root, { recursive: true, force: true });
+}, 20000);
+
+test('an ended readout preserves its snapshot before final termination and seal', async () => {
+  const f = helperFixture('controllerWithHeldTermination');
+  const registration = f.commands.register({ suite: f.suite, json: true });
+  const args = {
+    campaignSelector: registration.experiment.campaign_id,
+    json: true,
+  };
+  expect((await f.commands.run(args)).kind).toBe('launched');
+  await waitUntil(() => existsSync(join(f.root, 'termination-ready')));
+  try {
+    const early = f.commands.report(args);
+    expect(early.report.status).toBe('completed');
+    expect(early.report.termination_verified).toBe(false);
+    const snapshot = join(
+      registration.campaignDir,
+      'report-snapshots',
+      `${early.anchor.last_sequence}-${digestReportBytes(canonicalReportBytes(early))}`,
+      'report.json',
+    );
+    const bytes = readFileSync(snapshot);
+    expect(existsSync(join(registration.campaignDir, 'report.json'))).toBe(
+      false,
+    );
+    expect(f.commands.report(args)).toEqual(early);
+    writeFileSync(join(f.root, 'release-termination'), 'release');
+    await waitUntil(
+      () => readProjection(registration.campaignDir).termination !== null,
+    );
+    const final = f.commands.report(args);
+    expect(final.anchor.last_sequence).toBeGreaterThan(
+      early.anchor.last_sequence,
+    );
+    expect(final.report.termination_verified).toBe(true);
+    expect(readFileSync(snapshot)).toEqual(bytes);
+    expect(
+      readFileSync(join(registration.campaignDir, 'report.json')).equals(
+        canonicalReportBytes(final),
+      ),
+    ).toBe(true);
+    expect(existsSync(join(registration.campaignDir, 'report-seal.json'))).toBe(
+      true,
+    );
+    expect(f.commands.report(args)).toEqual(final);
+  } finally {
+    writeFileSync(join(f.root, 'release-termination'), 'release');
+  }
 }, 20000);

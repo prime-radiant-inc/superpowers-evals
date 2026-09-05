@@ -177,29 +177,47 @@ export function foldComparisonReport(args: {
         const members = armSlots.map((s) => selected(s.sample_id));
         const count = (outcome: string) =>
           members.filter((a) => a?.accepted_outcome === outcome).length;
+        const determinate = members.filter(
+          (a) =>
+            a?.accepted_outcome === 'pass' || a?.accepted_outcome === 'fail',
+        );
+        const values = (q: Quantity) =>
+          determinate.flatMap((a) => {
+            const value = a ? measured(a.evidence, q) : null;
+            return value === null ? [] : [value];
+          });
+        const mean = (q: Quantity) => {
+          const data = values(q);
+          return data.length
+            ? stable(data.reduce((a, b) => a + b, 0) / data.length)
+            : null;
+        };
         return {
           arm,
+          pass_rate: {
+            n: determinate.length,
+            rate: determinate.length
+              ? count('pass') / determinate.length
+              : null,
+          },
+          means: {
+            subject_cost_usd: mean('subject_cost_usd'),
+            grader_cost_usd: mean('grader_cost_usd'),
+            wall_seconds: mean('wall_seconds'),
+            subject_tokens: mean('subject_tokens'),
+            grader_tokens: mean('grader_tokens'),
+          },
           denominator: armSlots.length,
           pass: count('pass'),
           fail: count('fail'),
           indeterminate: count('indeterminate'),
           no_usable_result: members.filter((a) => !a).length,
           available: {
-            subject_cost_usd: members.filter(
-              (a) => a && measured(a.evidence, 'subject_cost_usd') !== null,
-            ).length,
-            grader_cost_usd: members.filter(
-              (a) => a && measured(a.evidence, 'grader_cost_usd') !== null,
-            ).length,
-            wall_seconds: members.filter(
-              (a) => a && a.evidence.wall_seconds !== null,
-            ).length,
-            subject_tokens: members.filter(
-              (a) => a && a.evidence.subject_tokens !== null,
-            ).length,
-            grader_tokens: members.filter(
-              (a) => a && a.evidence.grader_tokens !== null,
-            ).length,
+            subject_cost_usd: values('subject_cost_usd').length,
+            grader_cost_usd: values('grader_cost_usd').length,
+            wall_seconds: values('wall_seconds').length,
+            subject_tokens: values('subject_tokens').length,
+            grader_tokens: values('grader_tokens').length,
           },
         };
       });
@@ -264,6 +282,13 @@ export function foldComparisonReport(args: {
     experiment.planned_slots.every((slot) =>
       attempts.some((a) => a.sample_id === slot.sample_id && a.analysis_usable),
     );
+  // The transition fold retains canonical transition bytes, including the ended
+  // timestamp after later accounting/termination transitions advance last_at.
+  const endedAt: string | null =
+    [...state.transitions.values()]
+      .map((bytes) => JSON.parse(bytes) as { type: string; at: string })
+      .find((t) => t.type === 'ended')?.at ?? null;
+  const startedAt = state.start?.claimed_at ?? null;
   return ComparisonReportSchema.parse({
     schema_version: 'quorum.comparison-report/v1',
     fold_version: 1,
@@ -275,6 +300,24 @@ export function foldComparisonReport(args: {
     termination_verified: state.termination !== null,
     comparisons,
     accounting: accounting(records),
+    arm_accounting: [
+      ...new Set(experiment.execution_surface.map((a) => a.name)),
+    ]
+      .sort()
+      .map((arm) => ({
+        arm,
+        accounting: accounting(
+          attempts.filter((a) => a.arm === arm).map((a) => a.evidence),
+        ),
+      })),
+    elapsed: {
+      started_at: startedAt,
+      ended_at: endedAt,
+      seconds:
+        startedAt !== null && endedAt !== null
+          ? (Date.parse(endedAt) - Date.parse(startedAt)) / 1000
+          : null,
+    },
     excluded_accounting: {
       superseded: accounting(
         attempts.filter((a) => !a.selected).map((a) => a.evidence),
@@ -302,7 +345,8 @@ export function foldComparisonReport(args: {
             'Termination is not verified at this journal prefix; accounting may be missing.',
           ]
         : []),
-      'Run wall seconds sum frozen run intervals, not campaign elapsed time.',
+      'Run wall seconds sum frozen run intervals; campaign elapsed is start claimed_at through the ended transition, excluding later termination work. Missing endpoints remain missing.',
+      'Per-arm means and pass rates use selected usable determinate outcomes; each quantity has independent availability.',
       'Excluded accounting categories overlap; do not add them to total accounting.',
       'Unsupported subject lifecycle/error claims remain conservative accepted indeterminate outcomes.',
     ],

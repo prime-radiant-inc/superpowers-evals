@@ -828,3 +828,46 @@ test.each([
     result.experiment.reserve_slots.map((slot) => slot.reserve_id),
   ).toEqual(['c2:control:x1']);
 });
+
+test.each([
+  ['matching reordered', ['KEY_B', 'KEY_A'], false, false],
+  ['equal overlapping allowance', ['KEY_B', 'KEY_C'], false, false],
+  ['conflicting overlap', ['KEY_A', 'KEY_B', 'KEY_C', 'KEY_D'], false, true],
+  ['singular overlap', null, false, true],
+  ['bearer overlap', null, true, true],
+] as const)('registration pool key allowances: %s', (_label, keyPool, bearer, rejects) => {
+  const base = experimentInput();
+  const first = credential({
+    quota_pool: 'shared',
+    max_concurrency: 4,
+    key_pool: ['KEY_A', 'KEY_B'],
+  });
+  delete first.api_key_env;
+  const second = credential({
+    quota_pool: 'shared',
+    max_concurrency: 4,
+    ...(keyPool ? { key_pool: [...keyPool] } : { api_key_env: 'KEY_B' }),
+    ...(bearer
+      ? {
+          auth: 'bedrock-bearer' as const,
+          api: 'mantle' as const,
+          region: 'us-east-1',
+        }
+      : {}),
+  });
+  if (keyPool) delete second.api_key_env;
+  const run = () =>
+    prepareExperimentRegistration(
+      experimentInput({
+        ...base,
+        credentials: {
+          ...base.credentials,
+          cred_a: first,
+          shared_alias: second,
+        },
+      }),
+    );
+  if (rejects)
+    expect(run).toThrow(/conflicting per-key allowance.*shared.*KEY_[AB]/);
+  else expect(run).not.toThrow();
+});

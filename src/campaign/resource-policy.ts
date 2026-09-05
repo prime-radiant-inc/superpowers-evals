@@ -1,6 +1,7 @@
 import type { PoolPolicy } from '../contracts/campaign/experiment.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import type { Credential } from '../contracts/credential.ts';
+import { keyWaitThreshold } from './key-select.ts';
 import { GLOBAL_POOL } from './simulate.ts';
 
 export class ResourcePolicyError extends Error {
@@ -51,9 +52,29 @@ export function compileResourcePolicy(
         `pool ${poolId} needs an explicit concurrency limit`,
       );
     }
+    const capacity = Math.min(...limits);
+    const perKey = new Map<string, { name: string; limit: number }>();
+    for (const [name, credential] of aliases) {
+      const keys =
+        credential.auth === 'bedrock-bearer'
+          ? [credential.api_key_env ?? 'AWS_BEARER_TOKEN_BEDROCK']
+          : credential.auth === 'api-key'
+            ? (credential.key_pool ??
+              (credential.api_key_env ? [credential.api_key_env] : []))
+            : [];
+      const limit = keyWaitThreshold(credential, capacity);
+      for (const key of keys) {
+        const previous = perKey.get(key);
+        if (previous && previous.limit !== limit)
+          throw new ResourcePolicyError(
+            `conflicting per-key allowance in pool ${poolId} for ${key}: ${previous.name}=${previous.limit}, ${name}=${limit}`,
+          );
+        perKey.set(key, { name, limit });
+      }
+    }
     result.set(poolId, {
       pool_id: poolId,
-      max_concurrency: Math.min(...limits),
+      max_concurrency: capacity,
       launch_spacing_seconds: Math.max(
         0,
         ...aliases.flatMap(([, credential]) =>

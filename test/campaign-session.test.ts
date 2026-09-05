@@ -84,6 +84,8 @@ function fixture(
     sharedKeyPool?: boolean;
     aliasCap?: boolean;
     extraScenario?: boolean;
+    fourAliases?: boolean;
+    reorderKeys?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'session-'));
@@ -91,6 +93,8 @@ function fixture(
   const resultsRoot = join(root, 'measurements');
   mkdirSync(resultsRoot);
   const experiment = twoArmExperiment();
+  experiment.contention.host_fingerprint.mem_bytes = 16 * 2 ** 30;
+  experiment.contention.host_fingerprint.disk_total_bytes = 100 * 2 ** 30;
   experiment.suite.reserve = options.reserve ?? 1;
   if (!experiment.suite.reserve) experiment.reserve_slots = [];
   experiment.suite.attempt_bounds.max_attempts = options.maxAttempts ?? 2;
@@ -166,13 +170,73 @@ function fixture(
       },
     };
   }
-  experiment.pool_policy = [
-    ...compileResourcePolicy(registry, ['subject', 'grader']).values(),
-  ];
-  experiment.credential_authority_digest = credentialAuthorityDigest(registry, [
-    'subject',
+  if (options.fourAliases) {
+    const surface = experiment.execution_surface[0]!;
+    experiment.refs.superpowers_by_arm = { a: null, b: null, c: null, d: null };
+    experiment.execution_surface = ['a', 'b', 'c', 'd'].map((name) => ({
+      ...surface,
+      name,
+      credential: name,
+    }));
+    experiment.comparisons = [
+      { comparison_id: 'c1', baseline: 'a', treatment: 'b' },
+      { comparison_id: 'c2', baseline: 'c', treatment: 'd' },
+    ];
+    experiment.suite.comparisons = [
+      ['a', 'b'],
+      ['c', 'd'],
+    ].map(([baseline, treatment]) => ({
+      baseline: baseline!,
+      treatment: treatment!,
+      scenarios: ['scenario'],
+      n: 1,
+    }));
+    experiment.cells = experiment.comparisons.map((c) => ({
+      comparison_id: c.comparison_id,
+      scenario: 'scenario',
+      arms: 'baseline' in c ? [c.baseline, c.treatment] : [c.arm],
+      n: 1,
+      coupling: 'arm-independent',
+    }));
+    experiment.planned_slots = experiment.cells.flatMap((cell) =>
+      cell.arms.map((arm) => ({
+        sample_id: `sample-${arm}`,
+        primary_block_id: `block-${cell.comparison_id}`,
+        comparison_id: cell.comparison_id,
+        scenario: 'scenario',
+        arm,
+        replicate: 1,
+      })),
+    );
+    experiment.reserve_slots = [];
+    experiment.suite.reserve = 0;
+    experiment.contention.global_run_cap = 4;
+    for (const name of ['a', 'b', 'c', 'd']) {
+      registry[name] = {
+        ...registry['subject']!,
+        quota_pool: 'shared_subject',
+        max_concurrency: 4,
+        key_pool:
+          options.reorderKeys && name === 'd'
+            ? ['KEY_B', 'KEY_A']
+            : ['KEY_A', 'KEY_B'],
+      };
+      delete registry[name]!.api_key_env;
+    }
+    delete registry['subject'];
+    registry['grader']!.max_concurrency = 4;
+  }
+  const activeNames = [
+    ...experiment.execution_surface.map((a) => a.credential),
     'grader',
-  ]);
+  ];
+  experiment.pool_policy = [
+    ...compileResourcePolicy(registry, activeNames).values(),
+  ];
+  experiment.credential_authority_digest = credentialAuthorityDigest(
+    registry,
+    activeNames,
+  );
   experiment.input_digest = experimentDigest(experiment);
   initExecutionJournal({ campaignDir: root, experiment });
   writeFileSync(join(root, 'campaign.json'), JSON.stringify(experiment));
@@ -194,7 +258,9 @@ function fixture(
   const cuts: string[] = [];
   let guards: Parameters<SessionDependencies['runtime']>[0];
   let finish = false;
+  let probeCalls = 0;
   const deps: SessionDependencies = {
+    hostCpu: () => ({ cpu_model: 'fixture', cpu_cores: 4 }),
     clock,
     registry: () => registry,
     verifySnapshot() {},
@@ -310,19 +376,20 @@ function fixture(
     },
     probe: {
       sample(now) {
-        if (options.missingTelemetry) throw new Error('probe missing');
-        clock.advance(0.001);
+        if (++probeCalls > 1 && options.missingTelemetry)
+          throw new Error('probe missing');
+        if (probeCalls > 1) clock.advance(0.001);
         return {
           ts_ms: now,
           load1: 0,
-          mem_available_bytes: 1000,
-          mem_total_bytes: 4096,
+          mem_available_bytes: 8 * 2 ** 30,
+          mem_total_bytes: 16 * 2 ** 30,
           swap_used_bytes: 0,
           swap_total_bytes: 0,
           process_count: 1,
           pid_max: 999,
-          disk_free_bytes: 1000,
-          disk_total_bytes: 8192,
+          disk_free_bytes: 50 * 2 ** 30,
+          disk_total_bytes: 100 * 2 ** 30,
         };
       },
     },
@@ -1354,4 +1421,137 @@ test('mixed Quorum stderr cannot attribute a rate limit or throttle either actor
   f.complete(3);
   await settle(f, run);
   expect(f.writer.readProjection().consumed_reserves.size).toBe(0);
+});
+
+test.each([
+  ['CPU cores', { cpu_model: 'fixture', cpu_cores: 2 }, {}, /cpu_cores/],
+  ['CPU model', { cpu_model: 'different', cpu_cores: 4 }, {}, /cpu_model/],
+  [
+    'memory fingerprint',
+    { cpu_model: 'fixture', cpu_cores: 4 },
+    { mem_total_bytes: 32 * 2 ** 30 },
+    /mem_bytes/,
+  ],
+  [
+    'disk floor',
+    { cpu_model: 'fixture', cpu_cores: 4 },
+    { disk_free_bytes: 1 },
+    /disk free/,
+  ],
+  [
+    'memory floor',
+    { cpu_model: 'fixture', cpu_cores: 4 },
+    { mem_available_bytes: 1 },
+    /available memory/,
+  ],
+  [
+    'PID headroom',
+    { cpu_model: 'fixture', cpu_cores: 4 },
+    { process_count: 999 },
+    /PID headroom/,
+  ],
+] as const)('live admission refuses %s and still finishes termination', async (_name, cpu, stats, reason) => {
+  const f = fixture();
+  Object.assign(f.deps, { hostCpu: () => cpu });
+  const probe = f.deps.probe;
+  f.deps.probe = {
+    sample(now) {
+      return { ...probe.sample(now), ...stats };
+    },
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  const result = await settle(f, run);
+  expect(result).toMatchObject({
+    outcome: 'interrupted',
+    reason: expect.stringMatching(reason),
+  });
+  expect(f.started).toEqual([]);
+  expect(f.writer.readProjection().attempts.size).toBe(0);
+  expect(f.finished).toBe(true);
+});
+
+test.each([
+  'snapshot',
+  'prepare',
+] as const)('stale telemetry after slow %s cannot activate or launch a block', async (boundary) => {
+  const f = fixture();
+  if (boundary === 'snapshot') {
+    let calls = 0;
+    f.deps.verifySnapshot = () => {
+      if (++calls === 2) f.clock.advance(1);
+    };
+  } else {
+    const prepare = f.deps.prepare;
+    f.deps.prepare = (args) => {
+      const result = prepare(args);
+      f.clock.advance(1);
+      return result;
+    };
+  }
+  const result = await settle(f, runCampaignDispatch(f.context, f.deps));
+  expect(result).toMatchObject({
+    outcome: 'interrupted',
+    reason: expect.stringContaining('stale telemetry'),
+  });
+  expect(f.started).toEqual([]);
+  expect(f.writer.readProjection().attempts.size).toBe(0);
+  expect(f.finished).toBe(true);
+});
+
+test.each([
+  false,
+  true,
+])('two pairs sharing four credential aliases obey actual pool-key peak loads (reordered=%s)', async (reorderKeys) => {
+  const f = fixture({ fourAliases: true, reorderKeys });
+  const selected = new Map<string, string>();
+  const prepare = f.deps.prepare;
+  f.deps.prepare = (args) => {
+    const prepared = prepare(args);
+    selected.set(
+      prepared.intent.identity.execution_attempt_id,
+      args.subjectKeyEnv!,
+    );
+    expect(args.graderKeyEnv).toBe('GRADER');
+    return prepared;
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  expect(f.started).toHaveLength(4);
+  const loads = new Map<string, number>();
+  for (const id of f.alive) {
+    const key = selected.get(id)!;
+    loads.set(key, (loads.get(key) ?? 0) + 1);
+  }
+  expect(Object.fromEntries(loads)).toEqual({ KEY_A: 2, KEY_B: 2 });
+  for (let i = 0; i < 4; i++) f.complete(i);
+  expect(await settle(f, run)).toMatchObject({ outcome: 'completed' });
+});
+
+test('stale producer after asynchronous create refuses start and still stops owned bindings', async () => {
+  const f = fixture();
+  const factory = f.deps.runtime;
+  const sample = f.deps.probe.sample.bind(f.deps.probe);
+  const oldTimestamp = f.clock.now() * 1000;
+  f.deps.runtime = (authority) => {
+    const runtime = factory(authority);
+    const create = runtime.create.bind(runtime);
+    runtime.create = async (prepared) => {
+      const bound = await create(prepared);
+      f.deps.probe.sample = (now) => ({ ...sample(now), ts_ms: oldTimestamp });
+      f.clock.advance(1);
+      return bound;
+    };
+    return runtime;
+  };
+  expect(await settle(f, runCampaignDispatch(f.context, f.deps))).toMatchObject(
+    {
+      outcome: 'interrupted',
+      reason: expect.stringContaining('stale telemetry'),
+    },
+  );
+  expect(f.started).toEqual([]);
+  expect(
+    [...f.writer.readProjection().attempts.values()].every((a) => a.stopped),
+  ).toBe(true);
+  expect(f.finished).toBe(true);
 });

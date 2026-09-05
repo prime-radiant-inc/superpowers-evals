@@ -1213,16 +1213,19 @@ function assertFullJournal(
   containerIds: readonly string[],
 ): void {
   const events = journalEvents(fixture.campaignDir);
-  const allocations = events.filter(
-    (event) => event.type === 'container_bound',
-  );
+  const allocations = events.filter((event) => event.type === 'runtime_bound');
   expect(allocations.length).toBeGreaterThan(0);
+  const attempts = readProjection(fixture.campaignDir).attempts;
   expect(
     allocations.every((event) => {
       const payload = event.payload;
       return (
         typeof payload['container_id'] === 'string' &&
-        CONTAINER_ID_RE.test(payload['container_id'])
+        CONTAINER_ID_RE.test(payload['container_id']) &&
+        attempts.get(String(payload['execution_attempt_id']))?.container_id ===
+          payload['container_id'] &&
+        attempts.get(String(payload['execution_attempt_id']))?.intent
+          .runtime_spec_digest === payload['runtime_spec_digest']
       );
     }),
   ).toBe(true);

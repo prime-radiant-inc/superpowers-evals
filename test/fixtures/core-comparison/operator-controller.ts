@@ -1,5 +1,6 @@
 // Real controller, preparation, publication and termination; only the worker and clock are fake.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpus } from 'node:os';
 import { join } from 'node:path';
 import type { CampaignControllerContext } from '../../../src/appliance/campaign-run.ts';
 import { publishExecution } from '../../../src/campaign/attempt-publish.ts';
@@ -18,7 +19,10 @@ import { loadCredentialsFile } from '../../../src/credentials/index.ts';
 import { writeAttemptManifest } from '../../../src/runner/manifest.ts';
 import { FakeClock } from '../../../src/scheduler/clock.ts';
 
-async function execute(context: CampaignControllerContext) {
+async function execute(
+  context: CampaignControllerContext,
+  beforeFinish?: () => void,
+) {
   const clock = new FakeClock(Date.now() / 1000);
   const { experiment, campaignDir } = context;
   const stopped = (b: BoundExecution): VerifiedStopped => ({
@@ -28,6 +32,10 @@ async function execute(context: CampaignControllerContext) {
     observed_at: new Date(clock.now() * 1000).toISOString(),
   });
   const deps: SessionDependencies = {
+    hostCpu() {
+      const cpu = cpus();
+      return { cpu_model: cpu[0]!.model, cpu_cores: cpu.length };
+    },
     clock,
     registry: () =>
       loadCredentialsFile(join(campaignDir, 'evals', 'credentials.yaml'))
@@ -175,6 +183,7 @@ async function execute(context: CampaignControllerContext) {
     },
     cancelIntent: () => null,
     finish(runtime) {
+      beforeFinish?.();
       completeControllerTermination({
         ...context,
         assertNoUnsettledStarts: () => runtime.assertNoUnsettledStarts(),
@@ -207,4 +216,19 @@ export async function controller(context: CampaignControllerContext) {
     );
     throw error;
   }
+}
+
+export async function controllerWithHeldTermination(
+  context: CampaignControllerContext,
+) {
+  await execute(context, () => {
+    const root = context.loaded.config.root;
+    writeFileSync(join(root, 'termination-ready'), 'ready');
+    const deadline = Date.now() + 15000;
+    while (!existsSync(join(root, 'release-termination'))) {
+      if (Date.now() > deadline)
+        throw Error('fixture termination release timed out');
+      Bun.sleepSync(10);
+    }
+  });
 }

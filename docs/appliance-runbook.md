@@ -686,3 +686,14 @@ bun run quorum run ...
 
 Before using break-glass on the shared box, verify no live job holds `run.lock`,
 record why the helper could not be used, and run `doctor --json` afterwards.
+
+
+Campaign report snapshots are immutable under
+`<campaignDir>/report-snapshots/<journal-sequence>-<report-content-digest>/`.
+Only complete terminated analysis publishes canonical `report.json`, `report.md`
+and its seal; reporting before cancellation or final termination preserves a
+snapshot without blocking a later report. Per-arm descriptive means/pass rates
+condition on usable determinate outcomes, while arm accounting retains every
+attempt. Campaign elapsed is the frozen start claim through execution end, with
+missing endpoints explicit. See [Campaign comparisons](campaign-comparisons.md)
+for denominators, host preflight and shared-key alias limits.

@@ -6,6 +6,7 @@ import {
 import { foldComparisonReport } from '../src/campaign/report.ts';
 import { missingAttemptEvidence } from '../src/campaign/report-evidence.ts';
 import { renderReportMd } from '../src/campaign/report-publication.ts';
+import { ComparisonReportSchema } from '../src/contracts/campaign/report.ts';
 import {
   blockActivation,
   evidenceRef,
@@ -15,13 +16,18 @@ import {
   transition,
   twoArmExperiment,
 } from './fixtures/core-comparison/factory.ts';
-import { mixedComparisonFixture } from './fixtures/core-comparison/report-fixture.ts';
+import {
+  mixedComparisonFixture,
+  singleArmComparisonFixture,
+} from './fixtures/core-comparison/report-fixture.ts';
 
 test('literal twelve-attempt oracle preserves fixed slots and quantity-matched pairs', () => {
   const fixture = mixedComparisonFixture();
   const report = foldComparisonReport(fixture);
   expect(report.comparisons).toEqual(fixture.expected.comparisons);
   expect(report.accounting).toEqual(fixture.expected.accounting);
+  expect(report.arm_accounting).toEqual(fixture.expected.arm_accounting);
+  expect(report.elapsed).toEqual(fixture.expected.elapsed);
   expect(
     report.excluded_accounting.superseded.combined_cost_usd.known_subtotal,
   ).toBe(7.7);
@@ -41,6 +47,11 @@ test('active prefixes hide accepted and raw behavioral evidence but retain accou
     .reduce(foldTransition, initialProjection(f.experiment));
   const report = foldComparisonReport(f);
   expect(report.behavior_available).toBe(false);
+  expect(report.elapsed).toEqual({
+    started_at: f.expected.elapsed.started_at,
+    ended_at: null,
+    seconds: null,
+  });
   expect(report.comparisons).toEqual([]);
   expect(
     report.attempts.every(
@@ -292,4 +303,66 @@ test('single-arm reports carry an explicit arm identity and render no paired rol
   expect(md).toContain('Single arm: **variant-a**. No paired comparison.');
   expect(md).toContain('| variant-a | single |');
   expect(md).not.toContain('Baseline mean');
+});
+
+test('single-arm summaries condition on determinate outcomes while accounting keeps overlapping indeterminate work', () => {
+  const fixture = singleArmComparisonFixture();
+  const report = foldComparisonReport(fixture);
+  const arm = report.comparisons[0]!.arms[0]!;
+  expect(arm).toMatchObject({
+    denominator: 3,
+    pass: 1,
+    fail: 1,
+    indeterminate: 1,
+    pass_rate: { n: 2, rate: 0.5 },
+    available: {
+      subject_cost_usd: 2,
+      grader_cost_usd: 1,
+      wall_seconds: 2,
+      subject_tokens: 1,
+      grader_tokens: 1,
+    },
+    means: {
+      subject_cost_usd: 5,
+      grader_cost_usd: 1,
+      wall_seconds: 10,
+      subject_tokens: 10,
+      grader_tokens: 40,
+    },
+  });
+  expect(report.comparisons[0]!.paired.pass_rate.n).toBe(0);
+  expect(report.arm_accounting).toEqual([
+    { arm: 'base', accounting: report.accounting },
+  ]);
+  expect(report.accounting.subject_cost_usd).toEqual({
+    known_subtotal: 110,
+    observed: 3,
+    attempts: 3,
+    complete: true,
+  });
+  expect(report.accounting.grader_cost_usd).toEqual({
+    known_subtotal: 10.5,
+    observed: 2,
+    attempts: 3,
+    complete: false,
+  });
+  expect(report.accounting.wall_seconds.known_subtotal).toBe(40);
+  expect(report.elapsed.seconds).toBe(24);
+  const json = JSON.parse(JSON.stringify(report));
+  expect(ComparisonReportSchema.parse(json)).toEqual(report);
+  const md = renderReportMd({
+    report,
+    anchor: {
+      campaign_id: report.campaign_id,
+      input_digest: report.input_digest,
+      last_sequence: fixture.state.transitions.size,
+      prefix_digest: 'a'.repeat(64),
+      roots: { campaign: '/fixture', results: '/fixture/results' },
+      artifacts: [],
+    },
+  });
+  expect(md).toContain('| base | 2 | 0.5 |');
+  expect(md).toContain('| base | grader_cost_usd | 1 | 1 |');
+  expect(md).toContain('Campaign elapsed (start claim → execution end): 24 s');
+  expect(md).toContain('All-attempt arm accounting: base');
 });

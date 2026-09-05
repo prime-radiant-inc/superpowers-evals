@@ -1,6 +1,7 @@
 import { lstatSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
+import { ensurePrivateDirNoFollow } from '../appliance/safe-fs.ts';
 import { jcsCanonicalize, sha256Hex } from '../contracts/campaign/digest.ts';
 import type { ArtifactRef } from '../contracts/campaign/execution.ts';
 import { type Report, ReportSchema } from '../contracts/campaign/report.ts';
@@ -153,6 +154,7 @@ export function renderReportMd(value: Report): string {
     '',
     `Status: ${r.status}; ${r.complete ? 'complete' : 'incomplete'}; behavior ${r.behavior_available ? 'available' : 'hidden'}.`,
     `Journal prefix: sequence ${anchor.last_sequence}, SHA-256 \`${anchor.prefix_digest}\`.`,
+    `Campaign elapsed (start claim → execution end): ${number(r.elapsed.seconds)} s; ${r.elapsed.started_at ?? 'missing'} → ${r.elapsed.ended_at ?? 'missing'}.`,
     `Input SHA-256: \`${anchor.input_digest}\`.`,
     '',
   ];
@@ -171,6 +173,23 @@ export function renderReportMd(value: Report): string {
       lines.push(
         `| ${escapeMarkdown(a.arm)} | ${'arm' in c.roles ? 'single' : a.arm === c.roles.baseline ? 'baseline' : 'treatment'} | ${a.denominator} | ${a.pass} | ${a.fail} | ${a.indeterminate} | ${a.no_usable_result} | ${a.available.subject_cost_usd} | ${a.available.grader_cost_usd} | ${a.available.wall_seconds} | ${a.available.subject_tokens} | ${a.available.grader_tokens} |`,
       );
+    lines.push('', '| Arm | Determinate n | Pass rate |', '|---|---:|---:|');
+    for (const a of c.arms)
+      lines.push(
+        `| ${escapeMarkdown(a.arm)} | ${a.pass_rate.n} | ${number(a.pass_rate.rate)} |`,
+      );
+    lines.push(
+      '',
+      'Per-arm quantities: selected usable determinate outcomes only; independent available n.',
+      '',
+      '| Arm | Quantity | Available n | Mean |',
+      '|---|---|---:|---:|',
+    );
+    for (const a of c.arms)
+      for (const key of Object.keys(a.means) as (keyof typeof a.means)[])
+        lines.push(
+          `| ${escapeMarkdown(a.arm)} | ${key} | ${a.available[key]} | ${number(a.means[key])} |`,
+        );
     if ('arm' in c.roles) {
       lines.push('');
       continue;
@@ -202,6 +221,11 @@ export function renderReportMd(value: Report): string {
     lines.push('');
   };
   totals('All-attempt accounting', r.accounting);
+  for (const a of r.arm_accounting)
+    totals(
+      `All-attempt arm accounting: ${escapeMarkdown(a.arm)}`,
+      a.accounting,
+    );
   for (const [key, values] of Object.entries(r.excluded_accounting))
     totals(`Excluded accounting: ${key}`, values);
   lines.push(
@@ -233,7 +257,21 @@ export function renderReportMd(value: Report): string {
 }
 /** Exclusive durable publication: identical bytes are idempotent; another
  * prefix is a concrete conflict. JSON fixes the anchor before Markdown lands. */
+export function publishReportSnapshot(args: {
+  campaignDir: string;
+  report: Report;
+}): { digest: string } {
+  return publishAt(args, true);
+}
 export function publishReport(args: { campaignDir: string; report: Report }): {
+  digest: string;
+} {
+  return publishAt(args, false);
+}
+function publishAt(
+  args: { campaignDir: string; report: Report },
+  snapshot: boolean,
+): {
   digest: string;
 } {
   if (args.report.anchor.roots.campaign !== args.campaignDir)
@@ -242,9 +280,22 @@ export function publishReport(args: { campaignDir: string; report: Report }): {
     throw new Error('cannot publish an active behavioral report');
   const json = canonicalReportBytes(args.report);
   const md = renderReportMd(args.report);
-  publishReportFile(args.campaignDir, 'report.json', json.toString());
-  publishReportFile(args.campaignDir, 'report.md', md);
-  return { digest: digestReportBytes(json) };
+  const digest = digestReportBytes(json);
+  const directory = snapshot
+    ? join(
+        args.campaignDir,
+        'report-snapshots',
+        `${args.report.anchor.last_sequence}-${digest}`,
+      )
+    : args.campaignDir;
+  if (snapshot) {
+    ensurePrivateDirNoFollow(args.campaignDir, directory, 'report snapshot');
+    fsyncDir(join(args.campaignDir, 'report-snapshots'));
+    fsyncDir(args.campaignDir);
+  }
+  publishReportFile(directory, 'report.json', json.toString());
+  publishReportFile(directory, 'report.md', md);
+  return { digest };
 }
 export function publishReportFile(
   campaignDir: string,

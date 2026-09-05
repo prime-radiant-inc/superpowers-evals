@@ -83,6 +83,14 @@ basename. The UUID and directory basename are different. `run` consumes exactly
 one start and launches the fixed private controller through its gate. Repeating
 `run` cannot restart ended or interrupted work. One host admits one spender;
 attempts may run concurrently within the frozen global and credential caps.
+Admission checks live resource floors and the registered CPU/memory/disk fingerprint.
+Stale host telemetry refuses further activation or worker launch, including after
+slow preparation; it does not prevent termination of already owned workers.
+Credential aliases share key loads by logical pool and public key environment name.
+Within a pool, an overlapping key must have the same derived per-key limit
+(`ceil(frozen pool capacity / inventory size)`) for every alias. Different or
+reordered inventories are allowed when shared-key limits agree; conflicting
+pooled, singular or bearer-key allowances fail registration.
 Ordinary appliance job IDs are not campaign selectors: generic job
 status/show/costs/cancel and detached workers refuse campaign invocation receipts.
 Raw `quorum campaign register|run|cancel|report` directs operators to the helper.
@@ -105,6 +113,26 @@ failed and replacement work, with subject/grader known subtotals and explicit
 missing/unpriced coverage. Unknown cost is not zero and totals are estimates,
 not an invoice. Behavioral reports require a terminal prefix or conclusively
 lost controller; unknown ownership does not unlock them.
+
+Unsealed report commands preserve immutable JSON and Markdown snapshots under
+`<campaignDir>/report-snapshots/<journal-sequence>-<report-content-digest>/`.
+Repeated identical readouts reuse that location; a newer prefix or changed evidence
+availability produces another snapshot. Earlier snapshots are never overwritten.
+Only a complete, completed, termination-verified report command publishes canonical
+`<campaignDir>/report.json`, `report.md` and `report-seal.json` after rederivation.
+Reading after controller loss before cancellation cannot occupy those final paths.
+
+Per-arm pass rates use selected usable determinate outcomes, with a separate
+explicit denominator. Per-arm cost/token/wall means use those same determinate
+outcomes and independent available counts; a partial role-cost subtotal is excluded
+from its descriptive mean. Paired quantities retain their distinct complete-pair
+cohorts. All-attempt accounting is also grouped by arm, retaining discarded,
+indeterminate, unaccepted and replacement work exactly once per attempt. Partial
+known role costs stay in accounting even when a complete mean is unavailable.
+Campaign elapsed seconds span the frozen start claim (`claimed_at`) to the `ended`
+transition timestamp. This includes admission/wait time, excludes subsequent
+termination work, and is not the sum of overlapping worker durations. Without both
+endpoints, elapsed remains missing rather than advancing with report read time.
 
 ```bash
 evals-appliance campaign cancel <campaign-id> --json

@@ -20,7 +20,7 @@ import {
   registerCampaign,
 } from '../campaign/registration.ts';
 import {
-  publishReport,
+  publishReportSnapshot,
   readComparisonReadout,
   readComparisonReport,
 } from '../campaign/report-publication.ts';
@@ -186,7 +186,7 @@ export function campaignCommands(deps: CampaignCommandDeps) {
         report.report.termination_verified
       )
         sealReport({ campaignDir: ctx.campaignDir, report });
-      else publishReport({ campaignDir: ctx.campaignDir, report });
+      else publishReportSnapshot({ campaignDir: ctx.campaignDir, report });
       return report;
     },
   };

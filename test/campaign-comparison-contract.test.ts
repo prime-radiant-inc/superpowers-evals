@@ -64,3 +64,23 @@ test('comparison role mappings are required and identify exactly the reported ar
     ).toBe(false);
   }
 });
+
+test('descriptive denominators, missing means, elapsed endpoints and arm identities are strict', () => {
+  const base = foldComparisonReport(mixedComparisonFixture());
+  for (const damage of [
+    'rate',
+    'available',
+    'mean',
+    'elapsed',
+    'arm',
+  ] as const) {
+    const r = structuredClone(base);
+    const arm = r.comparisons[0]!.arms[0]!;
+    if (damage === 'rate') arm.pass_rate.n = 3;
+    if (damage === 'available') arm.available.subject_cost_usd = 3;
+    if (damage === 'mean') arm.means.subject_tokens = 0;
+    if (damage === 'elapsed') r.elapsed.ended_at = null;
+    if (damage === 'arm') r.arm_accounting.push(r.arm_accounting[0]!);
+    expect(ComparisonReportSchema.safeParse(r).success).toBe(false);
+  }
+});
