@@ -1,13 +1,12 @@
 # PR 2258: Astra and Sol brainstorming evaluation
 
-**Status:** The eight-run pilot is authorized with a $500 budget under
-[PRI-3097](https://linear.app/prime-radiant/issue/PRI-3097/evaluate-pr-2258-brainstorming-with-astra-and-sol),
-and paused for a grader-routing correction identified during verification. One admitted job was
-cancelled before any recorded Coding-Agent interaction; no behavioral sample
-is available. Both subject models are configured for the direct OpenAI
-Responses API, and the appliance key can retrieve both model IDs. Inference
-access remains unverified. See the cancellation record below. The remaining
-new cases, fractals, and broader screen are subsequent work.
+**Status:** The eight-run pilot is running with a $500 total allowance under
+[PRI-3097](https://linear.app/prime-radiant/issue/PRI-3097/evaluate-pr-2258-brainstorming-with-astra-and-sol).
+Both subjects use the direct OpenAI Responses API at xhigh; the grader uses
+Sonnet 5 through Mantle. The cancelled pre-verification attempt is retained
+separately, and the first Astra pair must pass evidence review before the
+remaining six runs. No behavioral outcome is claimed yet. Fractals and the
+broader screen remain subsequent work.
 
 **Question:** Does [Superpowers PR 2258](https://github.com/obra/superpowers/pull/2258)
 make Astra establish and preserve shared understanding through brainstorming,
@@ -636,3 +635,42 @@ bundle so the shared default and credential separation for other subject
 families are preserved, and expose the existing Quorum grader-model selection
 through the helper before freezing a replacement runtime. No such change or
 pilot restart occurred during this verification.
+
+
+## Corrected pilot launch
+
+Drew requested proceeding after Mantle verification. The runtime is now frozen
+at `33c43fbd8521693c2ce4249b8a34d2bfa0fee595`; this supersedes 0e11ce12 for
+all eight pilot samples. It adds the helper's explicit grader-model option and
+admits its validated suffix through the worker's exact-command check. An
+independent reviewer caught the initially unchanged worker check; its refusal
+was reproduced, repaired, and re-reviewed with no remaining blocker.
+
+Each helper run now includes `--grader-model anthropic.claude-sonnet-5`.
+The pilot bundle ID is `pri3097-mantle-20260905`, with only the direct OpenAI
+subject key and Mantle grader key/base-URL aliases. The shared original bundle
+is untouched. The helper schema requires the logical bundle name `blessed`;
+the distinct path and bundle ID carry this selection. Initial preparation
+rejected a different logical name before a job was created; it was corrected
+under the same mutation locks. This is retained as a preparation error.
+
+The seven targeted Linux test files passed 276 tests; all 15 Linux pricing
+probes passed. Locally, 127 appliance tests and typecheck passed. The broader
+local suite encountered five-second timeouts in two CLI test files, followed
+by failures in their shared-fixture continuations; those 21 tests passed when
+rerun with a 30-second test limit. No product or test behavior was changed to
+hide the timeout. The broader suite is still running at this checkpoint.
+
+The corrected base preparation is `job-20260905T014142Z-d5e2`, using the same
+Gauntlet SHA, Codex 0.146.0 image, scenario, and pricing table. Restoration was
+rehearsed and activation repeated at 01:43:52 UTC September 5. Rehearsed
+activate-mantle.ts / restore-mantle.ts and private receipts remain in the
+appliance's state/experiments/pri3097-pilot/ directory.
+
+The first matched sample is `job-20260905T014425Z-4c6c` (Astra r1, base).
+The prior cancelled setup attempt remains outside the eight matched samples.
+Its incomplete accounting gets a conservative $10 admission debit within the
+$500 allowance, rather than being treated as zero or a measured total. The
+$0.000106 verification request is also included in the allowance. All new
+sample costs must be complete before further admission, with the existing
+$50-or-twice-the-largest-run reserve and first-pair review preserved.
