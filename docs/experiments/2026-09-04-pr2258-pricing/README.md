@@ -26,8 +26,9 @@ model, service tier, geography, and token accounting in the first pair. A
 regional Bedrock rate may carry a 10% premium; include that sensitivity in
 the budget ledger until the delivered route is established. Fast processing,
 separate tool fees, discounts, and unlogged calls are outside this table.
-Do not silently price non-Standard calls with it. The pilot's $100 proposal
-and $3/run grader allowance are unchanged.
+Do not silently price non-Standard calls with it. Drew approved a $500 total
+campaign allowance, including prior attempts; the experiment log and private
+ledger retain the admission reserves and observed spending.
 
 The OpenAI cache-write rates are represented, but the current Codex ATIF
 capture does not establish explicit cache-write coverage. Review raw usage

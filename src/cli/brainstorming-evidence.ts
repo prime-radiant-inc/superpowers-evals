@@ -7,6 +7,7 @@ import {
   indexTranscript,
   scoreEvidenceDirectory,
 } from '../experiments/brainstorming-evidence.ts';
+import { installInputCapture } from '../experiments/brainstorming-input-capture.ts';
 
 const [command, ...args] = Bun.argv.slice(2);
 function arg(index: number): string {
@@ -22,6 +23,7 @@ try {
     const evidence = join(runDir, 'brainstorming-evidence');
     mkdirSync(context, { recursive: true });
     mkdirSync(evidence, { recursive: true });
+    installInputCapture(workdir);
     copyFileSync(
       new URL(
         '../../scenarios/brainstorming-todo-shared-intent/observer.md',
@@ -40,12 +42,18 @@ Locate the main Codex rollout using HOWTO.md. Keep its absolute path as RAW_LOG.
 These commands are for your terminal, never the subject's terminal:
 
 - Index the completed raw log: ${cli} index RAW_LOG
-- Before approving each presented saved artifact, capture and read it:
-  ${cli} snapshot RAW_LOG ARTIFACT_PATH ${JSON.stringify(join(evidence, 'spec-1.json'))}
-  Use plan-1.json for the plan; use a new name for every later revision.
-  ARTIFACT_PATH is the actual presented file, usually inside ${workdir}.
-  The command prints the captured contents for your review. If the log is being
-  written, wait for the current response to settle and retry. Never approve first.
+- Read each presented saved artifact through your own terminal before replying.
+  The installed input guard automatically snapshots Markdown files under
+  ${workdir} and the main raw transcript before terminal input and bash calls.
+  Receipts are ${join(evidence, 'capture-*.json')}; inspect artifact_path,
+  content and after_line to select the matching revision after its presentation
+  and before your approval. Reference its filename without .json in review.json.
+  No manual snapshot command is required. A capture failure blocks input; wait
+  for the current response to settle and retry, or stop with Escape/Ctrl+C.
+  Never bypass a guard failure through another process. Keep file reads and
+  replies in separate calls; do not edit subject artifacts from your terminal.
+  A presented file outside the workspace or a non-Markdown/symlink document
+  needs operator review and cannot establish a pass with this instrument.
 - After stopping, index the complete main log. Write ${join(evidence, 'review.json')}
   with {"raw_log":"absolute main rollout path","review":{...}}. The review schema
   and annotation examples are in BRAINSTORMING-ANNOTATIONS.md; the index prints
