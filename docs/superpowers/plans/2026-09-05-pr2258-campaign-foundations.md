@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make checks-bearing attempts publish safely, admit the first repetition across comparisons, and list mixed campaign directories without changing execution selection.
+**Goal:** Make checks-bearing attempts publish safely, admit the first repetition across comparisons, list mixed campaign directories without changing execution selection, and deliver explicitly pinned pricing to workers.
 
-**Architecture:** Keep the existing runner, manifest, publisher, controller and V2 reader. Repair their narrow seams and exercise the real behavior through existing injected runtime/clock fixtures. These three tasks are independent and may run in separate worktrees in parallel.
+**Architecture:** Keep the existing runner, manifest, publisher, controller and V2 reader. Repair their narrow seams and exercise the real behavior through existing injected runtime/clock fixtures. These four tasks may run in separate worktrees; root integrates their changes to shared contract consumers.
 
 **Tech Stack:** TypeScript, Bun >=1.3.13, existing node filesystem APIs and Zod.
 
@@ -201,6 +201,101 @@ git add src/appliance/campaign.ts test/appliance-campaign-cutover.test.ts
 git commit -m 'Report unreadable campaign entries independently (PRI-3097)'
 ```
 
+### Task 4: Carry a selected pricing snapshot into the worker
+
+**Files:**
+- Modify: `src/contracts/campaign/suite.ts`, `src/campaign/registration.ts`, `src/campaign/container-spawner.ts`, `src/campaign/controller.ts`, `src/campaign/arm-suite-check.ts`
+- Create: `src/campaign/pricing-snapshot.ts`, `test/campaign-pricing-snapshot.test.ts`
+- Test: existing suite-contract, registration and container-spawner test files owning the touched seams
+
+**Interfaces:**
+
+```ts
+export interface PricingSnapshot {
+  path: string;
+  sha256: string;
+}
+export function verifyPricingSnapshot(args: {
+  evalsRoot: string;
+  snapshot: PricingSnapshot;
+}): { file: string; directory: string; sha256: string };
+```
+
+Export `PricingSnapshotSchema` and infer the type from it. `SuiteSchema` gains
+`pricing_snapshot: PricingSnapshotSchema.optional()`. Existing `Experiment.suite`
+and the digest of the entire suite carry its identity; do not add a second field
+or legacy-format conversion. `PrepareContainerExecutionArgs` gains
+`pricingSnapshot?: PricingSnapshot`; the controller passes the frozen selection.
+
+- [ ] **Step 1: Add RED tests for selection and source integrity.** Create a
+temporary Evals root with a small real obol `current.json` table. Parse an explicit
+selection and verify:
+
+```ts
+const snapshot = { path: 'pricing/current.json', sha256: sha256Hex(tableBytes) };
+expect(verifyPricingSnapshot({ evalsRoot, snapshot })).toEqual({
+  file: join(evalsRoot, 'pricing/current.json'),
+  directory: join(evalsRoot, 'pricing'),
+  sha256: snapshot.sha256,
+});
+expect(() => verifyPricingSnapshot({
+  evalsRoot,
+  snapshot: { ...snapshot, sha256: '0'.repeat(64) },
+})).toThrow();
+```
+
+Also reject absolute/traversing/backslash paths, missing file, symlink file or
+ancestor, nonregular source, and a basename other than `current.json`. Changing
+the path or digest changes the experiment digest. An absent selection retains
+ordinary bundled pricing; PR2258 readiness will explicitly require a selection.
+
+- [ ] **Step 2: Implement shared strict validation.** Validate a portable
+Evals-relative path ending in `current.json`, use the existing pinned no-follow
+file read primitive, compare SHA-256 of raw bytes, and return the verified
+absolute file/directory. No network, environment lookup, refresh or fallback.
+The table is accounting input and does not add budget/admission semantics.
+
+- [ ] **Step 3: Wire registration and worker preparation.** Validate after
+frozen Evals materialization/intake and before journal registration. Run the same
+validator in `prepareContainerExecution` before private stage creation. The
+controller supplies `context.experiment.suite.pricing_snapshot`. Set:
+
+```ts
+...(verifiedPricing === undefined ? {} : {
+  OBOL_PRICING_DIR: verifiedPricing.directory,
+})
+```
+
+inside the prepared runtime's public environment. The existing read-only Evals
+mount carries the exact file; do not copy the host HOME, add a new mount, or
+special-case PR2258. Scenario/arm suite checks use the same verifier against the
+checked source tree. Registration failure must not publish a campaign; preparation
+failure must precede credential-stage creation.
+
+- [ ] **Step 4: Prove actual worker pricing selection.** Extend the prepared
+runtime fixture with a selected table and run a fresh Bun subprocess using its
+public environment and a clean HOME to price synthetic ATIF and grader sidecar
+records through the real Quorum/obol functions. Put a deliberately wrong table in
+the host environment; selected bytes must win. Verify known input/output/cache
+arithmetic and explicit unknown-model cost, without any provider calls. Obol reads
+its pricing environment at process startup; do not mutate it after import.
+Deleting or changing selected bytes must fail preparation rather than fall back.
+
+- [ ] **Step 5: Verify, self-review and commit.**
+
+```sh
+bun run test test/campaign-pricing-snapshot.test.ts
+bun run lint
+bun run typecheck
+git diff --check
+git add src/campaign/pricing-snapshot.ts test/campaign-pricing-snapshot.test.ts
+git commit -m 'Pin campaign worker pricing to explicit snapshot bytes (PRI-3097)'
+```
+
+Include the explicit assigned wiring/test files actually changed. Run their
+focused regression suites too. Report exact RED/GREEN evidence; no live prices or
+new production rates are invented by this task.
+
 ## Integration acceptance
 
 - [ ] Task-specific spec/quality reviews pass before integrating each branch.
@@ -208,4 +303,4 @@ git commit -m 'Report unreadable campaign entries independently (PRI-3097)'
 - [ ] Preserve explicit skipped Linux/Gauntlet receipts as remaining qualification gates.
 - [ ] Record this foundation slice in the experiment log without claiming observer support or live readiness.
 
-The evidence, measurement and no-spend preflight plans follow this slice. No source task authorizes installed changes or paid execution.
+The evidence, measurement, six-arm configuration and no-spend preflight plans follow this slice. No source task authorizes installed changes or paid execution.
