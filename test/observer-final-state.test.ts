@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import {
   appendFileSync,
   lstatSync,
@@ -16,6 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as credentialScope from '../src/appliance/credential-scope.ts';
 import {
   captureFinalState,
   type FinalState,
@@ -407,6 +409,71 @@ describe('observer final-state inventory', () => {
     expect(snapshotTree(base)).toEqual(source);
   });
 
+  test('rejects an actual root-directory substitution after the root is pinned', () => {
+    const { base, roots } = fixture();
+    const logsRoot = roots[0]!.path;
+    const originalLogs = join(base, 'original-logs');
+    const replacementLogs = join(base, 'replacement-logs');
+    mkdirSync(replacementLogs);
+    const realPin = credentialScope.pinAbsoluteDir.bind(credentialScope);
+    let substituted = false;
+    const pinSpy = spyOn(credentialScope, 'pinAbsoluteDir').mockImplementation(
+      (path, label) => {
+        const pin = realPin(path, label);
+        if (!substituted && path === logsRoot) {
+          renameSync(logsRoot, originalLogs);
+          renameSync(replacementLogs, logsRoot);
+          substituted = true;
+        }
+        return pin;
+      },
+    );
+
+    try {
+      expectFinalStateError(() => captureFinalState(roots), 'source_changed');
+      expect(substituted).toBe(true);
+    } finally {
+      pinSpy.mockRestore();
+    }
+  });
+
+  test('rejects an actual root-ancestor substitution after the root is pinned', () => {
+    const { base, roots } = fixture();
+    const sourceParent = join(base, 'source-parent');
+    const originalParent = join(base, 'original-parent');
+    const replacementParent = join(base, 'replacement-parent');
+    mkdirSync(join(sourceParent, 'logs'), { recursive: true });
+    mkdirSync(join(replacementParent, 'logs'), { recursive: true });
+    const logsRoot = join(sourceParent, 'logs');
+    const changedRoots: FinalStateRoot[] = [
+      { id: 'logs', kind: 'transcripts', path: logsRoot },
+      roots[1]!,
+    ];
+    const realPin = credentialScope.pinAbsoluteDir.bind(credentialScope);
+    let substituted = false;
+    const pinSpy = spyOn(credentialScope, 'pinAbsoluteDir').mockImplementation(
+      (path, label) => {
+        const pin = realPin(path, label);
+        if (!substituted && path === logsRoot) {
+          renameSync(sourceParent, originalParent);
+          renameSync(replacementParent, sourceParent);
+          substituted = true;
+        }
+        return pin;
+      },
+    );
+
+    try {
+      expectFinalStateError(
+        () => captureFinalState(changedRoots),
+        'source_changed',
+      );
+      expect(substituted).toBe(true);
+    } finally {
+      pinSpy.mockRestore();
+    }
+  });
+
   const symlinkCases: readonly {
     name: string;
     mutate: (base: string, roots: FinalStateRoot[]) => FinalStateRoot[];
@@ -482,6 +549,75 @@ describe('observer final-state inventory', () => {
     expectFinalStateError(() => captureFinalState(roots), 'source_unavailable');
     expect(snapshotTree(base)).toEqual(source);
   });
+
+  test('maps a static child EACCES to source_unavailable during traversal', () => {
+    const { base, roots } = fixture();
+    const blockedPath = join(base, 'logs', 'blocked.jsonl');
+    writeFileSync(blockedPath, '{}\n');
+    const realLstat = fs.lstatSync.bind(fs);
+    const statSpy = spyOn(fs, 'lstatSync').mockImplementation(((
+      path: fs.PathLike,
+      options: { bigint: true },
+    ) => {
+      if (
+        path === blockedPath ||
+        (typeof path === 'string' && path.endsWith('/blocked.jsonl'))
+      ) {
+        throw Object.assign(new Error('permission denied'), {
+          code: 'EACCES',
+        });
+      }
+      return realLstat(path, options);
+    }) as typeof fs.lstatSync);
+
+    try {
+      expectFinalStateError(
+        () => captureFinalState(roots),
+        'source_unavailable',
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
+  test('maps a disappearing child ENOENT to source_changed during traversal', () => {
+    const { base, roots } = fixture();
+    const missingPath = join(base, 'logs', 'missing.jsonl');
+    writeFileSync(missingPath, '{}\n');
+    const realLstat = fs.lstatSync.bind(fs);
+    const statSpy = spyOn(fs, 'lstatSync').mockImplementation(((
+      path: fs.PathLike,
+      options: { bigint: true },
+    ) => {
+      if (
+        path === missingPath ||
+        (typeof path === 'string' && path.endsWith('/missing.jsonl'))
+      ) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }
+      return realLstat(path, options);
+    }) as typeof fs.lstatSync);
+
+    try {
+      expectFinalStateError(() => captureFinalState(roots), 'source_changed');
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    'maps source names that cannot be represented in a candidate to source_unavailable',
+    () => {
+      const { base, roots } = fixture();
+      writeFileSync(join(base, 'logs', 'C:drive.jsonl'), '{}\n');
+      writeFileSync(join(base, 'logs', 'back\\slash.jsonl'), '{}\n');
+
+      expectFinalStateError(
+        () => captureFinalState(roots),
+        'source_unavailable',
+      );
+    },
+  );
 
   test('rejects malformed, incomplete, and duplicate candidate inventories', () => {
     const { base, roots } = fixture();

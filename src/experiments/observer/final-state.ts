@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { type BigIntStats, lstatSync, readdirSync } from 'node:fs';
+import { type BigIntStats, fstatSync, lstatSync, readdirSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import {
   closePin,
+  type PinnedDir,
   pinAbsoluteDir,
   readPinnedNoFollowBytes,
 } from '../../appliance/credential-scope.ts';
@@ -205,19 +206,82 @@ function sourceChanged(): never {
   throw new FinalStateError('source_changed');
 }
 
-function readStats(path: string, changed: boolean): BigIntStats {
+function isObservationRaceError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === 'ENOENT' ||
+    code === 'ENOTDIR' ||
+    code === 'ELOOP' ||
+    code === 'ESTALE'
+  );
+}
+
+function readStats(path: string, changedOnMissing: boolean): BigIntStats {
   try {
     return lstatSync(path, { bigint: true });
-  } catch {
-    return changed ? sourceChanged() : sourceUnavailable();
+  } catch (error) {
+    if (changedOnMissing && isObservationRaceError(error)) sourceChanged();
+    sourceUnavailable();
   }
 }
 
-function readEntries(path: string, changed: boolean): string[] {
+function readEntries(path: string, changedOnMissing: boolean): string[] {
   try {
     return readdirSync(path).sort(compareText);
+  } catch (error) {
+    if (changedOnMissing && isObservationRaceError(error)) sourceChanged();
+    sourceUnavailable();
+  }
+}
+
+function sameDirectoryIdentity(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.isDirectory() &&
+    right.isDirectory() &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
+}
+
+function pinRoot(root: FinalStateRoot): {
+  pin: PinnedDir;
+  stats: BigIntStats;
+} {
+  let pin: PinnedDir;
+  try {
+    pin = pinAbsoluteDir(root.path, 'observer source');
   } catch {
-    return changed ? sourceChanged() : sourceUnavailable();
+    sourceUnavailable();
+  }
+  try {
+    const stats = fstatSync(pin.fd, { bigint: true });
+    if (!stats.isDirectory()) sourceUnavailable();
+    return { pin, stats };
+  } catch (error) {
+    closePin(pin);
+    if (error instanceof FinalStateError) throw error;
+    sourceUnavailable();
+  }
+}
+
+function assertRootStillBound(
+  root: FinalStateRoot,
+  expected: BigIntStats,
+): void {
+  let current: PinnedDir;
+  try {
+    current = pinAbsoluteDir(root.path, 'observer source');
+  } catch {
+    sourceChanged();
+  }
+  try {
+    const stats = fstatSync(current.fd, { bigint: true });
+    if (!sameDirectoryIdentity(expected, stats)) sourceChanged();
+  } catch (error) {
+    if (error instanceof FinalStateError) throw error;
+    sourceChanged();
+  } finally {
+    closePin(current);
   }
 }
 
@@ -268,9 +332,11 @@ function readFileNode(
   root: FinalStateRoot,
   relativeParts: readonly string[],
   before: BigIntStats,
+  rootIdentity: BigIntStats,
+  pinnedRootPath: string,
 ): FinalStateNode {
   const relativePath = relativeParts.join('/');
-  const absolutePath = join(root.path, ...relativeParts);
+  const absolutePath = join(pinnedRootPath, ...relativeParts);
   if (!before.isFile()) sourceUnavailable();
 
   let bytes: Buffer;
@@ -285,6 +351,7 @@ function readFileNode(
     bytes = body;
   } catch (error) {
     if (error instanceof FinalStateError) throw error;
+    assertRootStillBound(root, rootIdentity);
     let afterFailure: BigIntStats;
     try {
       afterFailure = lstatSync(absolutePath, { bigint: true });
@@ -311,19 +378,15 @@ function readFileNode(
 }
 
 function observeRoot(root: FinalStateRoot): FinalStateNode[] {
-  try {
-    closePin(pinAbsoluteDir(root.path, 'observer source'));
-  } catch {
-    sourceUnavailable();
-  }
-
+  const { pin, stats: rootIdentity } = pinRoot(root);
   const nodes: FinalStateNode[] = [];
   const visit = (
     relativeParts: readonly string[],
     observed?: BigIntStats,
   ): void => {
     const relativePath = relativeParts.join('/');
-    const absolutePath = join(root.path, ...relativeParts);
+    if (!isSafeRelativePath(relativePath)) sourceUnavailable();
+    const absolutePath = join(pin.viaPath, ...relativeParts);
     const before = observed ?? readStats(absolutePath, false);
     if (!before.isDirectory()) sourceUnavailable();
     const beforeEntries = readEntries(absolutePath, false);
@@ -331,7 +394,9 @@ function observeRoot(root: FinalStateRoot): FinalStateNode[] {
 
     for (const name of beforeEntries) {
       const childParts = [...relativeParts, name];
-      const childPath = join(root.path, ...childParts);
+      const childRelativePath = childParts.join('/');
+      if (!isSafeRelativePath(childRelativePath)) sourceUnavailable();
+      const childPath = join(pin.viaPath, ...childParts);
       const child = readStats(childPath, true);
       if (!child.isDirectory() && !child.isFile()) sourceUnavailable();
       if (
@@ -343,7 +408,9 @@ function observeRoot(root: FinalStateRoot): FinalStateNode[] {
       if (child.isDirectory()) {
         visit(childParts, child);
       } else if (root.kind === 'artifacts' || name.endsWith('.jsonl')) {
-        nodes.push(readFileNode(root, childParts, child));
+        nodes.push(
+          readFileNode(root, childParts, child, rootIdentity, pin.viaPath),
+        );
       }
     }
 
@@ -354,8 +421,14 @@ function observeRoot(root: FinalStateRoot): FinalStateNode[] {
     }
   };
 
-  visit([]);
-  return nodes;
+  try {
+    assertRootStillBound(root, rootIdentity);
+    visit([], rootIdentity);
+    assertRootStillBound(root, rootIdentity);
+    return nodes;
+  } finally {
+    closePin(pin);
+  }
 }
 
 function observeRoots(roots: readonly FinalStateRoot[]): FinalState {
