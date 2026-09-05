@@ -110,6 +110,7 @@ export function singleArmComparisonFixture() {
       {
         ...missingAttemptEvidence(),
         publication_valid: true,
+        missingness: [],
         observed_outcome: outcomes[i]!,
         subject_cost_usd: [2, 8, 100][i]!,
         subject_cost_complete: true,
