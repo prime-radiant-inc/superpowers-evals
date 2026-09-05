@@ -14,13 +14,7 @@ import {
 } from '../contracts/agent-config.ts';
 import { type Arm, ArmSchema } from '../contracts/campaign/arm.ts';
 import { type Grader, GraderSchema } from '../contracts/campaign/experiment.ts';
-import { profileParamsSchema } from '../contracts/campaign/profile-params.ts';
-import {
-  type BudgetedSuite,
-  BudgetedSuiteSchema,
-  type Suite,
-  SuiteSchema,
-} from '../contracts/campaign/suite.ts';
+import { type Suite, SuiteSchema } from '../contracts/campaign/suite.ts';
 import {
   type Credential,
   parseCredentialsFile,
@@ -38,10 +32,13 @@ export interface ArmSuiteCheckResult {
   readonly warnings: string[];
 }
 
-type CheckedSuite = BudgetedSuite | Suite;
+type CheckedSuite = Suite;
 
 function parseCheckedSuite(raw: Record<string, unknown>): CheckedSuite {
-  if (raw['schema_version'] === 1) return BudgetedSuiteSchema.parse(raw);
+  if (raw['schema_version'] !== 2)
+    throw new Error(
+      'unsupported suite version; only schema_version: 2 is supported',
+    );
   return SuiteSchema.parse(raw);
 }
 
@@ -170,30 +167,6 @@ export function checkArmSuiteFiles(
         `suites/${file}: ${err instanceof Error ? err.message : String(err)}`,
       );
       continue;
-    }
-    if (suite.schema_version === 1 && suite.profile !== undefined) {
-      const schema = profileParamsSchema(suite.profile);
-      if (schema === undefined) {
-        errors.push(`suites/${file}: unknown profile '${suite.profile}'`);
-      } else {
-        // Omitted profile_params parse as {} so required release_gate_v1
-        // fields (alpha, floors, deltas) cannot be skipped by omission.
-        const result = schema.safeParse(suite.profile_params ?? {});
-        if (!result.success) {
-          errors.push(
-            `suites/${file}: profile_params for ${suite.profile}: ${result.error.issues
-              .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
-              .join('; ')}`,
-          );
-        }
-      }
-    } else if (
-      suite.schema_version === 1 &&
-      suite.profile_params !== undefined
-    ) {
-      errors.push(
-        `suites/${file}: profile_params set without a profile (suite.profile is unset)`,
-      );
     }
     for (const comparison of suite.comparisons) {
       const refs =

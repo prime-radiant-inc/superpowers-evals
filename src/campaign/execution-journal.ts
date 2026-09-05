@@ -169,6 +169,9 @@ function read(campaignDir: string) {
   const experiment = authenticatedExperiment(JSON.parse(raw));
   const db = new Database(assertDbFile(campaignDir), { readonly: true });
   try {
+    // Opening a WAL reader can overlap the writer's connection recovery/checkpoint
+    // lock. Wait briefly for that SQLite lock; never reinterpret an unreadable prefix.
+    db.exec('PRAGMA busy_timeout = 1000');
     return replay(db, experiment);
   } finally {
     db.close();

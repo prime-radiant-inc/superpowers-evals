@@ -4,7 +4,6 @@ import {
   existsSync,
   fsyncSync,
   linkSync,
-  mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
@@ -13,7 +12,6 @@ import {
   rmSync,
   statSync,
   unlinkSync,
-  writeFileSync,
   writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,45 +19,12 @@ import { basename, join } from 'node:path';
 import {
   createBallast,
   createDurableMarker,
-  DEFAULT_BALLAST_BYTES,
-  electWriter,
-  initJournalDb,
   isStorageFullError,
-  JOURNAL_DB_FILENAME,
   JournalError,
   type JournalFsOps,
   releaseBallast,
-  stageAndPublishCampaignJson,
   verifyBallast,
 } from '../src/campaign/journal.ts';
-import type { ProcessIdentityProbe } from '../src/campaign/locks.ts';
-import { FakeClock } from '../src/scheduler/clock.ts';
-
-class LocalIdentity implements ProcessIdentityProbe {
-  exists(): 'alive' {
-    return 'alive';
-  }
-  startTimeMs(): number {
-    return 1; // stable local birth — single-process tests
-  }
-}
-
-/** The registration reality the publication gate requires: journal.db
- *  initialized AND a committed campaign_opened event (journaled before the
- *  campaign.json rename, with no frozen campaign document yet). */
-function openJournal(dir: string): void {
-  initJournalDb(dir);
-  const w = electWriter({
-    campaignDir: dir,
-    clock: new FakeClock(1),
-    identity: new LocalIdentity(),
-  });
-  w.appendEvent({
-    type: 'campaign_opened',
-    payload: { campaign_id: 'c1', digest: 'd'.repeat(64) },
-  });
-  w.release();
-}
 
 function tmpCampaign(): string {
   return mkdtempSync(join(tmpdir(), 'pub-'));
@@ -397,180 +362,6 @@ test('ballast: non-positive or non-integer size refuses without creating a file'
   }
 });
 
-test('publication: gate refuses without journal + ballast readiness; valid path staged then renamed LAST', () => {
-  const dir = tmpCampaign();
-  try {
-    const doc = { digest: 'd'.repeat(64) }; // the publisher takes unknown and serializes
-    // Readiness gate (D-7/P-4/S-8 enforced by the primitive, not the caller):
-    // no journal.db, no ballast -> refuse before touching the filesystem.
-    expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    expect(
-      readdirSync(dir).filter((n) => n.startsWith('campaign.json.stage.')),
-    ).toEqual([]);
-    // Ballast alone is not readiness: the journal must exist at the final path.
-    createBallast(dir, DEFAULT_BALLAST_BYTES);
-    expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    // An EMPTY journal.db is not an initialized journal (reviewer probe).
-    writeFileSync(join(dir, JOURNAL_DB_FILENAME), '');
-    expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    // A CORRUPT journal.db is not an initialized journal either.
-    writeFileSync(join(dir, JOURNAL_DB_FILENAME), 'definitely not sqlite');
-    expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    // Schema without the committed campaign_opened event is not readiness
-    // (clear the corrupt journal first — initJournalDb refuses to touch it).
-    rmSync(join(dir, JOURNAL_DB_FILENAME));
-    initJournalDb(dir);
-    expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    // Valid path: initialized journal (campaign_opened committed) + ballast.
-    openJournal(dir);
-    // A ballast of the wrong size is not the reserve the publisher expects.
-    // Asserted only once every OTHER readiness precondition holds, so the
-    // refusal can come from the ballast gate and nothing earlier.
-    expect(() => stageAndPublishCampaignJson(dir, doc, 64 * 1024)).toThrow(
-      JournalError,
-    );
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    stageAndPublishCampaignJson(dir, doc);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(true);
-    expect(
-      readdirSync(dir).filter((n) => n.startsWith('campaign.json.stage.')),
-    ).toEqual([]);
-    expect(
-      JSON.parse(readFileSync(join(dir, 'campaign.json'), 'utf8')),
-    ).toEqual(doc);
-    // A second publication refuses (publication happens exactly once).
-    expect(() => stageAndPublishCampaignJson(dir, doc)).toThrow(JournalError);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('publication: non-JSON payload refuses with nothing staged (serialize before open)', () => {
-  const dir = tmpCampaign();
-  try {
-    openJournal(dir);
-    createBallast(dir, 64 * 1024);
-    // JSON.stringify(undefined) -> undefined: previously staged "undefined\n".
-    expect(() =>
-      stageAndPublishCampaignJson(dir, undefined, 64 * 1024),
-    ).toThrow(JournalError);
-    // Circular reference: stringify throws — previously AFTER the stage open.
-    const loop: Record<string, unknown> = { self: null };
-    loop['self'] = loop;
-    expect(() => stageAndPublishCampaignJson(dir, loop, 64 * 1024)).toThrow(
-      JournalError,
-    );
-    // Neither refusal leaves stage debris or a published marker.
-    expect(
-      readdirSync(dir).filter((n) => n.startsWith('campaign.json.stage.')),
-    ).toEqual([]);
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('publication: a stale stage file from a crashed attempt refuses loudly, never overwrites', () => {
-  const dir = tmpCampaign();
-  try {
-    openJournal(dir);
-    createBallast(dir, 64 * 1024);
-    const stale = join(dir, `campaign.json.stage.${process.pid}`);
-    writeFileSync(stale, 'torn');
-    expect(() =>
-      stageAndPublishCampaignJson(dir, { ok: true }, 64 * 1024),
-    ).toThrow(/stale|remove/i);
-    expect(readFileSync(stale, 'utf8')).toBe('torn'); // untouched
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('the pinned P-4/S-8 order: journal init -> ballast -> campaign.json rename last', () => {
-  const dir = tmpCampaign();
-  try {
-    openJournal(dir); // (1) journal initialized + campaign_opened committed;
-    // (2) ballast created + fsynced BEFORE publication;
-    createBallast(dir, DEFAULT_BALLAST_BYTES);
-    // (3) campaign.json renamed LAST = readiness marker.
-    stageAndPublishCampaignJson(dir, { schema_version: 1 });
-    const order = readdirSync(dir);
-    expect(order).toContain('journal.db');
-    expect(order).toContain('.ballast');
-    expect(order).toContain('campaign.json');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('fs-ops order: ballast fsync precedes publication; stage write -> fsync -> rename LAST -> dir fsync', () => {
-  const dir = tmpCampaign();
-  try {
-    openJournal(dir);
-    const { ops, calls } = recordedOps();
-    createBallast(dir, 64 * 1024, ops);
-    stageAndPublishCampaignJson(dir, { schema_version: 1 }, 64 * 1024, ops);
-    const stage = `campaign.json.stage.${process.pid}`;
-    const dirName = basename(dir);
-    expect(calls).toEqual([
-      'open-wx:.ballast',
-      'write:.ballast',
-      'fsync:.ballast', // durable BEFORE the allocation check
-      'close:.ballast',
-      'stat:.ballast', // non-sparse/size verification
-      `open-r:${dirName}`, // dir fsync after ballast creation
-      `fsync:${dirName}`,
-      `close:${dirName}`,
-      'exists:campaign.json', // publication gate: once-only
-      'exists:journal.db', // publication gate: journal readiness
-      'stat:.ballast', // publication gate: reserve integrity
-      `open-wx:${stage}`,
-      `write:${stage}`,
-      `fsync:${stage}`,
-      `close:${stage}`,
-      `rename:${stage}->campaign.json`, // rename LAST
-      `open-r:${dirName}`, // dir fsync after the publication rename
-      `fsync:${dirName}`,
-      `close:${dirName}`,
-    ]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('verifyBallast and publication refuse a zero-byte reserve outright', () => {
-  const dir = tmpCampaign();
-  try {
-    createBallast(dir, 64 * 1024);
-    // Zero is never a valid expected reserve — not even against a real ballast.
-    expect(verifyBallast(dir, 0)).toBe(false);
-    expect(verifyBallast(dir, -1)).toBe(false);
-    // A zero-byte file is not a reserve, so verifying size 0 must refuse too.
-    rmSync(join(dir, '.ballast'));
-    writeFileSync(join(dir, '.ballast'), '');
-    expect(verifyBallast(dir, 0)).toBe(false);
-    // Publication against a zero reserve refuses before staging anything.
-    openJournal(dir);
-    rmSync(join(dir, '.ballast')); // clear the zero-byte stand-in first
-    createBallast(dir, 64 * 1024);
-    expect(() => stageAndPublishCampaignJson(dir, { ok: 1 }, 0)).toThrow(
-      JournalError,
-    );
-    expect(existsSync(join(dir, 'campaign.json'))).toBe(false);
-    expect(
-      readdirSync(dir).filter((n) => n.startsWith('campaign.json.stage.')),
-    ).toEqual([]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('fs-ops order: releaseBallast unlinks then fsyncs the directory (D-13 pause path)', () => {
   const dir = tmpCampaign();
   try {
@@ -587,20 +378,6 @@ test('fs-ops order: releaseBallast unlinks then fsyncs the directory (D-13 pause
     ]);
     expect(existsSync(join(dir, '.ballast'))).toBe(false);
     expect(() => releaseBallast(dir)).toThrow(JournalError); // absent ballast is loud
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('fs-ops order: publication refused before readiness touches no write/rename ops', () => {
-  const dir = tmpCampaign();
-  try {
-    mkdirSync(dir, { recursive: true }); // empty: no journal, no ballast
-    const { ops, calls } = recordedOps();
-    expect(() =>
-      stageAndPublishCampaignJson(dir, { x: 1 }, 64 * 1024, ops),
-    ).toThrow(JournalError);
-    expect(calls).toEqual(['exists:campaign.json', 'exists:journal.db']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

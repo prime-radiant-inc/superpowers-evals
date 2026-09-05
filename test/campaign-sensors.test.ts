@@ -7,7 +7,6 @@ import {
   auditExposure,
   classifyBillingExhaustion,
   classifyRateLimit,
-  decideExposureAtTerminal,
   EXPOSURE_DERIVATIONS,
   ExposureTracker,
   exposureProbeForAgent,
@@ -513,16 +512,6 @@ test('per-harness exposure derivations: every live harness parses its real sessi
     `${JSON.stringify({ type: 'session.start', timestamp: '2026-08-27T09:59:59.000Z' })}\n`,
   );
   expect(copilot.observe(stray)).toBeNull();
-  expect(
-    decideExposureAtTerminal({
-      runtimeTsMs: observed,
-      captureTsMs: null,
-      suiteKind: 'gating',
-    }),
-  ).toEqual({
-    established: false,
-    resolution: 'skew_breach_exclude_and_refill',
-  });
 
   // A half-written/unparseable log is absence, never a crash mid-campaign.
   const torn = join(dir, 'torn.jsonl');
@@ -552,54 +541,6 @@ test('C7 capture re-derivation: trajectoryExposureMs reads the first step timest
     Date.parse('2026-08-27T10:00:06.000Z'),
   );
   expect(trajectoryExposureMs(join(runDir, 'nope'))).toBeNull();
-});
-
-test('R-SNS-4 decision point: established value or the enforced gating/exploratory outcome, never a silent neutral', () => {
-  // Runtime wins (monotonic single emission); capture fallback.
-  expect(
-    decideExposureAtTerminal({
-      runtimeTsMs: 900,
-      captureTsMs: 1000,
-      suiteKind: 'gating',
-    }),
-  ).toEqual({
-    established: true,
-    tsMs: 900,
-    source: 'runtime',
-  });
-  expect(
-    decideExposureAtTerminal({
-      runtimeTsMs: null,
-      captureTsMs: 1000,
-      suiteKind: 'gating',
-    }),
-  ).toEqual({
-    established: true,
-    tsMs: 1000,
-    source: 'capture',
-  });
-  // Gating absence is a skew breach: excluded from the paired comparison and
-  // refilled from reserve (R-SNS-4/R-DSP-9); exploratory renders a caveat.
-  expect(
-    decideExposureAtTerminal({
-      runtimeTsMs: null,
-      captureTsMs: null,
-      suiteKind: 'gating',
-    }),
-  ).toEqual({
-    established: false,
-    resolution: 'skew_breach_exclude_and_refill',
-  });
-  expect(
-    decideExposureAtTerminal({
-      runtimeTsMs: null,
-      captureTsMs: null,
-      suiteKind: 'exploratory',
-    }),
-  ).toEqual({
-    established: false,
-    resolution: 'render_caveat',
-  });
 });
 
 test('D-9 audit: inclusion rides the paired-comparison predicate — a skew-crossing value divergence mints exposure_audit', () => {

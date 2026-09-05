@@ -48,21 +48,21 @@ const ARM = [
   'superpowers: none',
 ].join('\n');
 const SUITE = [
-  'schema_version: 1',
+  'schema_version: 2',
   'name: compare_fx',
-  'kind: exploratory',
-  'budget_usd: 50',
+  'reserve: 0',
+  'max_exposure_skew: 60',
+  'attempt_bounds: {max_attempts: 1, max_time_s: 120}',
   'grader:',
   '  credential: opus_fx',
   '  model: claude-opus-5',
   'comparisons:',
-  '  - baseline: claude_fx',
-  '    treatment: claude_fx',
+  '  - arm: claude_fx',
   '    scenarios: [scn_a]',
   '    n: 1',
 ].join('\n');
 
-test('missing arms/ and suites/ directories are tolerated (v1 has none yet)', () => {
+test('missing arms/ and suites/ directories are tolerated', () => {
   const root = repo({});
   expect(check(root)).toEqual({ ok: true, errors: [], warnings: [] });
 });
@@ -204,14 +204,14 @@ test('a missing credential registry with arms present yields the same single mar
 
 test('suite schema errors surface with the file name', () => {
   const root = repo({
-    'suites/broken.yaml': SUITE.replace('budget_usd: 50', 'budget_usd: -5'),
+    'suites/broken.yaml': SUITE.replace('reserve: 0', 'reserve: -1'),
   });
   const result = check(root);
   expect(result.ok).toBe(false);
   expect(result.errors.join('\n')).toMatch(/broken\.yaml/);
 });
 
-test('gating suite profile params validate against the registry', () => {
+test('historical gating suites are unsupported regardless of profile params', () => {
   const gating = [
     'schema_version: 1',
     'name: gate_fx',
@@ -243,7 +243,7 @@ test('gating suite profile params validate against the registry', () => {
     'credentials.yaml': CREDENTIALS,
   });
   const okResult = check(root);
-  expect(okResult.errors).toEqual([]);
+  expect(okResult.errors.join('\n')).toMatch(/unsupported suite version/);
   const badParams = gating.replace('alpha: 0.05', 'alpha: 2');
   const badRoot = repo({
     'arms/claude_fx.yaml': ARM,
@@ -254,7 +254,7 @@ test('gating suite profile params validate against the registry', () => {
   });
   const badResult = check(badRoot);
   expect(badResult.ok).toBe(false);
-  expect(badResult.errors.join('\n')).toMatch(/alpha/);
+  expect(badResult.errors.join('\n')).toMatch(/unsupported suite version/);
 });
 
 test('suite with arm references and no arm documents fails loud', () => {
@@ -264,7 +264,7 @@ test('suite with arm references and no arm documents fails loud', () => {
   expect(result.errors.join('\n')).toMatch(/unknown arm 'claude_fx'/);
 });
 
-test('profile without profile_params fails on required fields', () => {
+test('historical profile declaration is unsupported', () => {
   const profileOnly = [
     'schema_version: 1',
     'name: gate_fx',
@@ -286,11 +286,11 @@ test('profile without profile_params fails on required fields', () => {
   const root = repo({ 'suites/gate_fx.yaml': profileOnly });
   const result = check(root);
   expect(result.ok).toBe(false);
-  expect(result.errors.join('\n')).toMatch(/alpha/);
-  expect(result.errors.join('\n')).toMatch(/determinate_n_floor/);
+  expect(result.errors.join('\n')).toMatch(/unsupported suite version/);
+  expect(result.errors.join('\n')).toMatch(/unsupported suite version/);
 });
 
-test('profile_params without profile fails with a clear error', () => {
+test('historical orphan profile parameters are unsupported', () => {
   const orphanParams = [
     'schema_version: 1',
     'name: compare_fx',
@@ -310,9 +310,7 @@ test('profile_params without profile fails with a clear error', () => {
   const root = repo({ 'suites/orphan.yaml': orphanParams });
   const result = check(root);
   expect(result.ok).toBe(false);
-  expect(result.errors.join('\n')).toMatch(
-    /profile_params set without a profile/,
-  );
+  expect(result.errors.join('\n')).toMatch(/unsupported suite version/);
 });
 
 // Registration extracts the grader block BEFORE the strict SuiteSchema parse
@@ -406,33 +404,15 @@ test('an unknown grader credential fails loud', () => {
   );
 });
 
-test('a gating suite with a bedrock-bearer grader credential passes (R-REG-15 rescinded)', () => {
+test('a finite suite accepts a bedrock-bearer grader credential', () => {
   // Owner ruling 2026-09-01: the api-key-only gating rule was attestation
   // formalism for D4b-era release decisions; the check accepts whatever
   // registered grader credential registration accepts — including the
   // bedrock-bearer route the D4a live validation runs on.
-  const gating = [
-    'schema_version: 1',
-    'name: gate_fx',
-    'kind: gating',
-    'budget_usd: 850',
-    'profile: release_gate_v1',
-    'reserve: 2',
-    'max_exposure_skew: 600',
-    'grader:',
-    '  credential: opus_bedrock_fx',
-    '  model: anthropic.claude-opus-4-8',
-    'profile_params:',
-    '  alpha: 0.05',
-    '  determinate_n_floor: 4',
-    '  completion_divergence_max: 0.2',
-    '  mde_by_scenario: { scn_a: 0.15 }',
-    'comparisons:',
-    '  - baseline: claude_fx',
-    '    treatment: claude_fx2',
-    '    scenarios: [scn_a]',
-    '    n: 1',
-  ].join('\n');
+  const gating = SUITE.replace(
+    'credential: opus_fx',
+    'credential: opus_bedrock_fx',
+  ).replace('model: claude-opus-5', 'model: anthropic.claude-opus-4-8');
   const root = repo({
     'arms/claude_fx.yaml': ARM,
     'arms/claude_fx2.yaml': ARM.replace('name: claude_fx', 'name: claude_fx2'),
@@ -455,13 +435,11 @@ test('a gating suite with a bedrock-bearer grader credential passes (R-REG-15 re
 });
 
 test('suite subdirectories are not parsed as suites', () => {
-  // Operator side-input (pricing overrides) rides beside the suite documents;
-  // registration validates it at verb time, so the check ignores it.
+  // Only top-level suite declarations are active source.
   const root = repo({
     'arms/claude_fx.yaml': ARM,
     'suites/compare_fx.yaml': SUITE,
-    'suites/pricing-overrides/gate_fx.yaml':
-      '- applies_to_grader: true\n  per_token_usd: 0.000006\n  rationale: r',
+    'suites/notes/example.yaml': 'not: an active suite',
     'coding-agents/claude.yaml': AGENT_YAML,
     'credentials.yaml': CREDENTIALS,
   });

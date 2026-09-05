@@ -226,3 +226,51 @@ test('current writer fence refuses released, poisoned and deposed authority befo
   }).toThrow(/deposed/);
   expect(effects).toBe(0);
 });
+
+for (const holdMs of [100, 1400]) {
+  test(`a real SQLite writer holds a whole transition for ${holdMs}ms across the bounded reader wait`, async () => {
+    const f = fixture();
+    f.writer.release();
+    const ready = join(f.dir, 'writer-ready');
+    const module = new URL(
+      '../src/campaign/execution-journal.ts',
+      import.meta.url,
+    ).href;
+    const locks = new URL('../src/campaign/locks.ts', import.meta.url).href;
+    const clocks = new URL('../src/scheduler/clock.ts', import.meta.url).href;
+    const script = `
+      import {Database} from 'bun:sqlite';
+      import {writeFileSync} from 'node:fs';
+      import {ExecutionJournalWriter} from ${JSON.stringify(module)};
+      import {realProcessIdentityProbe} from ${JSON.stringify(locks)};
+      import {RealClock} from ${JSON.stringify(clocks)};
+      let armed=false;
+      const writer=ExecutionJournalWriter.elect({campaignDir:${JSON.stringify(f.dir)},experiment:${JSON.stringify(f.experiment)},clock:new RealClock(),identity:realProcessIdentityProbe,connect(path){
+        const db=new Database(path);db.exec('PRAGMA locking_mode=EXCLUSIVE');
+        return new Proxy(db,{get(target,key){if(key==='exec')return sql=>{if(armed&&sql==='COMMIT'){writeFileSync(${JSON.stringify(ready)},'ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${holdMs});}return target.exec(sql);};const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;}});
+      }});
+      armed=true;writer.commitTransition(${JSON.stringify(f.activation)});writer.release();
+    `;
+    const child = Bun.spawn([process.execPath, '--eval', script], {
+      stdout: 'ignore',
+      stderr: 'pipe',
+    });
+    try {
+      const deadline = Date.now() + 3000;
+      while (!existsSync(ready)) {
+        if (Date.now() > deadline)
+          throw Error(await new Response(child.stderr).text());
+        await Bun.sleep(5);
+      }
+      if (holdMs < 1000) expect(readProjection(f.dir).attempts.size).toBe(2);
+      else expect(() => readProjection(f.dir)).toThrow(/locked/);
+      expect(await child.exited).toBe(0);
+      const prefix = readCommittedTransitions(f.dir);
+      expect(prefix).toHaveLength(4);
+      expect(readProjection(f.dir).attempts.size).toBe(2);
+    } finally {
+      child.kill();
+      await child.exited;
+    }
+  });
+}

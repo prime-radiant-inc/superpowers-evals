@@ -24,7 +24,6 @@ import { join, resolve } from 'node:path';
 import { readLiveSpendHolder } from '../src/campaign/locks.ts';
 import { deleteProcessEnv, envSnapshot, setProcessEnv } from '../src/env.ts';
 import { runBatch } from '../src/run-all/index.ts';
-import { publishedCampaign } from './campaign-recovery-fixtures.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const CLI = resolve(import.meta.dir, '..', 'src', 'cli', 'index.ts');
@@ -98,26 +97,6 @@ function scenario(): string {
   chmodSync(join(scn, 'setup.sh'), 0o755);
   writeFileSync(join(scn, 'checks.sh'), 'pre() { :; }\npost() { :; }\n');
   return scn;
-}
-
-/** A published campaign dir + snapshot credentials: enough for the run verb
- * to reach (and refuse at) live-spend acquisition. */
-function campaignFixture(): string {
-  const fx = publishedCampaign({ inFlight: false });
-  mkdirSync(join(fx.dir, 'evals'), { recursive: true });
-  writeFileSync(
-    join(fx.dir, 'evals', 'credentials.yaml'),
-    [
-      'grader_cred:',
-      '  model: grader-model',
-      '  harnesses: [claude]',
-      '  api: anthropic',
-      '  auth: api-key',
-      '  api_key_env: KEY_G',
-      '',
-    ].join('\n'),
-  );
-  return fx.dir;
 }
 
 function git(dir: string, args: string[]): string {
@@ -250,16 +229,6 @@ test('the three spender entrypoints all refuse while a live holder holds, naming
     );
     expect(batch.status).not.toBe(0);
     expect(batch.stderr).toMatch(refusal);
-
-    // 3. `campaign run` (published fixture; refuses at acquisition,
-    //    before any reconcile/preflight work).
-    const campaign = spawnSync(
-      'bun',
-      [CLI, 'campaign', 'run', campaignFixture()],
-      { encoding: 'utf8', env: spenderEnv(LOCK), timeout: 60_000 },
-    );
-    expect(campaign.status).not.toBe(0);
-    expect(campaign.stderr).toMatch(refusal);
   } finally {
     child.kill('SIGKILL');
   }

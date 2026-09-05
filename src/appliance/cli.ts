@@ -1,23 +1,15 @@
 #!/usr/bin/env bun
-import {
-  existsSync,
-  lstatSync,
-  realpathSync,
-  type Stats,
-  statSync,
-} from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { Command } from 'commander';
 import {
   type CommandRunner,
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
-import { loadFrozenBudgetedCampaign as loadFrozenCampaign } from '../campaign/campaign-document.ts';
 import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
-import type { Campaign } from '../contracts/campaign/campaign.ts';
 import {
   type CredentialSelection,
   EMPTY_CREDENTIAL_SCOPE,
@@ -28,7 +20,7 @@ import {
   parseRunAllArgv,
   RunAllArgvError,
 } from '../run-all/options.ts';
-import { CAMPAIGN_IMAGE_REF, imageDigestOf } from './campaign-run.ts';
+import { type CampaignRegisterArgs, campaignCommands } from './campaign.ts';
 import {
   type LoadConfigOptions,
   loadCredentialConfig,
@@ -42,19 +34,16 @@ import { doctorPayload } from './doctor.ts';
 import { ApplianceError, toErrorJson } from './errors.ts';
 import { currentCheckoutSha } from './git.ts';
 import { importBundle } from './import.ts';
-import { createJob, readJob, updateJob } from './jobs.ts';
-import { inspectLock } from './locks.ts';
+import { createJob, readJob } from './jobs.ts';
 import { prepare } from './preflight.ts';
 import {
   cancelJob,
-  DETACHED_SPAWN_ACK,
   type DetachedSpawnIdentityCallback,
   type LiveProcessInfo,
   runWorker,
   spawnDetachedWorker,
 } from './process.ts';
 import { prune as pruneResults } from './prune.ts';
-import { assertInsideRoot, assertNoFollowDirChain } from './safe-fs.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
 import {
   GraderModelSchema,
@@ -109,6 +98,25 @@ export interface CampaignRunCommandArgs extends BaseCommandArgs {
 export type ApplianceActionResult = unknown;
 
 export interface ApplianceActions {
+  readonly campaignRegister: (
+    args: CampaignRegisterArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly campaignList: () =>
+    | ApplianceActionResult
+    | Promise<ApplianceActionResult>;
+  readonly campaignStatus: (
+    args: CampaignRunCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly campaignCancel: (
+    args: CampaignRunCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly campaignCosts: (
+    args: CampaignRunCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+  readonly campaignReport: (
+    args: CampaignRunCommandArgs,
+  ) => ApplianceActionResult | Promise<ApplianceActionResult>;
+
   readonly doctor: (
     args: DoctorCommandArgs,
   ) => ApplianceActionResult | Promise<ApplianceActionResult>;
@@ -491,110 +499,6 @@ function normalizeScenarioPath(
   return `scenarios/${targetWithinRoot.split(sep).join('/')}`;
 }
 
-const CAMPAIGN_SELECTOR_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-function requireCampaignLiveSpendLock(loaded: LoadedApplianceConfig): string {
-  const value = loaded.config.live_spend_lock;
-  if (value === undefined || value.trim() === '' || !isAbsolute(value)) {
-    throw new ApplianceError(
-      'config_invalid',
-      'live-spend-lock',
-      'campaign run requires a configured absolute live_spend_lock',
-    );
-  }
-  return value;
-}
-
-function inspectCampaignRunLock(loaded: LoadedApplianceConfig): void {
-  const lockPath = join(loaded.paths.locks, 'run.lock');
-  let stats: Stats | undefined;
-  try {
-    stats = lstatSync(lockPath, { throwIfNoEntry: false });
-  } catch {
-    throw new ApplianceError(
-      'lock_busy',
-      'lock',
-      'run.lock is present but cannot be inspected; refusing to reclaim it',
-    );
-  }
-  if (stats === undefined) {
-    return;
-  }
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new ApplianceError(
-      'lock_busy',
-      'lock',
-      'run.lock is present but is not a lock directory; refusing to reclaim it',
-    );
-  }
-  const inspection = inspectLock(lockPath);
-  const holder = inspection.record?.job_id;
-  throw new ApplianceError(
-    'lock_busy',
-    'lock',
-    holder === undefined
-      ? 'run.lock is present; refusing to reclaim it'
-      : `run.lock is present by ${holder}; refusing to reclaim it`,
-  );
-}
-
-function resolveCampaignDirectory(
-  loaded: LoadedApplianceConfig,
-  selector: string,
-): string {
-  const campaignsRoot = join(loaded.config.evals.path, 'campaigns');
-  if (
-    !assertNoFollowDirChain(
-      loaded.config.evals.path,
-      campaignsRoot,
-      'campaigns',
-    )
-  ) {
-    throw new ApplianceError(
-      'config_invalid',
-      'campaign',
-      `campaign not found under the evals checkout: ${selector}`,
-    );
-  }
-  const campaignDir = join(campaignsRoot, selector);
-  if (
-    !assertNoFollowDirChain(loaded.config.evals.path, campaignDir, 'campaign')
-  ) {
-    throw new ApplianceError(
-      'config_invalid',
-      'campaign',
-      `campaign not found under the evals checkout: ${selector}`,
-    );
-  }
-  assertInsideRoot(campaignsRoot, campaignDir);
-  const stats = lstatSync(campaignDir, { throwIfNoEntry: false });
-  if (stats === undefined || !stats.isDirectory() || stats.isSymbolicLink()) {
-    throw new ApplianceError(
-      'config_invalid',
-      'campaign',
-      `campaign not found under the evals checkout: ${selector}`,
-    );
-  }
-  const canonicalRoot = realpathSync(campaignsRoot);
-  const canonical = realpathSync(campaignDir);
-  assertInsideRoot(canonicalRoot, canonical);
-  const documentStats = lstatSync(join(canonical, 'campaign.json'), {
-    throwIfNoEntry: false,
-  });
-  if (
-    documentStats === undefined ||
-    documentStats.isSymbolicLink() ||
-    !documentStats.isFile()
-  ) {
-    throw new ApplianceError(
-      'config_invalid',
-      'campaign',
-      `campaign not found under the evals checkout: ${selector}`,
-    );
-  }
-  return canonical;
-}
-
 /**
  * Everything the production actions reach outside their own module. It is a
  * closed list on purpose: the actions themselves are the real writers, and
@@ -728,18 +632,34 @@ export function createApplianceActions(
     },
     status: async (args) => {
       const loaded = deps.loadStateConfig();
+      if (readJob(loaded, args.id).kind === 'campaign-run')
+        throw new Error(
+          'campaign invocation receipt is not lifecycle authority; use evals-appliance campaign status with the campaign identity',
+        );
       return statusPayload(loaded, args.id);
     },
     cancel: async (args) => {
       const loaded = deps.loadStateConfig();
+      if (readJob(loaded, args.id).kind === 'campaign-run')
+        throw new Error(
+          'campaign invocation receipt is not lifecycle authority; use evals-appliance campaign cancel with the campaign identity',
+        );
       return cancelJob(loaded, args.id, deps.commandRunner);
     },
     show: async (args) => {
       const loaded = deps.loadStateConfig();
+      if (readJob(loaded, args.id).kind === 'campaign-run')
+        throw new Error(
+          'campaign invocation receipt is not lifecycle authority; use evals-appliance campaign show with the campaign identity',
+        );
       return showPayload(loaded, args.id, args.json);
     },
     costs: async (args) => {
       const loaded = deps.loadStateConfig();
+      if (readJob(loaded, args.id).kind === 'campaign-run')
+        throw new Error(
+          'campaign invocation receipt is not lifecycle authority; use evals-appliance campaign costs with the campaign identity',
+        );
       return costsPayload(loaded, args.id, args.json);
     },
     import: async (args) => {
@@ -756,108 +676,41 @@ export function createApplianceActions(
         olderThanDays: args.olderThanDays,
       });
     },
-    campaignRun: async (args) => {
-      const loaded = deps.loadCredentialConfig({ ensureState: true });
-      const selector = args.campaignSelector;
-      if (!CAMPAIGN_SELECTOR_RE.test(selector)) {
-        throw new ApplianceError(
-          'config_invalid',
-          'arguments',
-          `campaign selector must be a closed basename: ${selector}`,
-        );
-      }
-      requireCampaignLiveSpendLock(loaded);
-      inspectCampaignRunLock(loaded);
-      const campaignDir = resolveCampaignDirectory(loaded, selector);
-      let campaign: Campaign;
-      try {
-        campaign = loadFrozenCampaign(campaignDir);
-      } catch (error) {
-        throw new ApplianceError(
-          'config_invalid',
-          'campaign',
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      const imageDigest = imageDigestOf(deps.commandRunner, CAMPAIGN_IMAGE_REF);
-      const evalsSha = campaign.refs.evals;
-      const helperSha = currentCheckoutSha(
-        loaded.config.evals.path,
-        'evals checkout',
-        deps.commandRunner,
-      );
-      const job = createJob(loaded, {
-        kind: 'campaign-run',
-        superpowersRef: evalsSha,
-        argv: ['evals-appliance', 'campaign', 'run', selector],
-        requester: requester(),
-        credentialSelection: null,
-        credentialScope: EMPTY_CREDENTIAL_SCOPE,
-        credentialScopeSourceEvalsSha: null,
-        campaign: {
-          campaign_id: campaign.campaign_id,
-          campaign_dir: campaignDir,
-          evals_sha: evalsSha,
-          helper_sha: helperSha,
-          image_ref: CAMPAIGN_IMAGE_REF,
-          image_digest: imageDigest,
-        },
-      });
-
-      try {
-        deps.spawnDetachedWorker(loaded, job.job_id, (processInfo) => {
-          updateJob(loaded, job.job_id, (current) => ({
-            ...current,
-            process: {
-              host_pid: processInfo.host_pid,
-              host_pgid: processInfo.host_pgid,
-              container_pid: null,
-              container_pgid: null,
-            },
-          }));
-          return DETACHED_SPAWN_ACK;
-        });
-      } catch (error) {
-        try {
-          updateJob(loaded, job.job_id, (current) => {
-            if (
-              current.status === 'done' ||
-              current.status === 'failed' ||
-              current.status === 'cancelled' ||
-              current.status === 'lost' ||
-              current.status === 'quarantined'
-            ) {
-              return current;
-            }
-            return {
-              ...current,
-              status: 'failed',
-              finished_at: new Date().toISOString(),
-              result: {
-                exit_code: null,
-                summary: 'detached campaign worker submission failed',
-              },
-              error: {
-                code:
-                  error instanceof ApplianceError
-                    ? error.code
-                    : 'config_invalid',
-                step: error instanceof ApplianceError ? error.step : 'spawn',
-                message:
-                  error instanceof ApplianceError
-                    ? error.message
-                    : 'detached campaign worker submission failed',
-              },
-            };
-          });
-        } catch {
-          // Preserve the original spawn/identity error if state cannot be
-          // updated; no second job is ever created.
-        }
-        throw error;
-      }
-      return readJob(loaded, job.job_id);
-    },
+    campaignRun: async (args) =>
+      campaignCommands({
+        loaded: deps.loadCredentialConfig({ ensureState: true }),
+        runner: deps.commandRunner,
+      }).run(args),
+    campaignRegister: async (args) =>
+      campaignCommands({
+        loaded: deps.loadStateConfig({ ensureState: true }),
+        runner: deps.commandRunner,
+      }).register(args),
+    campaignList: async () =>
+      campaignCommands({
+        loaded: deps.loadStateConfig(),
+        runner: deps.commandRunner,
+      }).list(),
+    campaignStatus: async (args) =>
+      campaignCommands({
+        loaded: deps.loadStateConfig(),
+        runner: deps.commandRunner,
+      }).status(args),
+    campaignCancel: async (args) =>
+      campaignCommands({
+        loaded: deps.loadStateConfig(),
+        runner: deps.commandRunner,
+      }).cancel(args),
+    campaignCosts: async (args) =>
+      campaignCommands({
+        loaded: deps.loadStateConfig(),
+        runner: deps.commandRunner,
+      }).costs(args),
+    campaignReport: async (args) =>
+      campaignCommands({
+        loaded: deps.loadStateConfig(),
+        runner: deps.commandRunner,
+      }).report(args),
   };
 }
 
@@ -1208,14 +1061,57 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
 
   const campaign = program
     .command('campaign')
-    .description('Campaign Appliance V2 (child 1: run only)');
+    .description(
+      'Finite comparisons on one Linux appliance; one controller session',
+    );
   campaign
-    .command('run <campaign-selector>')
+    .command('register <suite>')
+    .option('--global-cap <int>', 'parallel attempt cap')
     .option('--json', 'emit JSON')
-    .action((campaignSelector: string, options: JsonOption) => {
-      const args = { ...commandOptions(options), campaignSelector };
-      return handleAction(args, resolvedDeps, () => actions.campaignRun(args));
+    .action((suite: string, options: JsonOption & { globalCap?: string }) => {
+      const args = {
+        ...commandOptions(options),
+        suite,
+        ...(options.globalCap === undefined
+          ? {}
+          : { globalCap: Number(options.globalCap) }),
+      };
+      return handleAction(args, resolvedDeps, () =>
+        actions.campaignRegister(args),
+      );
     });
+  campaign
+    .command('list')
+    .option('--json', 'emit JSON')
+    .action((options: JsonOption) =>
+      handleAction(commandOptions(options), resolvedDeps, () =>
+        actions.campaignList(),
+      ),
+    );
+  for (const [verb, action] of [
+    ['run', actions.campaignRun],
+    ['status', actions.campaignStatus],
+    ['cancel', actions.campaignCancel],
+    ['costs', actions.campaignCosts],
+    ['report', actions.campaignReport],
+  ] as const) {
+    campaign
+      .command(`${verb} <campaign-selector>`)
+      .option('--json', 'emit JSON')
+      .action((campaignSelector: string, options: JsonOption) => {
+        const args = { ...commandOptions(options), campaignSelector };
+        return handleAction(
+          args,
+          resolvedDeps,
+          () => action(args),
+          (value) =>
+            typeof value === 'object' &&
+            value !== null &&
+            'kind' in value &&
+            (value.kind === 'refused' || value.kind === 'unresolved'),
+        );
+      });
+  }
 
   return program;
 }

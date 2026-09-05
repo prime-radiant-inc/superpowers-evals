@@ -20,11 +20,12 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { defaultCommandRunner } from '../../src/agents/command-runner.ts';
-import type { ContainerAttemptSpawnerArgs } from '../../src/campaign/container-spawner.ts';
-import { openJournalRead } from '../../src/campaign/journal.ts';
+import { loadStateConfig } from '../../src/appliance/config.ts';
+import {
+  readCommittedTransitions,
+  readProjection,
+} from '../../src/campaign/execution-journal.ts';
 import { MINIMUM_CHILD_CONTRACT_SHA } from '../../src/campaign/registration.ts';
-import type { CampaignRunOptions } from '../../src/cli/campaign.ts';
-import { RealClock } from '../../src/scheduler/clock.ts';
 import {
   type FakeProvider,
   startFakeProvider,
@@ -85,12 +86,9 @@ interface SyntheticCheckout {
   readonly cleanup: () => void;
 }
 
-interface CampaignRuntime {
-  readonly campaignRun: typeof import('../../src/cli/campaign.ts').campaignRun;
-  readonly ContainerAttemptSpawner: new (
-    args: ContainerAttemptSpawnerArgs,
-  ) => NonNullable<CampaignRunOptions['spawner']>;
-}
+type CampaignRuntime = ReturnType<
+  typeof import('../../src/appliance/campaign.ts').campaignCommands
+>;
 
 interface DockerFixture {
   readonly tempDir: string;
@@ -103,7 +101,7 @@ interface DockerFixture {
   readonly graderValue: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly runtime: CampaignRuntime;
-  readonly spawner: NonNullable<CampaignRunOptions['spawner']>;
+  readonly configPath: string;
   readonly campaignId: string;
   readonly cleanup: () => Promise<void>;
   readonly captureContainers: (ids: readonly string[]) => void;
@@ -191,9 +189,11 @@ function imageDigest(): string {
     '--format',
     '{{.Id}}',
   ]).stdout.trim();
-  if (!IMAGE_DIGEST_RE.test(value)) {
-    throw new Error('campaign image did not report a canonical digest');
-  }
+  const pinned = process.env['QUORUM_DOCKER_IMAGE_DIGEST'];
+  if (!pinned || !IMAGE_DIGEST_RE.test(pinned) || value !== pinned)
+    throw new Error(
+      'QUORUM_DOCKER_IMAGE_DIGEST must be a pinned image ID matching superpowers-evals:local',
+    );
   return value;
 }
 
@@ -343,7 +343,7 @@ function assertNoSecretBytes(
   }
 }
 
-function withEnvironment<T>(
+function _withEnvironment<T>(
   overrides: Readonly<Record<string, string>>,
   action: () => T | Promise<T>,
 ): T | Promise<T> {
@@ -539,10 +539,11 @@ function writeFakeScenario(
   writeFileSync(
     join(root, 'suites', `${SCENARIO}.yaml`),
     [
-      'schema_version: 1',
+      'schema_version: 2',
       `name: ${SCENARIO}`,
-      'kind: exploratory',
-      'budget_usd: 10',
+      'reserve: 0',
+      'max_exposure_skew: 60',
+      'attempt_bounds: {max_attempts: 1, max_time_s: 120}',
       'grader: { credential: fake_grader, model: claude-fake-grader-0 }',
       'comparisons:',
       '  - arm: fake_subject',
@@ -613,21 +614,17 @@ function writeGitShim(tempDir: string, minimumCommit: string): string {
   return shimDir;
 }
 
-async function loadCampaignRuntime(root: string): Promise<CampaignRuntime> {
-  const query = `?task1c=${randomUUID()}`;
-  const campaignUrl = `${pathToFileURL(join(root, 'src', 'cli', 'campaign.ts')).href}${query}`;
-  const spawnerUrl = `${pathToFileURL(join(root, 'src', 'campaign', 'container-spawner.ts')).href}${query}`;
-  const campaign = (await import(
-    campaignUrl
-  )) as typeof import('../../src/cli/campaign.ts');
-  const spawner = (await import(spawnerUrl)) as Pick<
-    typeof import('../../src/campaign/container-spawner.ts'),
-    'ContainerAttemptSpawner'
-  >;
-  return {
-    campaignRun: campaign.campaignRun,
-    ContainerAttemptSpawner: spawner.ContainerAttemptSpawner,
-  };
+async function loadCampaignRuntime(
+  root: string,
+  configPath: string,
+): Promise<CampaignRuntime> {
+  const module = (await import(
+    pathToFileURL(join(root, 'src/appliance/campaign.ts')).href
+  )) as typeof import('../../src/appliance/campaign.ts');
+  return module.campaignCommands({
+    loaded: loadStateConfig(configPath, { ensureState: true }),
+    runner: defaultCommandRunner,
+  });
 }
 
 async function attemptCleanup(
@@ -741,21 +738,57 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
       ...environment,
       PATH: `${gitShimDir}${delimiter}${process.env['PATH'] ?? ''}`,
     };
+    mkdirSync(join(checkout.root, 'results'), { recursive: true });
+    const configPath = join(tempDir, 'appliance.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        root: tempDir,
+        evals: { path: checkout.root, remote: 'origin', ref: checkout.commit },
+        gauntlet: {
+          path: resolve(gauntletRoot),
+          remote: 'origin',
+          ref: runProcess('git', [
+            '-C',
+            resolve(gauntletRoot),
+            'rev-parse',
+            'HEAD',
+          ]).stdout.trim(),
+        },
+        superpowers: { path: resolve(superpowersRoot), remote: 'origin' },
+        credential_bundle: { name: 'blessed', path: bundleDir },
+        container: {
+          name: 'unused',
+          results_root: join(checkout.root, 'results'),
+        },
+        live_spend_lock: lockPath,
+      }),
+    );
+    writeFileSync(
+      join(bundleDir, 'metadata.json'),
+      JSON.stringify({
+        bundle_id: 'fixture',
+        rotated_at: new Date().toISOString(),
+        providers: ['fake'],
+      }),
+    );
+    imageDigest(); // Required pinned input must match the local tag used by the production helper.
     const registered = runProcess(
       'bun',
       [
         '--no-env-file',
-        join(checkout.root, 'src', 'cli', 'index.ts'),
+        join(checkout.root, 'src/appliance/cli.ts'),
         'campaign',
         'register',
         join(checkout.root, 'suites', `${SCENARIO}.yaml`),
-        '--estimates',
-        join(checkout.root, 'estimates', 'v1.json'),
         '--global-cap',
         '2',
-        '--confirm',
+        '--json',
       ],
-      { cwd: checkout.root, env: registerEnv },
+      {
+        cwd: checkout.root,
+        env: { ...registerEnv, EVALS_APPLIANCE_CONFIG: configPath },
+      },
     );
     if (registered.status !== 0) {
       const gitLookup = runProcess('sh', ['-c', 'command -v git'], {
@@ -783,22 +816,7 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
     const campaign = JSON.parse(
       readFileSync(join(campaignDir, 'campaign.json'), 'utf8'),
     ) as { campaign_id: string };
-    const runtime = await loadCampaignRuntime(checkout.root);
-    const uid = process.getuid?.() ?? 1000;
-    const gid = process.getgid?.() ?? 1000;
-    const spawner = new runtime.ContainerAttemptSpawner({
-      runner: defaultCommandRunner,
-      clock: new RealClock(),
-      stream: { write: () => {} },
-      campaignId: campaign.campaign_id,
-      campaignDir,
-      imageRef: IMAGE_REF,
-      imageDigest: imageDigest(),
-      evalsSha: checkout.commit,
-      bundleDir,
-      uid,
-      gid,
-    });
+    const runtime = await loadCampaignRuntime(checkout.root, configPath);
     if (provider === null || checkout === null) {
       throw new Error('synthetic fixture setup did not complete');
     }
@@ -817,7 +835,7 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
       graderValue,
       environment,
       runtime,
-      spawner,
+      configPath,
       campaignId: campaign.campaign_id,
       captureContainers: (ids) => {
         for (const id of ids) {
@@ -859,26 +877,31 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
 }
 
 async function runCampaign(fixture: DockerFixture): Promise<number> {
-  return await withEnvironment(fixture.environment, () =>
-    fixture.runtime.campaignRun(fixture.campaignDir, {
-      spawner: fixture.spawner,
-    }),
-  );
+  const result = await fixture.runtime.run({
+    campaignSelector: fixture.campaignId,
+    json: true,
+  });
+  expect(result.kind).toBe('launched');
+  await waitFor('completed V2 controller and namespace termination', () => {
+    const p = readProjection(fixture.campaignDir);
+    return p.ended !== null && p.termination !== null;
+  });
+  const status = fixture.runtime.status({
+    campaignSelector: fixture.campaignId,
+    json: true,
+  });
+  expect(['completed', 'cancelled', 'interrupted']).toContain(status.state);
+  fixture.runtime.report({ campaignSelector: fixture.campaignId, json: true });
+  return status.state === 'completed' ? 0 : 1;
 }
 
-function journalEvents(campaignDir: string): readonly {
-  readonly type: string;
-  readonly payload: Record<string, unknown>;
-}[] {
-  const reader = openJournalRead(campaignDir);
-  try {
-    return reader.readEvents() as readonly {
-      readonly type: string;
-      readonly payload: Record<string, unknown>;
-    }[];
-  } finally {
-    reader.close();
-  }
+function journalEvents(
+  campaignDir: string,
+): readonly { type: string; payload: Record<string, unknown> }[] {
+  return readCommittedTransitions(campaignDir).map((receipt) => ({
+    type: receipt.transition.type,
+    payload: receipt.transition.payload,
+  }));
 }
 
 function assertContainerMountAudit(
@@ -925,6 +948,22 @@ function assertContainerMountAudit(
   expect(
     mounts.some((mount) => mount.Destination === '/run/quorum/attempt'),
   ).toBe(true);
+  for (const target of [
+    '/run/quorum/attempt-authority.json',
+    '/run/quorum/credentials.yaml',
+  ]) {
+    const mount = mounts.find((m) => m.Destination === target);
+    expect(mount?.RW).toBe(false);
+    expect(
+      mount?.Source?.startsWith(join(fixture.campaignDir, 'control') + sep),
+    ).toBe(true);
+    expect(mount?.Source?.startsWith(attemptDir + sep)).toBe(false);
+    if (target.endsWith('attempt-authority.json')) {
+      const authority = JSON.parse(readFileSync(mount!.Source!, 'utf8'));
+      expect(authority.campaign_id).toBe(fixture.campaignId);
+      expect(authority.intent.identity.execution_attempt_id).toBe(attemptId);
+    }
+  }
   const configEnv = container.Config?.Env ?? [];
   expect(configEnv.some((entry) => entry.includes(fixture.subjectValue))).toBe(
     false,
@@ -1175,28 +1214,23 @@ function assertFullJournal(
   containerIds: readonly string[],
 ): void {
   const events = journalEvents(fixture.campaignDir);
-  const allocations = events.filter((event) => event.type === 'run_allocated');
+  const allocations = events.filter(
+    (event) => event.type === 'container_bound',
+  );
   expect(allocations.length).toBeGreaterThan(0);
   expect(
     allocations.every((event) => {
       const payload = event.payload;
       return (
         typeof payload['container_id'] === 'string' &&
-        CONTAINER_ID_RE.test(payload['container_id']) &&
-        typeof payload['image_digest'] === 'string' &&
-        IMAGE_DIGEST_RE.test(payload['image_digest'])
+        CONTAINER_ID_RE.test(payload['container_id'])
       );
     }),
   ).toBe(true);
   expect(
     new Set(allocations.map((event) => String(event.payload['container_id']))),
   ).toEqual(new Set(containerIds));
-  expect(
-    events.some(
-      (event) =>
-        event.type === 'run_completed' || event.type === 'instrument_failure',
-    ),
-  ).toBe(true);
+  expect(events.some((event) => event.type === 'attempt_observed')).toBe(true);
 }
 
 async function waitForRunAllocation(campaignDir: string): Promise<void> {

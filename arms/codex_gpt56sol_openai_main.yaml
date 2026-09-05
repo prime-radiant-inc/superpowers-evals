@@ -1,8 +1,6 @@
-# Codex on gpt-5.6-sol over the openai-responses api-key route with superpowers
-# main — the codex seat for the multiharness signature readout. The default
-# credential (codex_sub) is subscription auth bound to a local Codex login and
-# cannot run on the appliance; openai_responses_56sol draws OPENAI_API_KEY from
-# the blessed bundle.
+# codex subject via openai_responses_56sol; credential owns model and endpoint.
+# Requires its declared bundle secret, distinct from the suite grader secret.
+# Registration resolves main from the configured superpowers checkout and freezes its SHA.
 schema_version: 1
 name: codex_gpt56sol_openai_main
 agent: codex

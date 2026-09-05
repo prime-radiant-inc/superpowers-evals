@@ -47,6 +47,12 @@ function noopActions(
     costs: async () => ({ ok: true }),
     import: async () => ({ ok: true }),
     prune: async () => ({ ok: true }),
+    campaignRegister: () => ({}),
+    campaignList: () => [],
+    campaignStatus: () => ({}),
+    campaignCancel: () => ({}),
+    campaignCosts: () => ({}),
+    campaignReport: () => ({}),
     campaignRun: async () => ({ ok: true }),
     ...overrides,
   };

@@ -22,6 +22,7 @@ import {
   removeAttemptStage,
 } from '../src/campaign/attempt-projection.ts';
 import { sha256Hex } from '../src/contracts/campaign/digest.ts';
+import { gauntletEnvBase } from '../src/runner/gauntlet-env.ts';
 
 const SUBJECT = "subject value '$tick' `quoted` ;";
 const GRADER = 'grader-secret-value';
@@ -679,4 +680,45 @@ test('V2 preparation refuses whitespace-only selected subject material before wr
   );
   expect(() => prepareV2(fx)).toThrow('empty');
   expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+});
+
+test('genuine V2 preparation routes a distinct Mantle grader through the grader-only environment', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const registry = join(fx.corpus, 'credentials.yaml');
+  writeFileSync(
+    registry,
+    readFileSync(registry, 'utf8').replace(
+      'grader:\n  model: claude-grader\n  api: anthropic\n  auth: api-key',
+      'grader:\n  model: claude-grader\n  api: mantle\n  auth: bedrock-bearer\n  region: us-east-1',
+    ),
+  );
+  const prepared = prepareV2(fx);
+  const mount = prepared.intent.runtime_spec.mounts.find(
+    (m) => m.target === '/run/quorum/grader.env',
+  )!;
+  const env = Object.fromEntries(
+    readFileSync(mount.source, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const at = line.indexOf('=');
+        return [line.slice(0, at), line.slice(at + 1)];
+      }),
+  );
+  expect(env).toMatchObject({
+    QUORUM_GRADER_SOURCE_MODE: 'appliance-scoped',
+    QUORUM_GRADER_ANTHROPIC_API_KEY: 'selected-grader-secret',
+    QUORUM_GRADER_ANTHROPIC_BASE_URL:
+      'https://bedrock-mantle.us-east-1.api.aws/anthropic',
+  });
+  expect(env['ANTHROPIC_API_KEY']).toBeUndefined();
+  const projected = gauntletEnvBase({
+    ...env,
+    ANTHROPIC_API_KEY: 'fixture-subject-key',
+  });
+  expect(projected['ANTHROPIC_API_KEY']).toBe('selected-grader-secret');
+  expect(projected['ANTHROPIC_BASE_URL']).toBe(
+    'https://bedrock-mantle.us-east-1.api.aws/anthropic',
+  );
 });

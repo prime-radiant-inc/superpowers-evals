@@ -1,5 +1,3 @@
-import type { Block } from '../contracts/campaign/campaign.ts';
-
 export class DispatcherError extends Error {
   constructor(message: string) {
     super(message);
@@ -12,7 +10,7 @@ export class DispatcherError extends Error {
  *  A missing optional estimate uses the experiment's frozen attempt
  *  deadline. Explicit estimates must be finite and non-negative. */
 export function blockPrioritySeconds(args: {
-  block: Pick<Block, 'sample_ids'>;
+  block: { sample_ids: readonly string[] };
   sampleEstimateSeconds: (sampleId: string) => number | undefined;
   attemptDeadlineSeconds?: number;
 }): number {

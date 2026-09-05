@@ -1297,10 +1297,6 @@ export interface DetachedWorkerDispatchDeps {
     loaded: LoadedApplianceConfig,
     jobId: string,
   ) => Promise<void>;
-  readonly runCampaignWorker?: (
-    loaded: LoadedApplianceConfig,
-    jobId: string,
-  ) => Promise<void>;
 }
 
 /** Selects exactly one worker implementation from the persisted job kind. */
@@ -1310,13 +1306,10 @@ export async function dispatchDetachedWorker(
   deps: DetachedWorkerDispatchDeps = {},
 ): Promise<void> {
   const job = readJob(loaded, jobId);
-  if (job.kind === 'campaign-run') {
-    const worker =
-      deps.runCampaignWorker ??
-      (await import('./campaign-run.ts')).runCampaignWorker;
-    await worker(loaded, jobId);
-    return;
-  }
+  if (job.kind === 'campaign-run')
+    throw new Error(
+      'campaign invocation cannot dispatch a generic worker; use campaign run',
+    );
   const worker = deps.runWorker ?? runWorker;
   await worker(loaded, jobId);
 }
@@ -1502,6 +1495,10 @@ export async function cancelJob(
   options: CancelOptions = {},
 ): Promise<JobRecord> {
   const job = readJob(loaded, jobId);
+  if (job.kind === 'campaign-run')
+    throw new Error(
+      'campaign invocation cannot cancel execution; use evals-appliance campaign cancel',
+    );
   if (job.status !== 'running' && job.status !== 'stopping') {
     throw new ApplianceError(
       'job_not_running',
@@ -1522,9 +1519,7 @@ export async function cancelJob(
   let signalAccepted = job.status === 'stopping';
   if (job.status === 'running') {
     let interrupted = false;
-    if (job.kind === 'campaign-run' && hostPgid !== null) {
-      interrupted = signalHostProcessGroup(hostPgid, options.processKill);
-    } else if (containerPgid !== null) {
+    if (containerPgid !== null) {
       // Identity-verified cancellation: the SIGINT goes only through the
       // fixed recorded-container seam. A replacement container (or a job
       // with no verifiable recorded identity) receives no signal at all.
@@ -1580,54 +1575,6 @@ export async function cancelJob(
           summary: 'process group disappeared before cancel signal completed',
         },
   }));
-
-  if (job.kind === 'campaign-run') {
-    const controllerPgid = hostPgid ?? containerPgid;
-    const deadline = Date.now() + (options.graceMs ?? CANCEL_GRACE_MS);
-    while (controllerPgid !== null) {
-      const state =
-        hostPgid !== null
-          ? hostProcessGroupState(controllerPgid, options.processKill)
-          : jobProcessGroupAlive(
-                loaded,
-                readJob(loaded, jobId),
-                runner,
-                options.processKill,
-              )
-            ? 'alive'
-            : 'absent';
-      if (state === 'absent') {
-        return updateJob(loaded, jobId, (current) => ({
-          ...current,
-          status: 'cancelled',
-          finished_at: new Date().toISOString(),
-          result: {
-            exit_code: null,
-            summary:
-              'controller signalled and verified dead; campaign journal is the outcome authority',
-          },
-          error: null,
-        }));
-      }
-      if (Date.now() >= deadline) {
-        return updateJob(loaded, jobId, (current) => ({
-          ...current,
-          status: 'stopping',
-          result: {
-            exit_code: null,
-            summary: 'cancel signal sent; controller still live past the grace',
-          },
-          error: null,
-        }));
-      }
-      await sleep(
-        Math.min(
-          options.pollIntervalMs ?? CANCEL_POLL_INTERVAL_MS,
-          Math.max(0, deadline - Date.now()),
-        ),
-      );
-    }
-  }
 
   const sawTerminalArtifact = await waitForTerminalArtifact(
     loaded,

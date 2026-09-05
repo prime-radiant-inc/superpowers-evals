@@ -1,8 +1,6 @@
-# D4a live-validation arm — the appliance's primary funded claude route
-# (Bedrock/Mantle bearer; every regular appliance claude job runs it). The
-# D4a exit runs ride bedrock because campaign children now project bearer
-# credentials (bbdc14c) and gating no longer gates on auth class (R-REG-15
-# rescinded, e2aebf3).
+# claude subject via opus_bedrock; credential owns model and endpoint.
+# Requires its declared bundle secret, distinct from the suite grader secret.
+# Stock mode requires this adapter's supported none capability.
 schema_version: 1
 name: d4a_live_claude_opus_bedrock
 agent: claude

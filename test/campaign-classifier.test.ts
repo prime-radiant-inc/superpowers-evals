@@ -49,7 +49,7 @@ function inputs(): ClassificationInput[] {
   return all;
 }
 
-test('the pinned 14 rows, first-match-wins', () => {
+test('the closed rows, first-match-wins', () => {
   // Row 1: grader 429 -> grader_rate_limited.
   expect(
     classifyFailure({
@@ -147,16 +147,6 @@ test('the pinned 14 rows, first-match-wins', () => {
       sensorEvidence: 'none',
     }),
   ).toEqual({ class: 'instrument', cause: 'checks_crashed' });
-  // Row 11: composer false-pass guard.
-  expect(
-    classifyFailure({
-      outcome: 'pass',
-      stage: 'compose',
-      exitClass: 'clean',
-      role: 'subject',
-      sensorEvidence: 'manifest-mismatch',
-    }),
-  ).toEqual({ class: 'instrument', cause: 'checks_crashed' });
   // Row 12: stopped -> aborted class.
   expect(
     classifyFailure({
@@ -252,11 +242,6 @@ const PINNED_ROWS: readonly {
   },
   {
     match: (i) => i.stage === 'checks',
-    expected: { class: 'instrument', cause: 'checks_crashed' },
-  },
-  {
-    match: (i) =>
-      i.stage === 'compose' && i.sensorEvidence === 'manifest-mismatch',
     expected: { class: 'instrument', cause: 'checks_crashed' },
   },
   { match: (i) => i.stage === 'stopped', expected: { class: 'aborted' } },

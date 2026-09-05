@@ -1,8 +1,6 @@
-# Pi on gpt-5.6-sol over the openai-responses api-key route with superpowers
-# main — the pi seat for the multiharness signature readout. The default
-# credential (pi_default) is OAuth bound to a local login and cannot run on the
-# appliance; pi_gpt56_sol draws OPENAI_API_KEY from the blessed bundle (shares
-# the api.openai.com|openai-responses limiterKey pool with the codex arm).
+# pi subject via pi_gpt56_sol; credential owns model and endpoint.
+# Requires its declared bundle secret, distinct from the suite grader secret.
+# Registration resolves main from the configured superpowers checkout and freezes its SHA.
 schema_version: 1
 name: pi_gpt56sol_openai_main
 agent: pi

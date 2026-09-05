@@ -1,4 +1,3 @@
-import type { Block } from '../contracts/campaign/campaign.ts';
 import type { PoolPolicy } from '../contracts/campaign/experiment.ts';
 import { poolKey } from '../contracts/campaign/pool.ts';
 import type { Credential } from '../contracts/credential.ts';
@@ -70,7 +69,7 @@ export function compileResourcePolicy(
 
 /** Per sample: one subject slot, one actual grader slot, and one global slot. */
 export function blockDemandVector(args: {
-  block: Pick<Block, 'sample_ids'>;
+  block: { sample_ids: readonly string[] };
   sampleArmCredentialPool: (sampleId: string) => string;
   graderPool: string;
 }): Map<string, number> {

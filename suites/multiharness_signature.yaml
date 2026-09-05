@@ -1,26 +1,12 @@
-# Multiharness signature — a descriptive readout of codex and pi against a
-# claude baseline on superpowers main: the sentinel tier at n=3 (the cheap
-# cells, where sample size buys resolution) plus the workhorse SDD cell at n=3.
-# Exploratory on purpose: a signature sketch, not a gate. Each harness rides an
-# api-key credential present in the appliance's blessed bundle (the local
-# OAuth/subscription defaults cannot run there): codex on
-# openai_responses_56sol, pi on pi_gpt56_sol, baseline claude on opus5_bedrock
-# (Mantle). kimi was cut on launch night (2026-09-04): the kimi CLI logs its
-# model as the __kimi_env_model__ alias and obol 0.9.0 prices no kimi id, so
-# every kimi cell would fail-stop the campaign on the R-JRN-12 accounting gap
-# (observed live: smoke campaign ec5d69f4 halted on
-# c2:superpowers-bootstrap:kimi_k3_main:r1:a1). kimi returns after its pricing
-# chain is fixed. The grader rides sonnet5_bedrock so the grading instrument
-# matches the 2026-09-02 opus5_signature corpus and sits in its own pool. The
-# budget is a runaway tripwire (~3x the expected spend), not a constraint the
-# campaign should ever meet; budget_raise exists if it binds.
-schema_version: 1
+# Finite multiharness_signature measurement. Register a fresh identity for every execution.
+# Historical names do not enable gating, repair, or continuation.
+# Grader requires a distinct ANTHROPIC_API_KEY; subject keys must differ.
+# Different models/endpoints make this an end-to-end stack comparison.
+schema_version: 2
 name: multiharness_signature
-kind: exploratory
-budget_usd: 1000
 grader:
-  credential: sonnet5_bedrock
-  model: anthropic.claude-sonnet-5
+  credential: sonnet5
+  model: claude-sonnet-5
 comparisons:
   - baseline: claude_opus5_bedrock_main
     treatment: codex_gpt56sol_openai_main
@@ -40,3 +26,8 @@ comparisons:
     scenarios:
       - sdd-breaker-rules-and-continues
     n: 3
+reserve: 2
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 2
+  max_time_s: 1800

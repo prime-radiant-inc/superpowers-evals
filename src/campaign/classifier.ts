@@ -92,13 +92,6 @@ const ROWS: readonly Row[] = [
     class: 'instrument',
     cause: 'checks_crashed',
   },
-  {
-    // Composer false-pass guard (parent Checks).
-    match: (i) =>
-      i.stage === 'compose' && i.sensorEvidence === 'manifest-mismatch',
-    class: 'instrument',
-    cause: 'checks_crashed',
-  },
   { match: (i) => i.stage === 'stopped', class: 'aborted' },
   {
     match: (i) =>

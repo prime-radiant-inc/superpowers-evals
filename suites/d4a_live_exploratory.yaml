@@ -1,18 +1,18 @@
-# D4a exit run 1 — exploratory lifecycle (spec §Exit criteria item 1):
-# registration -> dispatch -> all-samples-terminal -> terminus -> sealed +
-# published report, then digest-verified regeneration via `campaign report`.
-# Minimal by design: one smoke sample through the funded Mantle route; the
-# grader rides the same route (gauntlet authenticates with the bearer +
-# regional base URL the dispatcher projects).
-schema_version: 1
+# Finite d4a_live_exploratory measurement. Register a fresh identity for every execution.
+# Historical names do not enable gating, repair, or continuation.
+# Grader requires a distinct ANTHROPIC_API_KEY; subject keys must differ.
+schema_version: 2
 name: d4a_live_exploratory
-kind: exploratory
-budget_usd: 10
 grader:
-  credential: opus_bedrock
-  model: anthropic.claude-opus-4-8
+  credential: sonnet5
+  model: claude-sonnet-5
 comparisons:
   - arm: d4a_live_claude_opus_bedrock
     scenarios:
       - 00-quorum-smoke-hello-world
     n: 1
+reserve: 0
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 2
+  max_time_s: 1800

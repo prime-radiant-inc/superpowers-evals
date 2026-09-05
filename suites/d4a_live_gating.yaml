@@ -1,29 +1,19 @@
-# D4a exit run 2 — gating completion (spec §Exit criteria item 2; closes D3
-# §Exit criteria item 1 as pinned, Decision D-5): a small gating suite runs to
-# predicate-holds and receives the typed D4a refusal — sealing/reporting
-# gating campaigns awaits D4b. Runs on the funded Mantle route per the
-# 2026-09-01 owner ruling (R-REG-15 rescinded): the refusal mechanics do not
-# depend on credential auth class. n=1 reads underpowered by design — the
-# refusal row is the evidence, not a ship decision.
-schema_version: 1
+# Finite d4a_live_gating measurement. Register a fresh identity for every execution.
+# Historical names do not enable gating, repair, or continuation.
+# Grader requires a distinct ANTHROPIC_API_KEY; subject keys must differ.
+schema_version: 2
 name: d4a_live_gating
-kind: gating
-profile: release_gate_v1
-budget_usd: 25
-reserve: 1
+reserve: 0
 max_exposure_skew: 60
-profile_params:
-  alpha: 0.05
-  determinate_n_floor: 5
-  completion_divergence_max: 0.2
-  mde_by_scenario:
-    00-quorum-smoke-hello-world: 0.1
 grader:
-  credential: opus_bedrock
-  model: anthropic.claude-opus-4-8
+  credential: sonnet5
+  model: claude-sonnet-5
 comparisons:
   - baseline: d4a_live_claude_opus_bedrock
     treatment: d4a_live_claude_opus5_bedrock
     scenarios:
       - 00-quorum-smoke-hello-world
     n: 1
+attempt_bounds:
+  max_attempts: 2
+  max_time_s: 1800

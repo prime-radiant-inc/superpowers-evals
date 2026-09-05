@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { composeCampaignChildEnv } from '../src/campaign/spawn.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import { CredentialSchema } from '../src/contracts/credential.ts';
 import { checkCredentials } from '../src/credentials/check.ts';
@@ -93,15 +92,8 @@ test('a mantle grader reaches gauntlet as an API key without displacing a direct
       api_key_env: 'MANTLE_GRADER_TEST_BEARER',
       region: 'us-east-1',
     });
-    // The child env as the dispatcher composes it: the grants (a direct-API
-    // subject's key lands under the canonical ANTHROPIC_API_KEY — stated
-    // literally here rather than through the process env), then the grader
-    // overlay.
     const childEnv = {
-      ...composeCampaignChildEnv({
-        base: { PATH: '/usr/bin' },
-        grants: { graderEnv: 'MANTLE_GRADER_TEST_BEARER' },
-      }),
+      PATH: '/usr/bin',
       ANTHROPIC_API_KEY: 'fixture-subject-key',
       ...mantleGraderEnv(grader),
     };

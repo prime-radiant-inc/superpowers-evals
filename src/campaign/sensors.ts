@@ -9,7 +9,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { agyLogShowsRateLimit } from '../agents/agy-watch.ts';
 import { ATIF_NORMALIZERS } from '../capture/index.ts';
-import type { SUITE_KINDS } from '../contracts/campaign/suite.ts';
+
 import type { BlockReplacementReason } from '../contracts/campaign/typed-failures.ts';
 
 export const RETRY_AFTER_MIN_MS = 5_000;
@@ -676,48 +676,6 @@ export function exposureWithPrecedence(args: {
   probeTsMs: number | null;
 }): number | null {
   return args.gauntletMarkTsMs ?? args.probeTsMs;
-}
-
-export type SuiteKind = (typeof SUITE_KINDS)[number];
-
-/** The block-terminal decision outcome: either the established exposure or
- *  the ENFORCED unestablished resolution — never a silent neutral
- *  (R-SNS-4). Gating: a skew breach — the sample is excluded from the
- *  paired comparison and refilled from reserve (R-DSP-9's skew_excluded +
- *  skew_refill journal expression, emitted by the dispatcher).
- *  Exploratory: a rendered caveat. */
-export type ExposureTerminalDecision =
-  | {
-      readonly established: true;
-      readonly tsMs: number;
-      readonly source: 'runtime' | 'capture';
-    }
-  | {
-      readonly established: false;
-      readonly resolution: 'skew_breach_exclude_and_refill' | 'render_caveat';
-    };
-
-/** Block-terminal decision (the Decision D-9 decision point): the
- *  runtime-pinned value wins (monotonic single emission); a sample whose
- *  runtime probe never fired may take the capture-derived value; neither
- *  source by decision time resolves to the suite-kind-enforced outcome —
- *  absence is never silently treated as no-exposure. */
-export function decideExposureAtTerminal(args: {
-  runtimeTsMs: number | null;
-  captureTsMs: number | null;
-  suiteKind: SuiteKind;
-}): ExposureTerminalDecision {
-  if (args.runtimeTsMs !== null)
-    return { established: true, tsMs: args.runtimeTsMs, source: 'runtime' };
-  if (args.captureTsMs !== null)
-    return { established: true, tsMs: args.captureTsMs, source: 'capture' };
-  return {
-    established: false,
-    resolution:
-      args.suiteKind === 'gating'
-        ? 'skew_breach_exclude_and_refill'
-        : 'render_caveat',
-  };
 }
 
 export interface ExposureAuditResult {

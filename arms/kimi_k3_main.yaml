@@ -1,8 +1,6 @@
-# Kimi on k3 over the api-key path with superpowers main — the kimi seat for
-# the multiharness signature readout. The default credential (kimi_default) is
-# OAuth bound to a local login and cannot run on the appliance; kimi_k3 draws
-# KIMI_MODEL_API_KEY from the blessed bundle. Not poolable with kimi_default
-# cells (different model serve).
+# kimi subject via kimi_k3; credential owns model and endpoint.
+# Requires its declared bundle secret, distinct from the suite grader secret.
+# Registration resolves main from the configured superpowers checkout and freezes its SHA.
 schema_version: 1
 name: kimi_k3_main
 agent: kimi

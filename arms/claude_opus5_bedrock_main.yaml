@@ -1,7 +1,6 @@
-# Claude on Opus 5 over the funded Mantle route with superpowers main — the
-# treatment seat for the Opus 5 signature readout; differs from
-# claude_opus_bedrock_main only in credential (model), so any delta is the
-# model's.
+# claude subject via opus5_bedrock; credential owns model and endpoint.
+# Requires its declared bundle secret, distinct from the suite grader secret.
+# Registration resolves main from the configured superpowers checkout and freezes its SHA.
 schema_version: 1
 name: claude_opus5_bedrock_main
 agent: claude

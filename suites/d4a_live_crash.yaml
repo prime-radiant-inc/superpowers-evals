@@ -1,17 +1,18 @@
-# D4a exit run 3 — terminus crash (spec §Exit criteria item 3): a second
-# exploratory campaign shaped exactly like d4a_live_exploratory, killed
-# mid-terminus (after adjudications, before publication) and resumed via
-# `campaign run` — same journal suffix, digest-equal artifacts. Registered
-# under its own suite name so the crash evidence is a separate campaign record.
-schema_version: 1
+# Finite d4a_live_crash measurement. Register a fresh identity for every execution.
+# Historical names do not enable gating, repair, or continuation.
+# Grader requires a distinct ANTHROPIC_API_KEY; subject keys must differ.
+schema_version: 2
 name: d4a_live_crash
-kind: exploratory
-budget_usd: 10
 grader:
-  credential: opus_bedrock
-  model: anthropic.claude-opus-4-8
+  credential: sonnet5
+  model: claude-sonnet-5
 comparisons:
   - arm: d4a_live_claude_opus_bedrock
     scenarios:
       - 00-quorum-smoke-hello-world
     n: 1
+reserve: 0
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 2
+  max_time_s: 1800

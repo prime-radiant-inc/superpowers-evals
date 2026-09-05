@@ -11,7 +11,6 @@ import { join, resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import { SpawnCommandRunner } from '../agents/command-runner.ts';
 import { checkArmSuiteFiles } from '../campaign/arm-suite-check.ts';
-import { DEFAULT_GLOBAL_CAP } from '../campaign/registration.ts';
 import { checkScenarioMeta } from '../campaign/scenario-meta-check.ts';
 import {
   extractManifest,
@@ -39,14 +38,9 @@ import {
 import {
   type CampaignAcquireOptions,
   type CampaignEstimatesOptions,
-  type CampaignRegisterOptions,
   type CampaignSimulateOptions,
   campaignAcquire,
-  campaignCancel,
   campaignEstimates,
-  campaignRegister,
-  campaignReport,
-  campaignRun,
   campaignSimulate,
 } from './campaign.ts';
 import { costsJson, loadCostRows, renderCosts } from './costs.ts';
@@ -578,58 +572,26 @@ campaign
   .option('--seal-allowance-min <n>', 'seal/report allowance minutes', '15')
   .requiredOption('--out <dir>', 'output dir')
   .action((opts: CampaignSimulateOptions) => campaignSimulate(opts));
-campaign
-  .command('register')
-  .description('register a suite as a frozen campaign (snapshot-first)')
-  .argument('<suite>', 'suite YAML path')
-  .option('--estimates <path>', 'estimates artifact', 'estimates/v1.json')
-  .option(
-    '--global-cap <int>',
-    'per-sample global slot cap (historical --jobs)',
-    String(DEFAULT_GLOBAL_CAP),
-  )
-  .option(
-    '--confirm',
-    'required to publish; without it the verb prints grid + digest and exits 0',
-  )
-  .option(
-    '--pricing-overrides <path>',
-    'JSON/YAML file of operator-declared per-token pricing overrides (R-REG-3 grader attestation, R-REG-11 unpriced-model escape)',
-  )
-  .option('--dry-run', 'grid + exclusions + digest only, never writes')
-  .action((suite: string, opts: CampaignRegisterOptions) => {
-    process.exit(campaignRegister(suite, opts));
-  });
-// NO options in v1 (the pinned CLI table): the source checkouts come from
-// the environment — $GAUNTLET_ROOT / $SUPERPOWERS_ROOT; evals = this
-// checkout (C12).
-campaign
-  .command('run')
-  .description('start/resume a registered campaign (idempotent resume verb)')
-  .argument('<campaign-dir>', 'campaign directory')
-  .action(async (dir: string) => {
-    process.exit(await campaignRun(dir));
-  });
-campaign
-  .command('cancel')
-  .description('cancel a campaign (marker + pinned kill/journal order)')
-  .argument('<campaign-dir>', 'campaign directory')
-  .option(
-    '--reason <text>',
-    'cancellation reason recorded in campaign_cancelled',
-  )
-  .action(async (dir: string, opts: { reason?: string }) => {
-    process.exit(await campaignCancel(dir, opts));
-  });
-campaign
-  .command('report')
-  .description(
-    'render/verify the sealed campaign report (digest-checked regeneration)',
-  )
-  .argument('<campaign-dir>', 'campaign directory')
-  .action(async (dir: string) => {
-    process.exit(await campaignReport(dir));
-  });
+for (const verb of [
+  'register',
+  'list',
+  'status',
+  'run',
+  'cancel',
+  'costs',
+  'report',
+]) {
+  campaign
+    .command(verb)
+    .argument('[target]')
+    .description('use the configured evals-appliance campaign helper')
+    .action(() => {
+      process.stderr.write(
+        `Use evals-appliance campaign ${verb}; raw campaign execution and continuation are unsupported.\n`,
+      );
+      process.exitCode = 1;
+    });
+}
 
 program
   .command('show')
