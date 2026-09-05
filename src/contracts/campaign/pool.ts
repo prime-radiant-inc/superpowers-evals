@@ -1,6 +1,6 @@
 import type { Credential } from '../credential.ts';
 
-/** The campaign v1 quota-pool derivation (parent Execution): per-model
+/** The campaign quota-pool derivation (parent Execution): per-model
  *  splitting without merging distinct endpoints or orgs; the explicit
  *  quota_pool key covers entries genuinely sharing one provider bucket.
  *  Legacy run-all keeps limiterKey — the two derivations coexist until
@@ -20,10 +20,10 @@ export interface KeyGrant {
 export type KeySelector = (
   cred: Credential,
   inFlight: Readonly<Record<string, number>>,
+  poolCapacity: number,
 ) => { kind: 'use'; grant: KeyGrant } | { kind: 'wait' };
 
 // Authority relationship (pinned): the pool-level admission cap is
 // authoritative. Since len(keys) * ceil(cap / len(keys)) >= cap, `wait` is
-// unreachable under honest admission and guards miscalibration and recovery
-// rebuild only. Resolution must fail loud for key_pool credentials lacking a
+// unreachable under honest admission and guards aggregate admission violations. Resolution must fail loud for key_pool credentials lacking a
 // grant — the harness-conventional-env fallback is forbidden for them.

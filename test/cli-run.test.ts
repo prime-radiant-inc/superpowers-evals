@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,7 +52,9 @@ function scenario(): string {
 function runCli(
   fixture: string,
   extraArgs: string[] = [],
-): { status: number | null; stdout: string } {
+): { status: number | null; stdout: string; diagnostic: string } {
+  const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
+  const started = Date.now();
   const proc = spawnSync(
     'bun',
     [
@@ -63,7 +66,7 @@ function runCli(
       '--coding-agents-dir',
       REAL_CODING_AGENTS,
       '--out-root',
-      mkdtempSync(join(tmpdir(), 'out-')),
+      outRoot,
       ...extraArgs,
     ],
     {
@@ -88,12 +91,29 @@ function runCli(
       encoding: 'utf8',
     },
   );
-  return { status: proc.status, stdout: proc.stdout };
+  const phases = readdirSync(outRoot).flatMap((name) => {
+    try {
+      return [
+        JSON.parse(readFileSync(join(outRoot, name, 'phase.json'), 'utf8')),
+      ];
+    } catch {
+      return [];
+    }
+  });
+  const diagnostic = JSON.stringify({
+    status: proc.status,
+    signal: proc.signal,
+    elapsed_ms: Date.now() - started,
+    outRoot,
+    phases,
+    stderr: proc.stderr,
+  });
+  return { status: proc.status, stdout: proc.stdout, diagnostic };
 }
 
 test('quorum run exits 1 on a fail verdict and prints run-id', () => {
-  const { status, stdout } = runCli('fail-no-usage');
-  expect(stdout).toContain('run-id:');
+  const { status, stdout, diagnostic } = runCli('fail-no-usage');
+  expect(stdout, diagnostic).toContain('run-id:');
   expect(status).toBe(1);
 });
 

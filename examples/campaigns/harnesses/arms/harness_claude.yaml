@@ -1,0 +1,5 @@
+schema_version: 1
+name: harness_claude
+agent: claude
+credential: opus_bedrock
+superpowers: none

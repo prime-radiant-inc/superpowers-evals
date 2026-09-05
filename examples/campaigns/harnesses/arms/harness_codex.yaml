@@ -1,0 +1,5 @@
+schema_version: 1
+name: harness_codex
+agent: codex
+credential: openai_responses_56sol
+superpowers: none

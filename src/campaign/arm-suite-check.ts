@@ -1,10 +1,4 @@
-// quorum check's arm/suite validation (parent Testing: "quorum check
-// validates arm and suite files including profile parameters"). Discovery:
-// arms/ and suites/ at the repo root (parent Concepts examples); missing
-// dirs are tolerated — v1 ships no documents yet. Scenario frontmatter is
-// validated separately over the complete inventory (scenario-meta-check.ts),
-// never keyed off suite references.
-
+// Validate active arm and finite suite declarations against the public registry.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -158,9 +152,6 @@ export function checkArmSuiteFiles(
             `suites/${file}: grader model '${grader.model}' does not match credential '${grader.credential}' model '${graderCredential.model}'`,
           );
         }
-        // R-REG-15 (api-key-only gating grader) was rescinded by owner
-        // ruling 2026-09-01 — registration accepts any registered grader
-        // credential, so the check does too.
       }
     } catch (err) {
       errors.push(

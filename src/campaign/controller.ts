@@ -1027,6 +1027,9 @@ export async function runCampaignDispatch(
           const selection = resolveKeyForSpawn({
             cred: required(registry[name]),
             credentialName: name,
+            poolCapacity: required(
+              policy.get(poolKey(required(registry[name]), name)),
+            ).max_concurrency,
             inFlight: loadsFor(name),
           });
           if (selection.kind === 'wait')

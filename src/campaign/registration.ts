@@ -96,9 +96,6 @@ export const DEFAULT_GLOBAL_CAP = 8;
 
 /** Comparison ids this module mints: `c<N>`, N a 1-based ordinal. */
 const COMPARISON_ID_RE = /^c[1-9][0-9]*$/;
-/** Block-slot component of a lineage-root block id: primary `b<N>` or
- *  reserve `x<N>` (both are non-rerun blocks and therefore valid roots). */
-const BLOCK_SLOT_RE = /^[bx][1-9][0-9]*$/;
 /** Slot component of a sample id: primary `r<N>` or reserve `x<N>`. */
 const SAMPLE_SLOT_RE = /^[rx][1-9][0-9]*$/;
 
@@ -190,18 +187,6 @@ export function reserveSampleId(
   assertIdComponent(arm, 'arm name');
   assertPositiveInteger(k, 'reserve index');
   return `${cellKey}:${arm}:x${k}`;
-}
-export function rerunInstanceId(
-  lineageRootBlockId: string,
-  seq: number,
-): string {
-  assertShapedId(lineageRootBlockId, 'lineage-root block id', [
-    COMPARISON_ID_RE,
-    ID_COMPONENT_RE,
-    BLOCK_SLOT_RE,
-  ]);
-  assertPositiveInteger(seq, 'rerun instance seq');
-  return `${lineageRootBlockId}:i${seq}`;
 }
 export function attemptIdOf(sampleId: string, seq: number): string {
   assertShapedId(sampleId, 'sample id', [
@@ -1055,6 +1040,10 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     throw new RegistrationError(`${args.suitePath}: suite must be an object`);
   }
   const record = raw as Record<string, unknown>;
+  if (record['schema_version'] !== 2)
+    throw new RegistrationError(
+      'unsupported suite version; only schema_version: 2 is supported',
+    );
   let grader: Experiment['grader'];
   try {
     grader = GraderSchema.parse(record['grader']);

@@ -188,7 +188,7 @@ export function verifyBallast(
 
 /** D-13 pause step 3: release the ballast (unlink, fsync dir) so the freed
  *  blocks land the pause evidence. Absence is loud (the reserve was already
- *  spent — recovery journals that note). */
+ *  spent; callers preserve their own storage-interruption evidence). */
 export function releaseBallast(
   campaignDir: string,
   fsOps: JournalFsOps = journalFsOps,
@@ -196,7 +196,7 @@ export function releaseBallast(
   const path = join(campaignDir, '.ballast');
   if (!fsOps.exists(path)) {
     throw new JournalError(
-      `no ballast to release at ${path} — the reserve was already spent; recovery must journal the accounting note (Decision D-13) instead of releasing again`,
+      `no ballast to release at ${path} — the reserve was already spent; cannot release the same emergency reserve twice`,
     );
   }
   try {

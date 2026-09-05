@@ -57,7 +57,7 @@ import { EMPTY_CREDENTIAL_SCOPE } from '../src/credentials/scope.ts';
 import {
   experimentRegisterArgs,
   FAKE_PROBE,
-} from './campaign-registration.test.ts';
+} from './fixtures/core-comparison/registration.ts';
 
 function helperFixture() {
   const r = experimentRegisterArgs();

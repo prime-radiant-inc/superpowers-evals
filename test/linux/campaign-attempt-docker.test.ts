@@ -884,7 +884,7 @@ async function runCampaign(fixture: DockerFixture): Promise<number> {
   expect(result.kind).toBe('launched');
   await waitFor('completed V2 controller and namespace termination', () => {
     const p = readProjection(fixture.campaignDir);
-    return p.ended !== null && p.termination !== null;
+    return p.ended !== null && p.termination !== null ? true : undefined;
   });
   const status = fixture.runtime.status({
     campaignSelector: fixture.campaignId,
@@ -1049,9 +1049,8 @@ function assertProviderRecords(
 }
 
 function jobRecordFiles(fixture: DockerFixture): string[] {
-  // Direct campaignRun bypasses the appliance invocation wrapper, so this
-  // fixture normally has no state/jobs record. Keep that target explicit for
-  // any job record created by the wrapper path without scanning credentials.
+  // Campaign commands own no generic job status; scan any invocation receipts
+  // alongside the frozen document without scanning credentials.
   return [
     join(fixture.campaignDir, 'campaign.json'),
     ...filesUnder(join(fixture.tempDir, 'state', 'jobs')),

@@ -1,0 +1,5 @@
+schema_version: 1
+name: model_base
+agent: codex
+credential: openai_responses
+superpowers: none

@@ -44,6 +44,46 @@ only when the normal private path is unavailable; if it is used, record why.
 Do not add real hostnames, account identifiers, access-provider commands, or
 secret parameter names to this public runbook.
 
+## Finite Campaign Journey
+
+For comparisons, follow [campaign comparisons](campaign-comparisons.md), including
+its checked PR/base, stack, skill/stock and model templates. The supported verbs
+are `campaign register|list|status|run|cancel|costs|report`. Register a V2 suite,
+use the returned `experiment.campaign_id` UUID, run it once, inspect status/costs,
+and publish its report. A UUID is different from its published directory basename.
+Generic job commands refuse campaign invocation receipts as lifecycle authority.
+The job commands in the remaining sections concern ordinary run/run-all jobs.
+
+```bash
+evals-appliance campaign register /path/to/suite.yaml --global-cap 4 --json
+evals-appliance campaign list --json
+evals-appliance campaign run <campaign-id> --json
+evals-appliance campaign status <campaign-id> --json
+evals-appliance campaign costs <campaign-id> --json
+evals-appliance campaign report <campaign-id> --json
+```
+
+Prepare the configured Linux runtime and writable absolute results directory.
+Campaigns freeze refs, credential policy and finite attempt/time/reserve limits;
+there is no dollar admission, budget amendment or continuation. Active costs
+hide behavior and retain unknown/unpriced subject and grader coverage. The `campaign report` command publishes complete
+terminated reports with canonical seals. After loss, use `campaign cancel`
+for termination only, then read the incomplete report and register a new identity.
+A freshly dead holder can require up to the 150-second stale-lease interval before
+cancel succeeds. `unresolved`/`stopping` with next action `cancel` means inspect the
+reason and retry after that interval; never delete ownership files to continue.
+
+The current active suites grade with direct Anthropic `sonnet5` and require
+`ANTHROPIC_API_KEY` distinct in value from every subject key. Mantle subject keys
+use `AWS_BEARER_TOKEN_BEDROCK`; OpenAI subjects use `OPENAI_API_KEY`. A shared
+secret under multiple names is refused. This grading route differs from the
+historical Mantle-grader suites. The conservative source caps (two direct graders,
+one Kimi subject) limit throughput and do not prove same-workday readiness or
+provider quotas. A separately keyed Mantle grader remains supported through
+credential and suite configuration only. Historical artifacts remain unchanged and are not
+runtime-compatible inputs. Source tests do not establish installed cutover,
+Linux qualification, live credentials or provider readiness.
+
 ## Before Launch
 
 Start with a read-only health check. `doctor` must not fetch, checkout, build,

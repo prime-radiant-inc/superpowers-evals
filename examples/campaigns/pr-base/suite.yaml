@@ -1,0 +1,16 @@
+schema_version: 2
+name: pr_base
+reserve: 1
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 2
+  max_time_s: 900
+grader:
+  credential: sonnet5
+  model: claude-sonnet-5
+comparisons:
+  - baseline: pr_base
+    treatment: pr_treatment
+    scenarios:
+      - 00-quorum-smoke-hello-world
+    n: 2

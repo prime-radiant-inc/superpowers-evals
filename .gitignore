@@ -25,3 +25,7 @@ node_modules/
 
 # Campaign dirs (kernel D3): per-host evidence, never committed
 campaigns/
+
+# Committed operator source templates, never runtime evidence.
+!examples/campaigns/
+!examples/campaigns/**

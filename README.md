@@ -111,34 +111,27 @@ The `claude` agent's default credential is `opus`.
 
 ## Shared Eval Appliance
 
-Shared remote live evals are designed to run from a trusted appliance host with
-one blessed credential bundle, exact repo/ref provenance, host locks, and
-recoverable job records. Agents should use the appliance helper once it exists
-on the configured host:
+Use `evals-appliance campaign register|list|status|run|cancel|costs|report` for
+finite comparisons on the configured Linux appliance. Registration returns a
+fresh `experiment.campaign_id`; run consumes one launch. Controller loss permits
+termination-only cancellation and an incomplete report. Re-register for another
+execution; continuation and historical campaign readers are unsupported.
 
 ```bash
-evals-appliance doctor --json
-evals-appliance prepare --json --superpowers-ref <branch-tag-or-sha>
-evals-appliance run-all --json --detach \
-  --superpowers-ref <branch-tag-or-sha> \
-  -- --tier sentinel \
-     --coding-agents claude,codex,kimi \
-     --jobs 4
-evals-appliance status --json <job-id>
-evals-appliance show --json <job-id>
-evals-appliance costs --json <job-id>
-evals-appliance cancel --json <job-id>
+evals-appliance campaign register /path/to/suite.yaml --global-cap 4 --json
+evals-appliance campaign run <campaign-id> --json
+evals-appliance campaign status <campaign-id> --json
+evals-appliance campaign costs <campaign-id> --json
+evals-appliance campaign report <campaign-id> --json
 ```
 
-The target interface and operating rules are in
-[docs/appliance-runbook.md](docs/appliance-runbook.md), backed by
-[docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md](docs/superpowers/specs/2026-06-18-shared-eval-appliance-design.md).
-`doctor` is read-only. `prepare` returns `lock_busy` rather than changing refs
-while a live job is active.
-Host access and provider-specific break-glass procedures are intentionally kept
-out of this public repo; use the private ops runbook for those details.
-Raw `bun run quorum ...` and `scripts/evals-container exec quorum ...` remain
-local or trusted break-glass workflows for shared live evals.
+See [comparison examples and prerequisites](docs/campaign-comparisons.md) and the
+[appliance runbook](docs/appliance-runbook.md). Finite attempts, runtime and reserve
+limits bound work; costs retain missing/unpriced coverage rather than stopping
+on a dollar threshold. Examples require distinct subject/grader key values.
+Active suites grade through direct Anthropic `sonnet5`, so they do not establish
+numerical continuity with historical Mantle-grader runs. Ordinary helper jobs
+and local `quorum run`/`run-all` remain available with their platform checks.
 
 ## Container Runtime
 

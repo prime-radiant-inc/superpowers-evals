@@ -36,12 +36,6 @@ function refuse(source: string, detail: string): never {
   );
 }
 
-/** The cell key the document's samples reference: `<comparison_id>:<scenario>`
- *  (the registration ID grammar). */
-export function cellKeyOf(cell: { comparison_id: string; scenario: string }) {
-  return `${cell.comparison_id}:${cell.scenario}`;
-}
-
 /** Parse and authenticate a strict V2 experiment without consulting storage. */
 export function parseFrozenCampaign(raw: unknown, source: string): Experiment {
   const parsed = ExperimentSchema.safeParse(raw);

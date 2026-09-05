@@ -1,0 +1,5 @@
+schema_version: 1
+name: pr_treatment
+agent: claude
+credential: opus_bedrock
+superpowers: REPLACE_WITH_PR_COMMIT
