@@ -352,12 +352,7 @@ function readFileNode(
   } catch (error) {
     if (error instanceof FinalStateError) throw error;
     assertRootStillBound(root, rootIdentity);
-    let afterFailure: BigIntStats;
-    try {
-      afterFailure = lstatSync(absolutePath, { bigint: true });
-    } catch {
-      sourceChanged();
-    }
+    const afterFailure = readStats(absolutePath, true);
     if (!sameFile(before, afterFailure)) sourceChanged();
     sourceUnavailable();
   }

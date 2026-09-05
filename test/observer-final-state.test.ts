@@ -605,6 +605,66 @@ describe('observer final-state inventory', () => {
     }
   });
 
+  const recoveryStatCases: readonly {
+    errno: 'EACCES' | 'EIO' | 'ENOENT';
+    expected: FinalStateError['code'];
+  }[] = [
+    { errno: 'EACCES', expected: 'source_unavailable' },
+    { errno: 'EIO', expected: 'source_unavailable' },
+    { errno: 'ENOENT', expected: 'source_changed' },
+  ];
+
+  for (const recoveryCase of recoveryStatCases) {
+    test(`maps failed pinned read plus recovery ${recoveryCase.errno} to ${recoveryCase.expected}`, () => {
+      const { base, roots } = fixture();
+      const targetPath = join(base, 'logs', 'parent.jsonl');
+      const realLstat = fs.lstatSync.bind(fs);
+      const realRead =
+        credentialScope.readPinnedNoFollowBytes.bind(credentialScope);
+      let targetStats = 0;
+      const statSpy = spyOn(fs, 'lstatSync').mockImplementation(((
+        path: fs.PathLike,
+        options: { bigint: true },
+      ) => {
+        if (
+          path === targetPath ||
+          (typeof path === 'string' && path.endsWith('/parent.jsonl'))
+        ) {
+          targetStats += 1;
+          if (targetStats === 2) {
+            throw Object.assign(new Error('recovery stat failed'), {
+              code: recoveryCase.errno,
+            });
+          }
+        }
+        return realLstat(path, options);
+      }) as typeof fs.lstatSync);
+      const readSpy = spyOn(
+        credentialScope,
+        'readPinnedNoFollowBytes',
+      ).mockImplementation((anchorDir, parts, label, required) => {
+        if (
+          anchorDir === roots[0]!.path &&
+          parts.join('/') === 'parent.jsonl'
+        ) {
+          throw Object.assign(new Error('pinned read failed'), { code: 'EIO' });
+        }
+        return realRead(anchorDir, parts, label, required);
+      });
+
+      try {
+        expectFinalStateError(
+          () => captureFinalState(roots),
+          recoveryCase.expected,
+        );
+        expect(targetStats).toBe(2);
+      } finally {
+        readSpy.mockRestore();
+        statSpy.mockRestore();
+      }
+    });
+  }
+
   test.skipIf(process.platform === 'win32')(
     'maps source names that cannot be represented in a candidate to source_unavailable',
     () => {
