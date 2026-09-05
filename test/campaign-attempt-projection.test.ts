@@ -554,6 +554,63 @@ test('V2 preparation verifies selected pricing before staging and exports its ex
   ).toEqual([{ source: fx.corpus, target: fx.corpus, mode: 'ro' }]);
 });
 
+test('real entrypoint refuses credential delivery that overrides prepared selected pricing before worker launch', async () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const pricing = selectedPricing(fx);
+  const prepared = prepareV2(fx, 'claude-grader', {}, pricing.snapshot);
+  const spec = prepared.intent.runtime_spec;
+  const subjectFile = join(
+    fx.campaignDir,
+    'attempts',
+    'attempt',
+    '.stage',
+    'subject.env',
+  );
+  const graderFile = join(
+    fx.campaignDir,
+    'attempts',
+    'attempt',
+    '.stage',
+    'grader.env',
+  );
+  fs.chmodSync(subjectFile, 0o600);
+  writeFileSync(subjectFile, 'OBOL_PRICING_DIR=/unverified/pricing\n');
+  const launched = join(prepared.intent.output_root, 'worker-launched');
+  const probe = join(prepared.intent.output_root, 'worker-probe.ts');
+  writeFileSync(
+    probe,
+    `await Bun.write(${JSON.stringify(launched)}, 'yes');\n`,
+  );
+
+  const child = Bun.spawn(
+    [
+      'bash',
+      join(import.meta.dir, '..', 'container', 'attempt-entrypoint.sh'),
+      probe,
+    ],
+    {
+      env: {
+        PATH: Bun.env['PATH'] ?? '',
+        ...spec.public_env,
+        QUORUM_SUBJECT_FILE: subjectFile,
+        QUORUM_GRADER_FILE: graderFile,
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  );
+
+  expect(await child.exited).not.toBe(0);
+  expect(existsSync(launched)).toBe(false);
+  expect(
+    readFileSync(join(prepared.intent.output_root, 'stdout.log'), 'utf8'),
+  ).toBe('');
+  expect(
+    readFileSync(join(prepared.intent.output_root, 'stderr.log'), 'utf8'),
+  ).toContain('credential delivery overrides protected runtime environment');
+});
+
 test('prepared runtime schema accepts only an absolute selected pricing directory', () => {
   const fx = projectionFixture();
   addGrader(fx);
