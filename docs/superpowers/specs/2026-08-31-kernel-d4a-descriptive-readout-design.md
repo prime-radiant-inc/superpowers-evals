@@ -98,11 +98,14 @@ bar (Decision D-5).
   journaled superseding re-render, and the `campaign list`/`status`
   verbs. Cut as speculative: the general supersedes/errata apparatus (no
   errata event has ever occurred; corrections land in the experiment
-  log), tags/declared-metrics aggregation (no consumer; D-9's deferred
-  report section is deleted, not landed), and the second live Fisher
-  implementation (independently generated golden tables carry the
-  cross-check). The verdict remains a computed readout; it binds no
-  release (PAR revision 3).
+  log), tags/declared-metrics aggregation (no consumer), and the second
+  live Fisher implementation (independently generated golden tables carry
+  the cross-check). The verdict remains a computed readout; it binds no
+  release (PAR revision 3). Correction (2026-09-04, per the D4b round-1
+  review, fable C1 / k3 C5): D-9's named empty report section STAYS —
+  deleting it would change every descriptive render and trip the tamper
+  guard on the already-sealed D4a campaigns. The cut is the aggregation
+  machinery, not the section heading.
 
 - **D-2 — All statistics defer to D4b.** Ratified (Drew, 2026-08-31). D4a
   renders rates and signed deltas only; per-cell Fisher exact (PAR §"Report
