@@ -741,26 +741,30 @@ writeFileSync(join(exportsDir, 'trajectory.json'), ${JSON.stringify(
     ],
   ];
 
-  test.each(
-    ATTESTATION_FAILURES,
-  )('OpenRouter attestation %s stops before post-checks as capture indeterminate', async (_name, options) => {
-    const { response = {}, ...runOptions } = options;
-    const fetchFn = injectedFetch(async () => {
-      const id = options.responseIds?.[0] ?? 'gen-route-1';
-      return new Response(JSON.stringify(generationPayload(id, response)), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
+  test.each(ATTESTATION_FAILURES)(
+    'OpenRouter attestation %s stops before post-checks as capture indeterminate',
+    async (_name, options) => {
+      const { response = {}, ...runOptions } = options;
+      const fetchFn = injectedFetch(async () => {
+        const id = options.responseIds?.[0] ?? 'gen-route-1';
+        return new Response(JSON.stringify(generationPayload(id, response)), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
       });
-    });
-    const { result, postMarker } = await runAttestationScenario({
-      ...runOptions,
-      openRouterFetch: fetchFn,
-    });
+      const { result, postMarker } = await runAttestationScenario({
+        ...runOptions,
+        openRouterFetch: fetchFn,
+      });
 
-    expect(result.verdict.final).toBe('indeterminate');
-    expect(result.verdict.error?.stage).toBe('capture');
-    expect(existsSync(postMarker)).toBe(false);
-  });
+      expect(result.verdict.final).toBe('indeterminate');
+      expect(result.verdict.error?.stage).toBe('capture');
+      expect(existsSync(postMarker)).toBe(false);
+      // Each case drives the real mock-runner subprocess path, like the other
+      // single-drive fixtures with a ten-second budget in this file.
+    },
+    10_000,
+  );
 
   test('OpenRouter metadata HTTP failures are capture indeterminate before post-checks', async () => {
     const { result, postMarker } = await runAttestationScenario({
