@@ -31,6 +31,24 @@
 | 2 | `src/experiments/observer/codex.ts`, `test/observer-codex.test.ts` | Stateful full-stream Codex index over supplied bytes |
 | 3 | `src/experiments/observer/claude.ts`, `test/observer-claude.test.ts` | Stateful full-stream Claude index with explicit unresolved provenance |
 
+Each adapter parses once. After `const rows = parseCompleteJsonl(source, raw)`,
+construct its prefix from that same validated input using Node crypto:
+
+```ts
+const prefix: RawPrefix = {
+  source_id: source.source_id,
+  bytes: raw.byteLength,
+  sha256: createHash('sha256').update(raw).digest('hex'),
+  after_line: rows.length,
+};
+```
+
+Import `createHash` from `node:crypto`. Do not call `createRawPrefix` in adapter
+implementation because that independently validates and reparses the stream.
+Test each adapter's computed prefix against `createRawPrefix` on representative
+raw bytes, including multibyte text and CRLF. The shared byte-verification API
+stays unchanged; this small repeated assembly avoids a second full parse.
+
 Use direct imports from the named modules; no barrel or registry is necessary. Tasks 2 and 3 consume the reviewed Task 1 interface unchanged and own disjoint adapter/test files. Changes to that shared interface belong to the integration owner and require another contract review before proceeding.
 
 ### Task 1: Shared raw contracts, parser, and byte-prefix verification
@@ -348,7 +366,7 @@ Read the checked-in Codex slice as shape evidence: assert that selected original
 - Test: `test/observer-claude.test.ts`
 - Read only: `src/normalize/claude.ts`, `test/normalize.claude.test.ts`, `test/fixtures/claude-2.1.177-real.jsonl`, `test/fixtures/claude-2.1.177-with-tooluse.jsonl`
 
-**Interfaces:** Consume Task 1 domain types, `parseCompleteJsonl`, `createRawPrefix`, and `canonicalJson`. Export exactly `indexClaudeTranscript(source: RawSource, raw: Uint8Array): RawIndex`. No adapter activation or readiness boolean is exported.
+**Interfaces:** Consume Task 1 domain types, `parseCompleteJsonl`, and `canonicalJson`. Compute the prefix from validated rows/bytes; use `createRawPrefix` only as a test oracle. Export exactly `indexClaudeTranscript(source: RawSource, raw: Uint8Array): RawIndex`. No adapter activation or readiness boolean is exported.
 
 - [ ] **Step 1: Write split-message and replay tests first.** Use distinct UUIDs for split rows sharing a message ID. The later call and result must remain after the intervening user row.
 
@@ -427,7 +445,7 @@ Treat `message.id` solely as a label copied to message entries. Never use it as 
 
 - [ ] **Step 4: Implement identity and message-origin interpretation without guessing TUI provenance.** Inspect every recognized identity-bearing row rather than the first row. Verify all present `sessionId`, `cwd`, and `version` values against source expectations and against earlier observed values; contradictions throw `identity_conflict`. Queue rows may contribute a session claim, but cannot establish parenthood or approvals. `isSidechain: true` or a nonempty `agentId` positively marks `descendant`. `isSidechain: false`, matching cwd/session, and null `parentUuid` leave `conversation: 'unresolved'`. There is no `parent` outcome for Claude in this slice, because the supplied fixtures do not establish authoritative current-TUI parent selection.
 
-On explicit user text blocks, `userType: 'external'` becomes `claimed_origin: 'external'`, not eligibility. `userType: 'internal'` becomes internal/ineligible. Missing or another user type is unclaimed/unresolved. All descendant user messages are ineligible, regardless of the claim. Recognized `isCompactSummary: true` user rows are non-action summary records and produce no approval message. The marker is a synthetic rejection invariant here, not proof of how the target CLI emits compaction. Assistant messages are always ineligible. Mixed tool-result/text user records emit separate entries; their user text remains unresolved rather than inheriting external provenance from an adjacent result or row label. No message in this adapter is eligible yet.
+On explicit user text blocks, `userType: 'external'` becomes `claimed_origin: 'external'`, not eligibility. `userType: 'internal'` becomes internal/ineligible. Missing or another user type is unclaimed/unresolved. All descendant user messages are ineligible, regardless of the claim. Recognized `isCompactSummary: true` user rows are non-action summary records and produce no approval message. The marker is a synthetic rejection invariant here, not proof of how the target CLI emits compaction. Assistant messages are always ineligible. Mixed tool-result/text user records emit separate entries. Preserve the observed row-level `userType` as `claimed_origin` on the text entry, including an external claim; its `approval_eligibility` remains unresolved unless a known internal/descendant rule makes it ineligible. A claim is not established provenance, and neither an adjacent result nor the row label can confer approval authority. Test the external-claim/unresolved-eligibility distinction explicitly. No message in this adapter is eligible yet.
 
 The initial accepted grammar is explicitly limited:
 
