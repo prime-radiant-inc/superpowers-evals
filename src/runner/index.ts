@@ -435,7 +435,12 @@ export async function invokeGauntlet(
   const exit = await spawnGauntlet(a);
   const gauntlet =
     gauntletLayerFromRunDir(a.runDir) ?? synthesizedGauntletLayer(exit);
-  return { gauntlet };
+  return {
+    gauntlet: {
+      ...gauntlet,
+      process_exit: { code: exit.status, signal: exit.signal },
+    },
+  };
 }
 
 export interface RunScenarioArgs {

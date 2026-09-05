@@ -107,6 +107,15 @@ export interface SessionResult {
   outcome: 'completed' | 'cancelled' | 'interrupted';
   reason: string;
 }
+const INTRINSIC_GRADER_SIGNALS = new Set([
+  'SIGABRT',
+  'SIGSEGV',
+  'SIGBUS',
+  'SIGILL',
+  'SIGFPE',
+  'SIGTRAP',
+  'SIGSYS',
+]);
 function productionDependencies(
   context: CampaignControllerContext,
 ): SessionDependencies {
@@ -408,6 +417,7 @@ export async function runCampaignDispatch(
     guard();
     let outcome: 'pass' | 'fail' | 'indeterminate' = 'indeterminate';
     let stage: Parameters<typeof classifyFailure>[0]['stage'];
+    let graderCrash = false;
     let missing = evidence.missing;
     let strongest: ReturnType<typeof senseEvidence> = null;
     try {
@@ -424,6 +434,14 @@ export async function runCampaignDispatch(
         throw Error('verdict identity mismatch');
       outcome = verdict.final;
       stage = verdict.error?.stage;
+      const signal = verdict.gauntlet?.process_exit?.signal;
+      graderCrash =
+        outcome === 'indeterminate' &&
+        (stage === undefined || stage === 'gauntlet') &&
+        verdict.gauntlet?.status === 'investigate' &&
+        verdict.gauntlet.run_id === null &&
+        typeof signal === 'string' &&
+        INTRINSIC_GRADER_SIGNALS.has(signal);
     } catch (error) {
       if (isStorageFailure(error)) {
         storageFailed = true;
@@ -487,12 +505,17 @@ export async function runCampaignDispatch(
       outcome = 'indeterminate';
       stage = undefined;
       strongest = null;
+      graderCrash = false;
     }
     const classification = classifyFailure({
       outcome,
-      ...(stage ? { stage } : {}),
-      exitClass: 'clean',
-      role: strongest?.role ?? 'subject',
+      ...(graderCrash
+        ? { stage: 'gauntlet' as const }
+        : stage
+          ? { stage }
+          : {}),
+      exitClass: graderCrash ? 'signal' : 'clean',
+      role: strongest?.role ?? (graderCrash ? 'grader' : 'subject'),
       sensorEvidence: strongest?.evidence ?? 'none',
     });
     if (strongest?.evidence === '429-match') {

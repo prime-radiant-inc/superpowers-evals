@@ -2,13 +2,17 @@ import { afterEach, expect, test } from 'bun:test';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { AttemptPublicationStorageError } from '../src/campaign/attempt-publish.ts';
+import { dirname, join } from 'node:path';
+import {
+  AttemptPublicationStorageError,
+  publishExecution,
+} from '../src/campaign/attempt-publish.ts';
 import {
   runCampaignDispatch,
   type SessionDependencies,
@@ -32,6 +36,7 @@ import type {
 } from '../src/contracts/campaign/execution.ts';
 import { experimentDigest } from '../src/contracts/campaign/experiment-digest.ts';
 import type { Credential } from '../src/contracts/credential.ts';
+import type { GauntletLayer } from '../src/contracts/verdict.ts';
 import { FakeClock, RealClock } from '../src/scheduler/clock.ts';
 import {
   blockActivation,
@@ -39,6 +44,7 @@ import {
   sessionTransitions,
   twoArmExperiment,
 } from './fixtures/core-comparison/factory.ts';
+import { gauntletProcessExit } from './fixtures/core-comparison/gauntlet-process.ts';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -500,6 +506,195 @@ test('the real composer manifest mismatch reaches checks replacement through aut
   await settle(f, run);
   expect(f.writer.readProjection().consumed_reserves.size).toBe(1);
   expect(f.writer.readProjection().ended?.outcome).toBe('completed');
+});
+
+function publishRunnerLayer(
+  f: ReturnType<typeof fixture>,
+  layer: GauntletLayer,
+  stage?: 'stopped' | 'qa-agent-misconfigured',
+  sensor?: string,
+) {
+  const publish = f.deps.publish;
+  f.deps.publish = (args) => {
+    if (args.bound.intent.attempt_number !== 1) return publish(args);
+    const { intent } = args.bound;
+    const runId = intent.identity.execution_attempt_id;
+    const root = join(intent.output_root, 'staging', runId);
+    mkdirSync(root, { recursive: true });
+    const verdict = compose({
+      gauntlet: layer,
+      checks: [],
+      captureEmpty: false,
+      error: stage ? { stage, message: 'typed precedence' } : null,
+      expected: null,
+    });
+    const files: Record<string, string> = {
+      'verdict.json': JSON.stringify({ ...verdict, campaign: intent.identity }),
+      'trajectory.json': JSON.stringify({
+        steps: [
+          {
+            timestamp: f.writer.readProjection().attempts.get(runId)!
+              .prepared_at,
+          },
+        ],
+      }),
+    };
+    if (sensor)
+      files['gauntlet-agent/results/grader/run.jsonl'] = JSON.stringify({
+        type: 'run_error',
+        error: { message: sensor },
+      });
+    writeFileSync(
+      join(root, 'manifest.json'),
+      JSON.stringify({
+        schema_version: 1,
+        run_id: runId,
+        campaign: intent.identity,
+        files: Object.entries(files).map(([path, body]) => {
+          mkdirSync(dirname(join(root, path)), { recursive: true });
+          writeFileSync(join(root, path), body);
+          return {
+            path,
+            size: Buffer.byteLength(body),
+            sha256: sha256Hex(body),
+          };
+        }),
+      }),
+    );
+    return publishExecution(args);
+  };
+}
+
+test('a real grader fatal signal with no result reaches authenticated whole-block replacement', async () => {
+  const layer = await gauntletProcessExit({ signal: 'SIGABRT' });
+  const f = fixture();
+  publishRunnerLayer(f, layer);
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.complete(0);
+  await flush();
+  expect(
+    f.writer.readProjection().attempts.get('sample-base-1')?.observation?.cause,
+  ).toBe('grader_crashed');
+  expect(f.started).toHaveLength(4);
+  expect(
+    [...f.writer.readProjection().attempts.values()]
+      .filter((a) => a.intent.attempt_number === 1)
+      .every((a) => a.stopped),
+  ).toBe(true);
+  f.complete(2);
+  f.complete(3);
+  await settle(f, run);
+  expect(f.writer.readProjection().consumed_reserves.size).toBe(1);
+  expect(f.writer.readProjection().ended?.outcome).toBe('completed');
+});
+
+for (const facts of [
+  { code: 1 },
+  { code: 124 },
+  { code: 137 },
+  { code: 130 },
+  { signal: 'SIGTERM' as const },
+  { code: 137, result: 'pass' as const },
+  { signal: 'SIGABRT' as const, result: 'fail' as const },
+  { signal: 'SIGABRT' as const, result: 'investigate' as const },
+  { signal: 'SIGABRT' as const, result: 'errored' as const },
+])
+  test(`ambiguous grader exit or parseable result cannot create a crash retry: ${JSON.stringify(facts)}`, async () => {
+    const f = fixture();
+    publishRunnerLayer(f, await gauntletProcessExit(facts));
+    const run = runCampaignDispatch(f.context, f.deps);
+    await flush();
+    f.complete(0);
+    f.complete(1);
+    await settle(f, run);
+    expect(f.started).toHaveLength(2);
+    expect(f.writer.readProjection().consumed_reserves.size).toBe(0);
+    expect(
+      f.writer.readProjection().attempts.get('sample-base-1')?.observation
+        ?.cause,
+    ).toBeNull();
+  });
+
+for (const evidence of ['missing', 'malformed', 'tampered'] as const)
+  test(`untrusted grader process facts cannot authorize a retry: ${evidence}`, async () => {
+    const layer = await gauntletProcessExit({ signal: 'SIGABRT' });
+    if (evidence === 'missing') delete layer.process_exit;
+    if (evidence === 'malformed')
+      Object.assign(layer, {
+        process_exit: { code: 137, signal: 'SIGABRT', stderr: 'untrusted' },
+      });
+    const f = fixture();
+    publishRunnerLayer(f, layer);
+    if (evidence === 'tampered') {
+      const publish = f.deps.publish;
+      f.deps.publish = (args) => {
+        const result = publish(args);
+        const ref = result.artifacts.find((r) =>
+          r.path.endsWith('/verdict.json'),
+        )!;
+        const path = join(f.context.resultsRoot, ref.path);
+        const verdict = JSON.parse(readFileSync(path, 'utf8'));
+        verdict.gauntlet.process_exit.signal = 'SIGSEGV';
+        writeFileSync(path, JSON.stringify(verdict));
+        return result;
+      };
+    }
+    const run = runCampaignDispatch(f.context, f.deps);
+    await flush();
+    f.complete(0);
+    f.complete(1);
+    await settle(f, run);
+    const p = f.writer.readProjection();
+    expect(p.consumed_reserves.size).toBe(0);
+    expect(p.attempts.get('sample-base-1')?.observation?.cause).toBeNull();
+    expect(p.attempts.get('sample-base-1')?.observation?.outcome).toBe(
+      'indeterminate',
+    );
+    expect(f.started).toHaveLength(2);
+  });
+
+for (const stage of ['stopped', 'qa-agent-misconfigured'] as const)
+  test(`typed ${stage} takes precedence over grader fatal signal facts`, async () => {
+    const f = fixture();
+    publishRunnerLayer(
+      f,
+      await gauntletProcessExit({ signal: 'SIGABRT' }),
+      stage,
+    );
+    const run = runCampaignDispatch(f.context, f.deps);
+    await flush();
+    f.complete(0);
+    await flush();
+    if (f.alive.has('sample-candidate-1')) f.complete(1);
+    await settle(f, run);
+    const p = f.writer.readProjection();
+    expect(p.consumed_reserves.size).toBe(0);
+    expect(p.attempts.get('sample-base-1')?.observation?.cause).toBe(
+      stage === 'stopped' ? null : 'grader_misconfigured',
+    );
+    if (stage === 'qa-agent-misconfigured')
+      expect(p.ended?.outcome).toBe('interrupted');
+  });
+
+test('authenticated grader billing evidence precedes intrinsic process failure', async () => {
+  const f = fixture();
+  publishRunnerLayer(
+    f,
+    await gauntletProcessExit({ signal: 'SIGABRT' }),
+    undefined,
+    '{"message":"Your credit balance is too low"}',
+  );
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.complete(0);
+  await flush();
+  expect(
+    f.writer.readProjection().attempts.get('sample-base-1')?.observation?.cause,
+  ).toBe('grader_billing_exhausted');
+  expect(f.started).toHaveLength(2);
+  await settle(f, run);
+  expect(f.writer.readProjection().ended?.outcome).toBe('interrupted');
 });
 
 test('a permanent grader configuration failure ends the session and stops its sibling', async () => {

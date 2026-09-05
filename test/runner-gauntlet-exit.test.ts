@@ -2,10 +2,15 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { GauntletLayer } from '../src/contracts/verdict.ts';
+import { compose } from '../src/composer.ts';
+import {
+  type GauntletLayer,
+  GauntletProcessExitSchema,
+} from '../src/contracts/verdict.ts';
 import { getEnv } from '../src/env.ts';
 import { gauntletEnvBase } from '../src/runner/gauntlet-env.ts';
 import { invokeGauntlet } from '../src/runner/index.ts';
+import { gauntletProcessExit } from './fixtures/core-comparison/gauntlet-process.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 // A gauntlet that dies before writing a result still composes as the
@@ -64,4 +69,35 @@ test('a gauntlet killed by a signal without a result names the signal', async ()
     'gauntlet was killed by SIGKILL without writing a result',
   );
   expect(gauntlet.reasoning).toBe('');
+});
+
+test('settled Gauntlet processes preserve exit facts without replacing valid results', async () => {
+  const fatal = await gauntletProcessExit({ signal: 'SIGABRT' });
+  expect(fatal.process_exit).toEqual({ code: null, signal: 'SIGABRT' });
+  expect(fatal.run_id).toBeNull();
+  const valid = await gauntletProcessExit({ code: 137, result: 'pass' });
+  expect(valid.process_exit).toEqual({ code: 137, signal: null });
+  expect(
+    compose({
+      gauntlet: valid,
+      checks: [],
+      captureEmpty: false,
+      error: null,
+      expected: null,
+    }).final,
+  ).toBe('pass');
+  const interrupted = await gauntletProcessExit({ signal: 'SIGTERM' });
+  expect(interrupted.process_exit).toEqual({ code: null, signal: 'SIGTERM' });
+});
+
+test('Gauntlet process exit evidence rejects incomplete and contradictory facts', () => {
+  for (const facts of [
+    {},
+    { code: null, signal: null },
+    { code: 137, signal: 'SIGABRT' },
+    { code: -1, signal: null },
+    { code: 1.5, signal: null },
+    { code: null, signal: 'SIGABRT', stderr: 'not part of this contract' },
+  ])
+    expect(GauntletProcessExitSchema.safeParse(facts).success).toBe(false);
 });

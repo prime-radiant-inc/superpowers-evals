@@ -53,11 +53,26 @@ export const CheckRecordSchema = z.object({
 });
 export type CheckRecord = z.infer<typeof CheckRecordSchema>;
 
+export const GauntletProcessExitSchema = z
+  .object({
+    code: z.number().int().min(0).max(255).nullable(),
+    signal: z
+      .string()
+      .regex(/^SIG[A-Z0-9]+$/)
+      .nullable(),
+  })
+  .strict()
+  .refine((exit) => (exit.code === null) !== (exit.signal === null), {
+    message: 'settled Gauntlet exit requires exactly one code or signal',
+  });
+
 export const GauntletLayerSchema = z.object({
   status: z.enum(GAUNTLET_STATUSES),
   summary: z.string(),
   reasoning: z.string(),
   run_id: z.string().nullable(),
+  // Runner-owned child facts. Absence supplies no process evidence.
+  process_exit: GauntletProcessExitSchema.optional(),
 });
 export type GauntletLayer = z.infer<typeof GauntletLayerSchema>;
 
