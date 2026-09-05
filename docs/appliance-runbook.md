@@ -219,6 +219,13 @@ subcommand for it.
 
 ### Bundle migration and rollback
 
+`evals-appliance run --grader-model <model>` selects the Gauntlet-Agent's
+request model and records it in the job command. It does not select credentials
+or an endpoint: those come from the configured bundle's grader aliases. For
+Mantle, use the provider-prefixed model identifier (for example,
+`anthropic.claude-sonnet-5`) and a matching grader base URL and credential.
+Omitting the option retains Quorum's default grader model.
+
 The blessed bundle's `credentials.env` must supply the grader credential under
 `QUORUM_GRADER_CLAUDE_CODE_OAUTH_TOKEN`,
 `QUORUM_GRADER_ANTHROPIC_AUTH_TOKEN`, or `QUORUM_GRADER_ANTHROPIC_API_KEY`,

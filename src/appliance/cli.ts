@@ -62,6 +62,7 @@ export interface RunCommandArgs extends PrepareCommandArgs {
   // request's scope; this preserves what was actually asked for, and drives
   // the generated Quorum argv.
   readonly credential: string | null;
+  readonly graderModel?: string;
 }
 
 export interface RunAllCommandArgs extends PrepareCommandArgs {
@@ -328,6 +329,23 @@ function normalizeRunCredential(occurrences: readonly string[]): string | null {
   );
 }
 
+function normalizeRunGraderModel(
+  occurrences: readonly string[],
+): string | undefined {
+  if (occurrences.length === 0) return undefined;
+  const model = occurrences[0];
+  if (
+    occurrences.length !== 1 ||
+    model === undefined ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model)
+  ) {
+    rejectSelection(
+      '--grader-model requires exactly one nonempty model identifier',
+    );
+  }
+  return model;
+}
+
 // Validate the forwarded Quorum argv and read the ONE (agent, credential)
 // cell it selects out of it. The argv itself is never rewritten — it is
 // preserved verbatim for the worker — so this only reads.
@@ -553,6 +571,9 @@ export function createApplianceActions(
         '--coding-agent',
         args.agent,
         ...(args.credential === null ? [] : ['--credential', args.credential]),
+        ...(args.graderModel === undefined
+          ? []
+          : ['--grader-model', args.graderModel]),
       ];
       return submitLiveJob({
         kind: 'run',
@@ -788,6 +809,12 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
       collectOccurrence,
       NO_OCCURRENCES,
     )
+    .option(
+      '--grader-model <model>',
+      'Gauntlet-Agent model identifier',
+      collectOccurrence,
+      NO_OCCURRENCES,
+    )
     .option('--json', 'emit JSON')
     .option('--detach', 'run in a detached appliance worker')
     .action(
@@ -797,6 +824,7 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           scenario: string;
           codingAgent: string;
           credential: readonly string[];
+          graderModel: readonly string[];
         },
       ) => {
         const base = {
@@ -807,6 +835,7 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
         };
         return handleAction(base, resolvedDeps, () => {
           const credential = normalizeRunCredential(options.credential);
+          const graderModel = normalizeRunGraderModel(options.graderModel);
           const loaded = loadConfigForValidation();
           const scenario = normalizeScenarioPath(base.scenario, loaded);
           const codingAgentsDir = join(
@@ -815,7 +844,12 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           );
           assertSupportedAgent(base.agent, codingAgentsDir);
           return actions.run(
-            { ...base, scenario, credential },
+            {
+              ...base,
+              scenario,
+              credential,
+              ...(graderModel === undefined ? {} : { graderModel }),
+            },
             liveCredentialRequest(loaded, {
               agent: base.agent,
               credential,
