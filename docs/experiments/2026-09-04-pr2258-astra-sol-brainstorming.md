@@ -76,10 +76,11 @@ instruction layers and capabilities constant within each model's base/head
 comparison, and capture their differences across models. The earlier September 4
 comparison found stable but different model-specific native instructions and
 delegate choices. Cross-model results therefore describe native Codex workflows,
-not isolated model weights. Prefer Codex CLI 0.153.0 to match the reported research;
-using the previously exercised appliance's 0.146.0 build is a distinct environment
-that must be fixed for all four arms and recorded before launch. This local
-checkout currently has Codex 0.148.0; it has not run this pilot.
+not isolated model weights. The pilot targets the existing appliance Codex
+0.146.0 build, verified read-only on September 4, for all four arms. This is
+a distinct environment from the PR research's 0.153.0 build and must not be
+described as an exact harness replication. This local checkout has Codex
+0.148.0; it has not run this pilot.
 Use Quorum's native staged Superpowers plugin in fresh run homes. Capture the
 exposed skill list and the actual skill bytes loaded. Keep unrelated plugins
 out of the primary comparison without editing away native harness instructions.
@@ -330,6 +331,23 @@ approval. A real setup/runPhase test verifies the clean fixture, retained privat
 observer context, passing and failing records, and indeterminate missing evidence.
 These checks establish fixture and audit behavior, not live model performance.
 
+Verification on September 4, after independent review and fixes:
+
+- `bun run check`: 3,530 core tests passed, one skipped, zero failed;
+  all 144 dashboard tests passed, with lint and typecheck clean.
+- `bun run quorum check`: scenario inventory, credentials, and arms/suites valid.
+- 149 targeted pilot, normalizer, credential-scope, and pinning tests passed.
+- Independent review found no remaining blocker at 3b661f59 after the metadata,
+  native-call ID, corrected-understanding, compound-write, and observer-deadline
+  fixes. Live actor adherence and capture agreement remain pilot questions.
+
+Retained verification failures: an initial full check overlapped active edits
+and was not used as frozen verification. The first frozen check had 3,528
+passes, one skip, and two five-second integration timeouts. Their fixtures
+exercise provisioning/mock-runner subprocesses and were given the ten-second
+budget used by comparable tests, preserving every assertion (c9d07b1d). All
+37 tests in those runner files passed, followed by the clean full check above.
+
 The earlier PRI-3088 comparison exposed duplicate Codex usage snapshots.
 Commit 2ff9816f reuses the isolated correction from 0e379793: identical total and
 last-request snapshots are counted once, while genuine equal-size requests,
@@ -344,14 +362,39 @@ No old results were overwritten or reused as pilot samples.
 | Astra | 2 | 2 | xhigh | 25 / 30 minutes |
 | Sol | 2 | 2 | xhigh | 25 / 30 minutes |
 
-Propose two subject slots, admitting one baseline/treatment pair at a time,
-with the same resource conditions for each model. The nominal envelope is four
-30-minute pair waves, approximately two hours plus setup and independent review;
-allow roughly three hours for a same-workday pilot readout. If the approved
-appliance helper only supports serial jobs, the eight-run cap becomes four
-hours plus overhead. Verify its supported surface before choosing that venue;
-do not bypass the helper or imply that a suite file configures host concurrency.
-No automatic replacements, diagnostic extensions, or 204-run screen follow.
+The installed helper was inspected read-only on September 4: doctor reports
+healthy, the container is running, and the run/sync locks are absent. The
+credential bundle identity is blessed-20260901T185556Z. The container image is
+sha256:cdf467a0050b8c0068e6652e995f559e0f85ab3deb40d8ee8f72332b42a6ba37, and its
+Codex reports 0.146.0. The helper has run and run-all but no campaign verbs. Its supported run command accepts explicit
+credential, scenario, and Superpowers ref arguments.
+
+Use **one subject slot and eight serial helper jobs** for the pilot. Preserve
+pair/repetition labels in the run ledger rather than pretending the helper
+executes the suite directly. This avoids an appliance upgrade just to run eight
+samples. The suite remains the reviewable comparison manifest; its budget_usd
+field is not enforced across these separate Phase 1 jobs. Check cumulative
+subject plus grader costs between jobs and stop admission when the remaining
+approved budget cannot support the next run's conservative allowance. In-flight
+requests can overshoot an operator stop; do not call this a provider hard cap.
+
+| Launch order | Pair | Arm |
+| ---: | --- | --- |
+| 1 | astra-r1 | codex_astra_pr2258_base |
+| 2 | astra-r1 | codex_astra_pr2258_head |
+| 3 | sol-r1 | codex_sol_pr2258_base |
+| 4 | sol-r1 | codex_sol_pr2258_head |
+| 5 | sol-r2 | codex_sol_pr2258_head |
+| 6 | sol-r2 | codex_sol_pr2258_base |
+| 7 | astra-r2 | codex_astra_pr2258_head |
+| 8 | astra-r2 | codex_astra_pr2258_base |
+
+This reverses within-model order on the second repetition; it is not a
+randomized block. Record wall-clock exposure and contention. Eight 30-minute
+caps imply at most four hours of Gauntlet budgets, plus setup and independent
+review. Reserve approximately five hours for a same-workday readout; early
+failures may finish much sooner and are not efficiency wins. No automatic
+replacements, diagnostic extensions, or 204-run screen follow.
 
 Official OpenAI pricing was fetched on September 4 from the
 [pricing page](https://developers.openai.com/api/docs/pricing). Standard,
@@ -371,28 +414,34 @@ budget assumption, not a newly verified Bedrock price quote. A proposed **$100
 pilot budget** leaves $31.20 headroom for variation and small delegate costs.
 This does not authorize spend or guarantee an invoice ceiling; in-flight calls,
 long context, tool charges, or additional delegates can exceed these assumptions.
-The first pair must be inspected before admitting later pairs if observed
-cost or evidence quality invalidates the estimate.
+Inspect the first pair before admitting later pairs; pause if observed cost
+or evidence quality invalidates the estimate.
 
 The preceding PRI-3088 report (commit bd0620a0, separate branch) reports $54.695
 for 30 different measured runs plus $2.876 for two smokes, using high effort.
 It is useful scale context, not an xhigh todo forecast. Its reported accounting
-used an explicit pricing correction. Installed obol 0.9.0 alone does not prove
-Astra/current Sol price coverage. Before live authorization, verify or freeze
-price tables for both subjects and the grader, and validate any campaign
-admission estimates separately from final captured token costs. Never price
-an unknown model as zero or treat an admission override as final accounting.
+used an explicit pricing correction. An offline synthetic 1,000-token-per-bucket
+probe of the local installed obol 0.9.0
+confirms its bundled table is dated 2026-08-05: Astra is explicitly unpriced,
+Sol returns $0.0355 instead of the current Standard $0.0244, and the selected
+grader returns $0.0122. This is a concrete launch preparation gap. Freeze a
+corrected pricing table for both subjects and the grader before live
+execution, preserving the table digest and separate corrected-cost provenance.
+Never deploy a capture path that silently treats Astra as a zero-cost model.
+Any campaign admission estimates are separate from final captured token costs;
+an admission override does not correct final accounting.
 
 The remaining launch preflight must record the exact evals commit, Gauntlet
 commit (local source currently fb34bcd03cc169f8841a2e4c8cf1d9173a229f18), Codex
 binary/image, selected credential bundle identity, native instruction digests,
-current endpoint access, effective xhigh, pricing-table digest, supported helper
-command, concurrency, and spend-lock status. The
+current endpoint access, effective xhigh, pricing-table digest, and the exact
+per-job helper commands. Recheck concurrency and spend-lock status at launch. The
 [appliance runbook](../appliance-runbook.md) remains the operator authority.
-A desktop model-picker entry is not appliance API access. The earlier helper
-had no campaign verbs; current support has not been verified in this task.
-These are explicitly unverified launch conditions, not reasons to claim that
-the locally validated suite is already deployed or running.
+A desktop model-picker entry is not appliance API access. Current helper
+capability and container Codex version were verified as above.
+The new evals instrument and corrected price table have not been deployed, and
+no endpoint call or live xhigh run was made. These remaining launch conditions
+must not be described as already verified by local tests.
 
 Record every admitted run ID, toolchain/protocol revision, accounting total,
 negative outcome, and adjudication in the eventual readout. Pilot results remain
