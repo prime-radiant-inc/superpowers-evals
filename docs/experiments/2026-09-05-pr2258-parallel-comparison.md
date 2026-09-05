@@ -132,6 +132,25 @@ evidence. The host controller's container-stop proof is a separate acceptance ga
 The five-second hard-kill grace remains unchanged; no partial bundle is published
 by omission or completed by hand.
 
+## Raw observer and termination work
+
+Drew requested continuing implementation after the verified foundations. The
+next independent source slice introduces pure V2 raw indexes and byte-prefix
+verification. Existing V1 capture/scoring, CLI routing and scenario eligibility
+remain at their historical instrument until the complete new path is ready.
+
+The checked-in Claude `2.1.177` trace identifies `entrypoint: sdk-cli` and
+`promptSource: sdk`. Queue-prefix and content-shape tests can use those bytes;
+parent-TUI identity and external approval eligibility remain unqualified.
+Synthetic fixtures must be labeled separately from captured evidence.
+
+A concrete [Gauntlet termination design](../superpowers/specs/2026-09-05-gauntlet-observer-termination-design.md)
+proposes a Linux child-subreaper around the entire invocation. This cross-repo
+runtime mechanism is pending Drew's architectural choice; raw indexing does not
+depend on accepting it. The existing Gauntlet checkout was read only, and its
+unrelated untracked files remain untouched. Linear returned an upstream 502
+during the continuation; tracking stays with the existing PRI-3097 record.
+
 ## Remaining qualification gates
 
 Source tests, cross-repository Linux instrument tests, installed appliance proof,
