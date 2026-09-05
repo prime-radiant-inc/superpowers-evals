@@ -110,6 +110,16 @@ regressions. Typecheck and targeted formatting checks passed. A full local
 check was deliberately interrupted before completion when these findings
 arrived; it is not a passing full-suite receipt. Full Linux CI is still required.
 
+The next Linux run passed 3,556 tests, skipped 2, and failed only the campaign
+intake fixture. All lock and Antigravity regressions passed on Linux. A local
+passing-host probe reproduced the remaining failure: that fixture consumed the
+operator checkout's evolving arm catalog and stopped at an unrelated unresolved
+Superpowers ref. It now uses the existing isolated committed intake and a suite
+with an absent arm. The actual R-REG-2 contract is a preview with an explicitly
+excluded cell, not a process error; the fixture now checks the named exclusion,
+zero cells/samples/blocks, and no publication on every platform. The focused
+test passes. Production registration behavior is unchanged.
+
 No paid run was launched during this repair. Prior canonical receipts and the
 $4.7709727 observed estimate plus $10 cancellation reserve remain unchanged.
 

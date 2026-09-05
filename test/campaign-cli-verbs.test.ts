@@ -137,7 +137,7 @@ function writeEstimates(dir: string): string {
 }
 
 /** The suite document (task-5d shape): grader block + one comparison. */
-function writeSuite(dir: string): string {
+function writeSuite(dir: string, baseline = 'arm_a'): string {
   const path = join(dir, 'testsuite.yaml');
   writeFileSync(
     path,
@@ -148,7 +148,7 @@ function writeSuite(dir: string): string {
       'budget_usd: 100',
       'grader: { credential: cred_a, model: grader-model }',
       'comparisons:',
-      '  - baseline: arm_a',
+      `  - baseline: ${baseline}`,
       '    treatment: arm_b',
       '    scenarios: [scn-a]',
       '    n: 1',
@@ -726,28 +726,22 @@ test("campaign register's --estimates default is estimates/v1.json (pinned table
   expect(res.stderr).toContain('estimates/v1.json');
 }, 30_000);
 
-test('campaign register with valid seams refuses fail-closed past intake (deep wiring)', () => {
-  // Suite + estimates + both checkout env vars present. The verb threads
-  // the REAL production surfaces from here: ref resolution over the
-  // $GAUNTLET_ROOT fixture and the running evals checkout, then —
-  // platform-dependent, both loud, both wiring proofs:
-  //   darwin: the real host-stats probe refuses the non-appliance host;
-  //   linux:  intake reads the running checkout at HEAD, where the fixture
-  //           suite's arms do not exist (R-REG-2 fail-closed).
+test('campaign register excludes a cell whose arm is absent from frozen intake', () => {
+  // A passing host probe and isolated committed intake reach R-REG-2 on
+  // every platform, without depending on the operator checkout's arm refs.
   const work = mkdtempSync(join(tmpdir(), 'reg-'));
-  const res = runCli([
+  const res = registerCli([
     'campaign',
     'register',
-    writeSuite(work),
+    writeSuite(work, 'missing_arm'),
     '--estimates',
     writeEstimates(work),
   ]);
-  expect(res.status).toBe(1);
-  if (process.platform === 'linux') {
-    expect(res.stderr).toContain('not in arms/ intake');
-  } else {
-    expect(res.stderr).toContain('requires the Linux appliance');
-  }
+  expect(res.status).toBe(0);
+  expect(res.stderr).toBe('');
+  expect(res.stdout).toContain('arm missing_arm not in arms/ intake');
+  expect(res.stdout).toContain('grid: 0 cells, 0 samples, 0 blocks');
+  expect(existsSync(join(EVALS_CHECKOUT, 'campaigns'))).toBe(false);
 }, 60_000);
 
 // ── run ────────────────────────────────────────────────────────────────────
