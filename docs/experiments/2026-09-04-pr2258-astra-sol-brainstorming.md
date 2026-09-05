@@ -1022,3 +1022,62 @@ Guarded restoration succeeded at 02:33:59.952 UTC: original evals/main, original
 Superpowers and Gauntlet revisions, exact config bytes/mode, and pricing-file
 absence. Final doctor is healthy, the original blessed bundle is selected, and
 run/sync locks are absent. No live eval remains active.
+
+## Fresh unattended pilot (September 5)
+
+Drew directed a fresh eight-run pilot with no human first-pair gate: all
+eight samples run overnight under mechanical stop rules, earlier runs stay
+diagnostic, and the total allowance is unchanged at $500 including every
+prior attempt. Blocker (1), the unit test that called the scenario fixture
+without the Coding-Agent home, had already landed on main as a791cbf0.
+
+Three repairs preceded launch, each test-first and merged to main:
+
+- `6b9bc68a` projects Codex `tool_search_call` as a `ToolSearch` call keyed by
+  `call_id` and pairs `tool_search_output`. The observer re-indexes the whole
+  rollout on every grader input and aborted on any unprojected `*_call`, so one
+  such record would have blocked all observer input for the rest of a run. All
+  87 local rollouts containing the record now index cleanly.
+- `0b41f1bd` routes the container's `/usr/bin/timeout` to GNU coreutils. The
+  everyharness base (Ubuntu 26.04) defaults to uutils coreutils and ships GNU
+  as `/usr/bin/gnu<tool>`; the GNU-timeout build check added on September 4
+  (13d14933) had made every image build fail since. The check is kept as the
+  proof.
+- The installed appliance config lacked the `live_spend_lock` field that
+  main's helper requires for any mutation (kernel D3, 341b7bc0), so `prepare`
+  and `run` on main failed outright. Migrated at 07:41Z: `/var/lib/quorum`
+  created via the maintenance user and
+  `live_spend_lock: /var/lib/quorum/live-spend.lock.d` (the documented
+  production value) added; the pre-migration config is retained under
+  `state/experiments/pri3097-fresh/`. The containerized runner resolves its own
+  lock under its mounted home and is unaffected.
+
+Runtime pinning uses a branch, `pri3097-pilot-runtime`, on both origins:
+evals at `0b41f1bd` (CI green) and Gauntlet at `588a81e8` (the merged input
+guard). The appliance config points both refs at that branch so overnight
+pushes to main cannot move the runtime between jobs. Preparation job
+`job-20260905T074249Z-c30d` rebuilt the image (`sha256:500e28caf737`); in the
+container the guard is present, Codex is 0.146.0, the pricing probe passes
+without an override, the audit tests pass, and scenario validation is clean.
+
+The smoke was the brainstorming scenario itself on gpt-5.5 with the Mantle
+Sonnet 5 grader (`job-20260905T074420Z-0485`, run
+`brainstorming-todo-shared-intent-codex-openai_responses-linux-20260905T074435Z-0e19`):
+xhigh confirmed, 52 guard capture receipts plus review and score, canonical
+score FAIL at line 76 (`spec_before_understanding`) with no evidence errors,
+grader priced at $0.61 through Mantle, provenance on the pinned refs. The
+gpt-5.5 subject is unpriced because the pilot table deliberately covers only
+the two subjects and the grader; the ledger carries a $1.00 allowance for it.
+The smoke is not one of the eight samples.
+
+The eight samples run from a detached driver on the appliance
+(`state/experiments/pri3097-fresh/driver.sh`, started 07:51:59Z with $16.38
+already counted against the allowance). It submits the ledger order one job
+at a time, waits for each to terminate, and stops the pilot on: a job that is
+not `done`; an indeterminate verdict; any provenance SHA off the pins; a
+subject model other than the arm's; a grader other than Sonnet 5; any unpriced
+or null cost; a missing `review.json` receipt; a run above $25; a remaining
+allowance below the larger of $50 or twice the largest run; or a job past 90
+minutes (cancelled). A stop pauses the remaining slots; a manual resume
+continues with the next slot, never a replacement. Events are in
+`driver-ledger.jsonl`, evidence tarballs in `evidence/`.
