@@ -160,18 +160,26 @@ export function renderReportMd(value: Report): string {
     lines.push(
       `## ${escapeMarkdown(c.comparison_id)} / ${escapeMarkdown(c.scenario)}`,
       '',
-      '| Arm | Planned | Pass | Fail | Indeterminate | No usable result | Subject $ available | Grader $ available | Wall s available | Subject tokens available | Grader tokens available |',
-      '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+      'arm' in c.roles
+        ? `Single arm: **${escapeMarkdown(c.roles.arm)}**. No paired comparison.`
+        : `Baseline: **${escapeMarkdown(c.roles.baseline)}**; treatment: **${escapeMarkdown(c.roles.treatment)}**.`,
+      '',
+      '| Arm | Role | Planned | Pass | Fail | Indeterminate | No usable result | Subject $ available | Grader $ available | Wall s available | Subject tokens available | Grader tokens available |',
+      '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
     );
     for (const a of c.arms)
       lines.push(
-        `| ${escapeMarkdown(a.arm)} | ${a.denominator} | ${a.pass} | ${a.fail} | ${a.indeterminate} | ${a.no_usable_result} | ${a.available.subject_cost_usd} | ${a.available.grader_cost_usd} | ${a.available.wall_seconds} | ${a.available.subject_tokens} | ${a.available.grader_tokens} |`,
+        `| ${escapeMarkdown(a.arm)} | ${'arm' in c.roles ? 'single' : a.arm === c.roles.baseline ? 'baseline' : 'treatment'} | ${a.denominator} | ${a.pass} | ${a.fail} | ${a.indeterminate} | ${a.no_usable_result} | ${a.available.subject_cost_usd} | ${a.available.grader_cost_usd} | ${a.available.wall_seconds} | ${a.available.subject_tokens} | ${a.available.grader_tokens} |`,
       );
+    if ('arm' in c.roles) {
+      lines.push('');
+      continue;
+    }
     lines.push(
       '',
       'Complete determinate pairs only; each quantity uses its own matched cohort.',
       '',
-      '| Quantity | Pairs n | Baseline mean | Treatment mean | Mean paired delta (treatment − baseline) |',
+      `| Quantity | Pairs n | Baseline mean (${escapeMarkdown(c.roles.baseline)}) | Treatment mean (${escapeMarkdown(c.roles.treatment)}) | Mean paired delta (${escapeMarkdown(c.roles.treatment)} − ${escapeMarkdown(c.roles.baseline)}) |`,
       '|---|---:|---:|---:|---:|',
     );
     for (const [key, q] of Object.entries(c.paired))

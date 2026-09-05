@@ -45,3 +45,22 @@ test('report identity cannot differ from the immutable anchor', () => {
     }).success,
   ).toBe(false);
 });
+
+test('comparison role mappings are required and identify exactly the reported arms', () => {
+  const report = foldComparisonReport(mixedComparisonFixture());
+  const first = report.comparisons[0]!;
+  for (const roles of [
+    undefined,
+    { baseline: 'b', treatment: 'b' },
+    { baseline: 'foreign', treatment: 't1' },
+    { arm: 'b' },
+    { baseline: 'b', treatment: 't1', extra: 't2' },
+  ]) {
+    expect(
+      ComparisonReportSchema.safeParse({
+        ...report,
+        comparisons: [{ ...first, roles }, ...report.comparisons.slice(1)],
+      }).success,
+    ).toBe(false);
+  }
+});

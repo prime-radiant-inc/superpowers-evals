@@ -72,6 +72,10 @@
           "treatment_mean": null,
           "mean_delta": null
         }
+      },
+      "roles": {
+        "baseline": "b",
+        "treatment": "t1"
       }
     },
     {
@@ -146,6 +150,10 @@
           "treatment_mean": null,
           "mean_delta": null
         }
+      },
+      "roles": {
+        "baseline": "b",
+        "treatment": "t2"
       }
     }
   ],

@@ -84,6 +84,12 @@ const quantities = {
   grader_tokens: AccountingQuantitySchema,
 };
 export const AccountingSchema = z.object(quantities).strict();
+export const ComparisonRolesSchema = z.union([
+  z
+    .object({ baseline: z.string().min(1), treatment: z.string().min(1) })
+    .strict(),
+  z.object({ arm: z.string().min(1) }).strict(),
+]);
 export const ComparisonReportSchema = z
   .object({
     schema_version: z.literal('quorum.comparison-report/v1'),
@@ -99,6 +105,7 @@ export const ComparisonReportSchema = z
         .object({
           comparison_id: z.string(),
           scenario: z.string(),
+          roles: ComparisonRolesSchema,
           arms: z.array(
             z
               .object({
@@ -138,7 +145,21 @@ export const ComparisonReportSchema = z
             })
             .strict(),
         })
-        .strict(),
+        .strict()
+        .refine((c) => {
+          const named =
+            'arm' in c.roles
+              ? [c.roles.arm]
+              : [c.roles.baseline, c.roles.treatment];
+          return (
+            new Set(named).size === named.length &&
+            c.arms.length === named.length &&
+            new Set(c.arms.map((a) => a.arm)).size === named.length &&
+            c.arms.every((a) => named.includes(a.arm)) &&
+            (!('arm' in c.roles) ||
+              Object.values(c.paired).every((q) => q.n === 0))
+          );
+        }, 'comparison roles must identify the exact arm inventory; single arms have no pairs'),
     ),
     accounting: AccountingSchema,
     excluded_accounting: z

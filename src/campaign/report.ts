@@ -235,6 +235,13 @@ export function foldComparisonReport(args: {
       comparisons.push({
         comparison_id: cell.comparison_id,
         scenario: cell.scenario,
+        roles:
+          'arm' in comparison
+            ? { arm: comparison.arm }
+            : {
+                baseline: comparison.baseline,
+                treatment: comparison.treatment,
+              },
         arms,
         paired: {
           pass_rate: paired(

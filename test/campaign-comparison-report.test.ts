@@ -5,10 +5,15 @@ import {
 } from '../src/campaign/execution-state.ts';
 import { foldComparisonReport } from '../src/campaign/report.ts';
 import { missingAttemptEvidence } from '../src/campaign/report-evidence.ts';
+import { renderReportMd } from '../src/campaign/report-publication.ts';
 import {
+  blockActivation,
   evidenceRef,
+  observation,
   replacementFixture,
+  sessionTransitions,
   transition,
+  twoArmExperiment,
 } from './fixtures/core-comparison/factory.ts';
 import { mixedComparisonFixture } from './fixtures/core-comparison/report-fixture.ts';
 
@@ -154,4 +159,137 @@ test('completed replacement analysis is complete even though superseded attempts
   expect(report.excluded_accounting.superseded.subject_cost_usd.attempts).toBe(
     2,
   );
+});
+
+function namedRoleFixture(single = false) {
+  const experiment = twoArmExperiment();
+  experiment.comparisons = single
+    ? [{ comparison_id: 'comparison', arm: 'variant-a' }]
+    : [
+        {
+          comparison_id: 'comparison',
+          baseline: 'variant-a',
+          treatment: 'variant-b',
+        },
+      ];
+  experiment.suite.comparisons = single
+    ? [{ arm: 'variant-a', scenarios: ['scenario'], n: 1 }]
+    : [
+        {
+          baseline: 'variant-a',
+          treatment: 'variant-b',
+          scenarios: ['scenario'],
+          n: 1,
+        },
+      ];
+  experiment.cells[0]!.arms = single
+    ? ['variant-a']
+    : ['variant-b', 'variant-a'];
+  experiment.planned_slots = experiment.planned_slots
+    .filter((slot) => !single || slot.arm === 'base')
+    .map((slot) => ({
+      ...slot,
+      arm: slot.arm === 'base' ? 'variant-a' : 'variant-b',
+    }));
+  experiment.execution_surface = experiment.execution_surface.map((arm) => ({
+    ...arm,
+    name: arm.name === 'base' ? 'variant-a' : 'variant-b',
+  }));
+  experiment.refs.superpowers_by_arm = {
+    'variant-a': 'b'.repeat(40),
+    'variant-b': 'c'.repeat(40),
+  };
+  const block = blockActivation(experiment);
+  const observations = block.attempts.map((_, i) =>
+    observation(block, i, 4 + i, { outcome: i === 0 ? 'fail' : 'pass' }),
+  );
+  const state = [
+    ...sessionTransitions(experiment),
+    transition('block_activated', block, 3),
+    ...observations.map((obs, i) =>
+      transition(
+        'attempt_observed',
+        { observation: obs, excluded_block: null },
+        4 + i,
+      ),
+    ),
+    transition(
+      'block_validated',
+      { block_id: 'primary', evidence_refs: [evidenceRef] },
+      6,
+    ),
+    transition(
+      'ended',
+      { outcome: 'completed', reason: 'done', cancel_intent: null },
+      7,
+    ),
+  ].reduce(foldTransition, initialProjection(experiment));
+  const report = foldComparisonReport({
+    experiment,
+    state,
+    evidenceByAttempt: new Map(
+      observations.map((obs, i) => [
+        obs.execution_attempt_id,
+        {
+          ...missingAttemptEvidence(),
+          publication_valid: true,
+          observed_outcome: obs.outcome,
+          subject_cost_usd: i === 0 ? 1 : 4,
+          subject_cost_complete: true,
+        },
+      ]),
+    ),
+    validityByBlock: new Map([['primary', { available: true, reasons: [] }]]),
+  });
+  return {
+    report,
+    anchor: {
+      campaign_id: experiment.campaign_id,
+      input_digest: experiment.input_digest,
+      last_sequence: state.transitions.size,
+      prefix_digest: 'a'.repeat(64),
+      roots: { campaign: '/fixture', results: '/fixture/results' },
+      artifacts: [],
+    },
+  };
+}
+test('named baseline and treatment roles survive treatment-first arm rows in JSON and Markdown', () => {
+  const value = namedRoleFixture();
+  const comparison = value.report.comparisons[0]!;
+  expect(comparison.arms.map((arm) => arm.arm)).toEqual([
+    'variant-b',
+    'variant-a',
+  ]);
+  expect(comparison.roles).toEqual({
+    baseline: 'variant-a',
+    treatment: 'variant-b',
+  });
+  expect(comparison.paired.pass_rate).toEqual({
+    n: 1,
+    baseline_mean: 0,
+    treatment_mean: 1,
+    mean_delta: 1,
+  });
+  expect(comparison.paired.subject_cost_usd).toEqual({
+    n: 1,
+    baseline_mean: 1,
+    treatment_mean: 4,
+    mean_delta: 3,
+  });
+  const md = renderReportMd(value);
+  expect(md).toContain('Baseline: **variant-a**; treatment: **variant-b**.');
+  expect(md).toContain('| variant-b | treatment |');
+  expect(md).toContain('| variant-a | baseline |');
+  expect(md).toContain('Baseline mean (variant-a)');
+  expect(md).toContain('Treatment mean (variant-b)');
+  expect(md).toContain('Mean paired delta (variant-b − variant-a)');
+});
+test('single-arm reports carry an explicit arm identity and render no paired role claims', () => {
+  const value = namedRoleFixture(true);
+  expect(value.report.comparisons[0]!.roles).toEqual({ arm: 'variant-a' });
+  expect(value.report.comparisons[0]!.paired.pass_rate.n).toBe(0);
+  const md = renderReportMd(value);
+  expect(md).toContain('Single arm: **variant-a**. No paired comparison.');
+  expect(md).toContain('| variant-a | single |');
+  expect(md).not.toContain('Baseline mean');
 });
