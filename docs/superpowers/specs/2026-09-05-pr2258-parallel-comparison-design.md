@@ -144,9 +144,11 @@ the original presentation/capture/approval order by itself.
 
 Preserve the qualified parent TUI selection using cwd and canonical session
 metadata, canonical message selection, tool projections, and omission detection.
-Move those assumptions behind the adapter. Keep the existing Codex score behavior
-under equivalent evidence, including composite calls and native calls requiring
-stable observer-assigned IDs.
+Move those assumptions behind the adapter. Keep the qualified Codex approval
+chronology, including composite calls and native calls requiring stable
+observer-assigned IDs. The explicit execution-method validation below repairs
+the method-presence-only check in the new instrument; historical scores remain
+bound to their original instrument and are not retroactively rewritten.
 
 ### Claude
 
