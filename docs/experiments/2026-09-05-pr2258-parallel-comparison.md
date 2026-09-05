@@ -248,6 +248,79 @@ missing bundle cannot bypass the eventual publication check. Plan/spec amendment
 was committed at `2f12e7fc`. A fresh Linear read confirms PRI-3097 is In Dev; the
 earlier 502 was transient and did not require a duplicate ticket.
 
+## Final-state filesystem implementation
+
+The one-task filesystem slice began at worker commit `c8ec4274` and is complete
+through integrated source `adc7f576`, including the review fixes below.
+`captureFinalState` and `verifyFinalState` share one traversal over
+caller-supplied transcript/artifact roots. Inventories retain relative paths,
+exact file hashes/lengths and device/inode identities; candidate validation
+cannot select source paths. Full JSONL additions/appends and all scoped artifact
+changes invalidate the candidate, including same-byte source replacement. Pinned
+no-follow byte reads and observation rechecks reject unsafe or unstable sources.
+Neither operation mutates sources or candidate evidence.
+
+The implementer reported missing-module RED/GREEN and a second behavioral RED:
+without the comparison, a late append was accepted. The completed comparison
+rejects it. An actual child fixture appends after capture and exits before the
+refusal check. Focused final-state tests passed 27 cases/188 assertions; the
+combined raw/final-state gate passed 56 tests/289 assertions, lint checked 554
+files, and typecheck/diff checks passed. Task review then found a root-pin
+lifetime race: the root was pinned and closed before path-based traversal,
+leaving a substitution interval. It also found source failures incorrectly
+classified as candidate errors or changes. The first fix round (`a01e9994`,
+worker `5ef013e0`) retains the root pin, walks its identity path and rechecks
+the caller binding before/after traversal. It preserves access-error versus
+disappearance distinctions and reports unrepresentable observed names as source
+errors. Actual root and ancestor renames plus error-code regressions produced
+four expected failures before the fix. The final scoped gate passed 61 tests/301
+assertions with lint/typecheck clean. Original implementation `c8ec4274`
+integrated as `e22ad002`. Scoped re-review accepted the retained-pin fix but
+found one remaining recovery `lstat` catch that still misclassified access/I/O
+failures. Round two in worker `4027f889` reuses the existing errno-aware helper
+instead of that special case. Its regression produced two expected failures,
+then all 64 covering tests/310 assertions passed with lint/typecheck clean. The
+round-two re-review found the remaining issue addressed with no new breakage.
+The fix integrated as `bbbb8e99`, completing the task gate before the final
+whole-slice review below.
+
+The preceding integrated source `a01e9994` passed `bun run check`: 3,631 core
+passes, 14 qualification skips, no failures (169.26 seconds), plus 144 dashboard
+passes and clean lint/typecheck. All 88 scenario checks passed. This receipt
+predates the second error-classification fix and is not final verification. No
+production import activates this helper or establishes container death.
+
+Final whole-slice review found a Linux-specific P1 after the task gates: the
+root post-traversal check used `lstat` on Linux's `/proc/self/fd/<fd>`
+magic-link path, so unchanged roots would be rejected. A local semantic fixture
+retained a real directory descriptor and supplied a symlink-addressed path; it
+reproduced `source_changed` for unchanged empty roots. This is an observed local
+probe, not a Linux run. The single final fix wave changes the root recheck to
+bigint `fstat` on the retained descriptor while preserving descendant no-follow
+checks.
+
+The preceding source `bbbb8e99` passed the local full check: 3,634 core passes,
+14 qualification skips, no failures (166.52 seconds), plus 144 dashboard passes,
+lint/typecheck and 88 scenario checks. These local passes did not cover Linux
+magic-link semantics and do not waive the final review finding. The final fix in
+`adc7f576` (worker `8f22b83d`) passed scoped re-review with no new breakage.
+Corrected semantic fixtures reproduced 35 passes/two expected failures before
+the fix, then 37 final-state tests passed. The combined observer gate passed 66
+tests/312 assertions with lint/typecheck clean. Final integrated `bun run check`
+at `adc7f576` exited successfully: 3,636 core passes, the same 14 qualification
+skips and no failures (173.27 seconds), plus 144 dashboard passes and clean
+lint/typecheck. `bun run quorum check` passed all 88 checks and `git diff
+--check` was clean. All task and final review findings are addressed; there are
+no parked findings or additional controller rulings. These receipts supersede
+the preceding source totals while retaining the negative findings and their
+regressions.
+
+The filesystem source slice is complete and remains inactive. No production
+publisher path consumes it yet. The next integration joins trusted V2 binding,
+candidate bytes and score to this check before the existing publication move;
+actual Linux container qualification remains required. The supervisor proposal
+is retired, and PRI-3097 remains In Dev for the unfinished full comparison.
+
 ## Remaining qualification gates
 
 Source tests, cross-repository Linux instrument tests, installed appliance proof,

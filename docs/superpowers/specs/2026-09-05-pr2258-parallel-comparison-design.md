@@ -77,10 +77,15 @@ flowchart TD
     C --> D[Guard captures stable documents and transcript prefix]
     D --> E[Gauntlet-Agent reviews and replies]
     E --> C
-    C --> F[Finalize immutable evidence bundle]
+    C --> F[Capture candidate evidence bundle]
     F --> G[Scenario chronology scorer]
-    G --> H[Attempt manifest and campaign publication]
-    H --> I[Campaign report and PR2258 diagnostic readout]
+    G --> H[Candidate attempt manifest]
+    H --> J[Verify exact container has stopped]
+    J --> K[Compare final sources with candidate]
+    K -- Match --> L[Publish unchanged candidate]
+    K -- Mismatch --> M[Record unusable evidence]
+    L --> I[Campaign report and PR2258 diagnostic readout]
+    M --> I
 ```
 
 The observer infrastructure owns source selection, canonical raw anchors,
@@ -100,6 +105,8 @@ after its contracts pass. Avoid a configurable observer plugin framework.
 ## One authoritative run binding
 
 Quorum owns the binding lifecycle: unbound, bound to one parent, then finalized.
+Finalizing the binding freezes source selection for the candidate; campaign
+acceptance still requires verification after container shutdown.
 Setup receives the resolved runtime family and actual run, workdir, and subject
 home from Quorum, including the actual launch cwd after fixture setup. Resolve
 the normal session-root configuration from the selected

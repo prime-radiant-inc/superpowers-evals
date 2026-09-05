@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Continue the already selected subagent/review workflow; no new execution-choice prompt is needed.
 
+**Status:** Filesystem slice complete at `adc7f576`. Task review, two scoped
+fix rounds and the final review fix passed. Final verification: 3,636 core passes,
+14 skips, 144 dashboard passes, 88 scenario checks, lint/typecheck and diff checks
+clean. Full receipts and negative findings are preserved in the
+[experiment log](../../experiments/2026-09-05-pr2258-parallel-comparison.md).
+Production integration and actual Linux qualification remain separate work.
+
 **Goal:** Implement the filesystem comparison that rejects candidate observer evidence when its bound source state changes before final acceptance.
 
 **Architecture:** A single observer module captures an inventory from caller-supplied transcript and artifact roots and compares a later observation with that inventory. Candidate construction consumes the capture function; the eventual publisher integration consumes the verifier after its existing stopped-container gate. Both functions use the same inventory traversal and byte-reading logic.
@@ -92,7 +99,7 @@ components, `.`/`..`, backslash, NUL, absolute or drive-qualified paths; only th
 root directory itself uses the empty path. Reject unknown fields and wrong
 kind/null combinations. The verifier validates before reading any source.
 
-- [ ] **Step 1: Add actual filesystem regressions.** Build private temporary
+- [x] **Step 1: Add actual filesystem regressions.** Build private temporary
   `logs` and `workdir` directories using `mkdtempSync`, canonicalize the fixture
   base with `realpathSync`, and remove only that test's directory in `finally`.
   Seed `logs/parent.jsonl` with `{"type":"fixture"}\n` and
@@ -129,7 +136,7 @@ try {
   bytes remain unchanged by verification. Neither function writes source or
   candidate files. A changing source is not silently retried into success.
 
-- [ ] **Step 2: Run the failing contract tests.**
+- [x] **Step 2: Run the failing contract tests.**
 
 ```bash
 bun test test/observer-final-state.test.ts
@@ -139,7 +146,7 @@ bun test test/observer-final-state.test.ts
   reproduce the late-append assertion against a deliberately absent comparison
   before completing the verifier, so the regression tests observable behavior.
 
-- [ ] **Step 3: Implement one shared inventory reader.** Validate supplied roots
+- [x] **Step 3: Implement one shared inventory reader.** Validate supplied roots
   as absolute paths with unique IDs before traversal. Reject symbolic links in
   each existing absolute path component. Traverse names in lexical code-unit
   order; do not use locale ordering. Transcript roots inventory every directory
@@ -187,7 +194,7 @@ export function verifyFinalState(
   includes every defined field. Paths remain relative in returned inventory;
   device/inode are provenance and final-state checks, never paths for replay.
 
-- [ ] **Step 4: Run focused checks and self-review.**
+- [x] **Step 4: Run focused checks and self-review.**
 
 ```bash
 bun test test/observer-final-state.test.ts test/observer-raw.test.ts
@@ -203,7 +210,7 @@ git diff --check
   filesystem behavior, not compare generated command strings. This is local
   process-ordering evidence, not Docker shutdown qualification.
 
-- [ ] **Step 5: Commit, review, and record the boundary.**
+- [x] **Step 5: Commit, review, and record the boundary.**
 
 ```bash
 git add src/experiments/observer/final-state.ts test/observer-final-state.test.ts
