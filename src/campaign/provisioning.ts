@@ -7,8 +7,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import {
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -154,7 +158,7 @@ function gitOut(runner: CommandRunner, args: readonly string[]): string {
 function withDestLock<T>(lockPath: string, fn: () => T): T {
   const ownerFile = join(lockPath, `owner-${randomUUID()}`);
   let emptySince: number | null = null;
-  let acquired: Stats;
+  let acquired: { stats: Stats; fd: number };
   for (;;) {
     const mine = tryAcquireLock(lockPath, ownerFile);
     if (mine !== null) {
@@ -178,7 +182,11 @@ function withDestLock<T>(lockPath: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    releaseLock(lockPath, ownerFile, acquired);
+    try {
+      releaseLock(lockPath, ownerFile, acquired.stats);
+    } finally {
+      closeSync(acquired.fd);
+    }
   }
 }
 
@@ -264,33 +272,49 @@ function isTransientLockRace(err: unknown): boolean {
  *  an external directory holding the observed token name (module idiom:
  *  never delete through a path whose identity is unestablished).
  *  Returns the created directory's identity when acquired, null when not. */
-function tryAcquireLock(lockPath: string, ownerFile: string): Stats | null {
-  let mine: Stats | null;
+function tryAcquireLock(
+  lockPath: string,
+  ownerFile: string,
+): { stats: Stats; fd: number } | null {
+  let fd: number | null = null;
+  let acquired = false;
   try {
-    mkdirSync(lockPath);
-    mine = tryLstat(lockPath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    return null;
+    let mine: Stats;
+    try {
+      mkdirSync(lockPath);
+      // An open reference prevents a reclaimed directory's inode from being
+      // reused by a successor before this holder's release checks it.
+      fd = openSync(
+        lockPath,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+      );
+      mine = fstatSync(fd);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      return null;
+    }
+    try {
+      writeFileSync(ownerFile, `${process.pid}\n`, { flag: 'wx' });
+    } catch (err) {
+      if (isTransientLockRace(err)) return null; // torn down mid-acquire
+      throw err;
+    }
+    const now = tryLstat(lockPath);
+    if (
+      mine === null ||
+      !mine.isDirectory() ||
+      now === null ||
+      !now.isDirectory() ||
+      now.dev !== mine.dev ||
+      now.ino !== mine.ino
+    ) {
+      return null;
+    }
+    acquired = true;
+    return { stats: now, fd };
+  } finally {
+    if (!acquired && fd !== null) closeSync(fd);
   }
-  try {
-    writeFileSync(ownerFile, `${process.pid}\n`, { flag: 'wx' });
-  } catch (err) {
-    if (isTransientLockRace(err)) return null; // torn down mid-acquire
-    throw err;
-  }
-  const now = tryLstat(lockPath);
-  if (
-    mine === null ||
-    !mine.isDirectory() ||
-    now === null ||
-    !now.isDirectory() ||
-    now.dev !== mine.dev ||
-    now.ino !== mine.ino
-  ) {
-    return null;
-  }
-  return now;
 }
 
 /** Reclaim a lock whose owner died mid-flight. Returns whether the acquire

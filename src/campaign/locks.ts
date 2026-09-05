@@ -11,7 +11,9 @@
 // atomically, never check-then-act. The heartbeat proves ownership on every
 // beat (dir dev+ino, sole-owner-token observation, token-inode binding) and
 // publishes through a descriptor fstat-verified against the inode captured
-// at acquisition — a replacement landing at any point can never receive the
+// at acquisition. Open references retain the directory and owner-token
+// identities until release, so unlinked inodes cannot be reused by a
+// successor. A replacement landing at any point can never receive the
 // holder's bytes, and ambiguous ownership (two owner tokens) fails closed.
 // Severance renames the lock dir to a unique trash name FIRST (the rename
 // IS the claim; ENOENT = lost the race, back off) and verifies the severed
@@ -44,6 +46,7 @@ import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import {
   closeSync,
+  constants,
   fstatSync,
   ftruncateSync,
   lstatSync,
@@ -515,114 +518,164 @@ export function acquireLease(args: AcquireLeaseArgs): LeaseHandle {
   const ownerFile = join(lockPath, `owner-${randomUUID()}`);
   let emptySince: number | null = null;
   for (;;) {
-    let mine: Stats | null = null;
+    let directoryFd: number | null = null;
+    let tokenFd: number | null = null;
+    let handedOff = false;
+    const closeDescriptors = () => {
+      if (tokenFd !== null) {
+        closeSync(tokenFd);
+        tokenFd = null;
+      }
+      if (directoryFd !== null) {
+        closeSync(directoryFd);
+        directoryFd = null;
+      }
+    };
     try {
-      mkdirSync(lockPath);
-      mine = tryLstat(lockPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-    if (mine?.isDirectory() === true) {
-      // We created this directory: everything below is post-acquisition.
-      // Any failure unwinds it fully — no live heartbeat, no held directory.
+      let mine: Stats | null = null;
       try {
-        const token: LockToken = {
-          pid: process.pid,
-          birth_ts_ms: birth,
-          last_heartbeat_ts_ms: clockNowMs(clock),
-        };
-        writeFileSync(ownerFile, formatLockToken(token), { flag: 'wx' });
-        // The post-create identity re-proof (D2 tryAcquireLock's swap
-        // check): the lock path must STILL be the directory this call
-        // created — a contender whose fresh dir was parked out from under
-        // it discovers the displacement here and never acts as holder. An
-        // inspection failure refuses loudly (never read as vanished).
-        const still = lstatOrVanished(lockPath, args.label, 'the lock path');
-        if (
-          still === null ||
-          !still.isDirectory() ||
-          still.dev !== mine.dev ||
-          still.ino !== mine.ino
-        ) {
-          throw new LockError(
-            `${args.label}: lock path vanished mid-acquire: ${lockPath}`,
-          );
-        }
-        // The identity every heartbeat write proves itself against: the
-        // token file this acquisition created, captured inside the verified
-        // window (the provisioning.ts capture-identity-before-acting rule).
-        const ownerStats = lstatSync(ownerFile);
-        return makeHandle(
+        mkdirSync(lockPath);
+        directoryFd = openSync(
           lockPath,
-          ownerFile,
-          still,
-          ownerStats,
-          token,
-          clock,
-          args.label,
-          args.scheduler ?? realHeartbeatScheduler,
-          heartbeatMs,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+        );
+        mine = fstatSync(directoryFd);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      if (mine?.isDirectory() === true && directoryFd !== null) {
+        // We created this directory: everything below is post-acquisition.
+        // Any failure unwinds it fully — no live heartbeat, no held directory.
+        try {
+          const token: LockToken = {
+            pid: process.pid,
+            birth_ts_ms: birth,
+            last_heartbeat_ts_ms: clockNowMs(clock),
+          };
+          tokenFd = openSync(ownerFile, 'wx+');
+          writeFileSync(tokenFd, formatLockToken(token));
+          // The post-create identity re-proof (D2 tryAcquireLock's swap
+          // check): the lock path must STILL be the directory this call
+          // created — a contender whose fresh dir was parked out from under
+          // it discovers the displacement here and never acts as holder. An
+          // inspection failure refuses loudly (never read as vanished).
+          const still = lstatOrVanished(lockPath, args.label, 'the lock path');
+          if (
+            still === null ||
+            !still.isDirectory() ||
+            still.dev !== mine.dev ||
+            still.ino !== mine.ino
+          ) {
+            throw new LockError(
+              `${args.label}: lock path vanished mid-acquire: ${lockPath}`,
+            );
+          }
+          // The identity every heartbeat write proves itself against: the
+          // token file this acquisition created, captured inside the verified
+          // window (the provisioning.ts capture-identity-before-acting rule).
+          const ownerStats = fstatSync(tokenFd);
+          const handle = makeHandle(
+            lockPath,
+            ownerFile,
+            still,
+            ownerStats,
+            token,
+            clock,
+            args.label,
+            args.scheduler ?? realHeartbeatScheduler,
+            heartbeatMs,
+            tokenFd,
+            closeDescriptors,
+          );
+          handedOff = true;
+          return handle;
+        } catch (err) {
+          rollbackCreatedDir(lockPath, ownerFile, mine, args.label, err);
+          throw err;
+        }
+      }
+      // Contended (or the path is not a directory we just created): pin the
+      // observed directory identity FIRST — a swapped path is never traversed
+      // and never severed by observation of its contents. An inspection
+      // failure refuses loudly; only ENOENT retries the mkdir race.
+      const observed = lstatOrVanished(lockPath, args.label, 'the lock path');
+      if (observed === null) continue; // vanished: retry the mkdir race
+      if (!observed.isDirectory()) {
+        throw new LockError(
+          `${args.label}: lock path ${lockPath} is not a directory (symlink or foreign file) — refusing to touch foreign lock state; inspect the path by hand`,
+        );
+      }
+      // Keep the judged directory alive until the claim finishes. A saved
+      // dev+ino alone can identify a successor after the old inode is freed.
+      try {
+        directoryFd = openSync(
+          lockPath,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
         );
       } catch (err) {
-        rollbackCreatedDir(lockPath, ownerFile, mine, args.label, err);
-        throw err;
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw new LockError(
+          `${args.label}: cannot inspect lock directory ${lockPath} — refusing reclamation: ${errorMessage(err)}`,
+        );
       }
-    }
-    // Contended (or the path is not a directory we just created): pin the
-    // observed directory identity FIRST — a swapped path is never traversed
-    // and never severed by observation of its contents. An inspection
-    // failure refuses loudly; only ENOENT retries the mkdir race.
-    const observed = lstatOrVanished(lockPath, args.label, 'the lock path');
-    if (observed === null) continue; // vanished: retry the mkdir race
-    if (!observed.isDirectory()) {
-      throw new LockError(
-        `${args.label}: lock path ${lockPath} is not a directory (symlink or foreign file) — refusing to touch foreign lock state; inspect the path by hand`,
-      );
-    }
-    const owner = observeOwner(lockPath);
-    if (owner.kind === 'vanished') continue;
-    if (owner.kind === 'none') {
-      if (owner.entries.length === 0) {
-        emptySince = emptySince ?? clockNowMs(clock);
-        if (clockNowMs(clock) - emptySince <= EMPTY_GRACE_MS) {
-          // Contender mid-acquire: poll, never touch. The wait rides the
-          // injected clock (sleepSync) — the real clock physically sleeps,
-          // the fake clock advances itself — so the grace decision above is
-          // pure clock arithmetic and wall time is never proof of crash.
-          clock.sleepSync(POLL_MS / 1000);
+      const pinned = fstatSync(directoryFd);
+      if (
+        !pinned.isDirectory() ||
+        pinned.dev !== observed.dev ||
+        pinned.ino !== observed.ino
+      )
+        continue;
+      const owner = observeOwner(lockPath);
+      if (owner.kind === 'vanished') continue;
+      if (owner.kind === 'none') {
+        if (owner.entries.length === 0) {
+          emptySince = emptySince ?? clockNowMs(clock);
+          if (clockNowMs(clock) - emptySince <= EMPTY_GRACE_MS) {
+            // Contender mid-acquire: poll, never touch. The wait rides the
+            // injected clock (sleepSync) — the real clock physically sleeps,
+            // the fake clock advances itself — so the grace decision above is
+            // pure clock arithmetic and wall time is never proof of crash.
+            clock.sleepSync(POLL_MS / 1000);
+            continue;
+          }
+          // Grace expired on the clock: the emptiness is a crash. The rename
+          // claim + severed-dir verification handles every race (a slow
+          // acquisition that landed anyway is restored untouched).
+          severAndRemove(lockPath, observed, { kind: 'empty' }, args.label);
+          emptySince = null;
           continue;
         }
-        // Grace expired on the clock: the emptiness is a crash. The rename
-        // claim + severed-dir verification handles every race (a slow
-        // acquisition that landed anyway is restored untouched).
-        severAndRemove(lockPath, observed, { kind: 'empty' }, args.label);
-        emptySince = null;
-        continue;
+        throw new LockError(
+          `${args.label}: no owner token in ${lockPath} and non-inert entries present (${owner.entries.join(', ')}) — refusing to touch foreign lock state; inspect the directory by hand`,
+        );
       }
-      throw new LockError(
-        `${args.label}: no owner token in ${lockPath} and non-inert entries present (${owner.entries.join(', ')}) — refusing to touch foreign lock state; inspect the directory by hand`,
+      emptySince = null;
+      const nowMs = clockNowMs(clock);
+      const heartbeatAge = nowMs - owner.token.last_heartbeat_ts_ms;
+      if (heartbeatAge <= staleAfterMs) {
+        throw holderRefusal(args.label, owner.token, heartbeatAge, lockPath);
+      }
+      // Stale heartbeat — the dead-holder identity check gates reclamation.
+      if (holderDisposition(owner.token, identity) === 'live') {
+        throw holderRefusal(args.label, owner.token, heartbeatAge, lockPath);
+      }
+      // Dead/reused holder: the severing rename IS the claim — verification of
+      // the judged directory and token happens on the severed state under the
+      // private trash name; a lost rename means another contender claimed the
+      // path first, and the loop re-observes whatever holds it now.
+      severAndRemove(
+        lockPath,
+        observed,
+        {
+          kind: 'reclaim',
+          ownerName: basename(owner.file),
+          token: owner.token,
+        },
+        args.label,
       );
+    } finally {
+      if (!handedOff) closeDescriptors();
     }
-    emptySince = null;
-    const nowMs = clockNowMs(clock);
-    const heartbeatAge = nowMs - owner.token.last_heartbeat_ts_ms;
-    if (heartbeatAge <= staleAfterMs) {
-      throw holderRefusal(args.label, owner.token, heartbeatAge, lockPath);
-    }
-    // Stale heartbeat — the dead-holder identity check gates reclamation.
-    if (holderDisposition(owner.token, identity) === 'live') {
-      throw holderRefusal(args.label, owner.token, heartbeatAge, lockPath);
-    }
-    // Dead/reused holder: the severing rename IS the claim — verification of
-    // the judged directory and token happens on the severed state under the
-    // private trash name; a lost rename means another contender claimed the
-    // path first, and the loop re-observes whatever holds it now.
-    severAndRemove(
-      lockPath,
-      observed,
-      { kind: 'reclaim', ownerName: basename(owner.file), token: owner.token },
-      args.label,
-    );
   }
 }
 
@@ -708,8 +761,16 @@ function makeHandle(
   label: string,
   scheduler: HeartbeatScheduler,
   heartbeatMs: number,
+  tokenFd: number,
+  closeDescriptors: () => void,
 ): LeaseHandle {
   let released = false;
+  let heartbeatStopped = false;
+  let identitiesClosed = false;
+  const closeIdentity = () => {
+    closeDescriptors();
+    identitiesClosed = true;
+  };
   let current = initialToken;
   let cancelHeartbeat: () => void = () => {};
   // Ownership became unprovable: stop heartbeating (cancel the driver so the
@@ -717,6 +778,18 @@ function makeHandle(
   // prove its lock must not keep spending on it. (The explicit binding type
   // is what lets control-flow analysis treat calls as terminating.)
   const failStop: (detail: string) => never = (detail) => {
+    heartbeatStopped = true;
+    // A displaced directory no longer needs our identity references. If
+    // only its token is corrupt, retain them so release remains safe and
+    // retryable against this same directory.
+    let displaced = false;
+    try {
+      displaced = releaseInspection(lockPath, acquired) !== 'ours';
+    } catch {
+      // Inspection errors do not prove displacement. Keep the references
+      // so release can retry after access to the directory is restored.
+    }
+    if (displaced) closeIdentity();
     try {
       cancelHeartbeat();
     } catch {}
@@ -726,7 +799,10 @@ function makeHandle(
     lockPath,
     ownerFile,
     heartbeat(): void {
-      if (released) throw new LockError(`${label}: heartbeat after release`);
+      if (released || heartbeatStopped)
+        throw new LockError(
+          `${label}: heartbeat after release or loss of ownership`,
+        );
       // Every beat re-proves ownership, fail-closed, before anything is
       // written: (1) the directory at the lock path is still the one this
       // acquisition created (dev+ino); (2) it holds exactly ONE owner token
@@ -779,90 +855,82 @@ function makeHandle(
           `token at ${ownerFile} is not the file this holder created — refusing to heartbeat into a foreign token`,
         );
       }
-      let fd: number;
-      try {
-        fd = openSync(ownerFile, 'r+');
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
+      // Keep the acquisition descriptor open for the entire lease. This
+      // prevents an unlinked token's inode being recycled into a replacement.
+      const fd = tokenFd;
+      const fdStat = fstatSync(fd);
+      if (
+        !fdStat.isFile() ||
+        fdStat.dev !== ownerStats.dev ||
+        fdStat.ino !== ownerStats.ino
+      ) {
         failStop(
-          `cannot open own token at ${ownerFile} (${code ?? 'fs error'}) — ownership unprovable; fail-stop and stop spending on this lock`,
+          `token at ${ownerFile} was swapped mid-heartbeat — not the file this holder created; refusing to heartbeat into a foreign token`,
         );
       }
-      try {
-        const fdStat = fstatSync(fd);
-        if (
-          !fdStat.isFile() ||
-          fdStat.dev !== ownerStats.dev ||
-          fdStat.ino !== ownerStats.ino
-        ) {
-          failStop(
-            `token at ${ownerFile} was swapped mid-heartbeat — not the file this holder created; refusing to heartbeat into a foreign token`,
-          );
-        }
-        const buf = Buffer.alloc(256);
-        const bytesRead = readSync(fd, buf, 0, buf.length, 0);
-        const observed = parseLockToken(buf.toString('utf8', 0, bytesRead));
-        if (observed === null || !tokenEquals(observed, current)) {
-          failStop(
-            `owner token at ${ownerFile} is no longer ours — refusing to heartbeat into a foreign token`,
-          );
-        }
-        const fresh: LockToken = {
-          ...current,
-          last_heartbeat_ts_ms: clockNowMs(clock),
-        };
-        const data = Buffer.from(formatLockToken(fresh), 'utf8');
-        // The rewrite of our OWN token through the verified descriptor. A
-        // partial write must never leave a parseable truncated prefix
-        // standing as our token: keep writing until every byte has landed;
-        // zero forward progress or a write failure fail-stops the driver
-        // loudly. (The body never shrinks in practice — pid and birth are
-        // fixed, the timestamp's digits never lose places — the truncate
-        // covers the theoretical remainder.)
-        let written = 0;
-        while (written < data.length) {
-          let n: number;
-          try {
-            n = writeSync(fd, data, written, data.length - written, written);
-          } catch (err) {
-            const code = (err as NodeJS.ErrnoException).code;
-            failStop(
-              `cannot rewrite own token at ${ownerFile} (${code ?? 'fs error'} after ${written} of ${data.length} bytes) — token state unverifiable; fail-stop and stop spending on this lock`,
-            );
-          }
-          if (n <= 0) {
-            failStop(
-              `short write while rewriting own token at ${ownerFile} (${written} of ${data.length} bytes, no forward progress) — token state unverifiable; fail-stop and stop spending on this lock`,
-            );
-          }
-          written += n;
-        }
-        if (data.length < bytesRead) {
-          ftruncateSync(fd, data.length);
-        }
-        // A replacement that landed after the checks above got nothing (the
-        // write went to our inode wherever the directory now lives) — but
-        // this holder's lock is gone: detect it on the same beat and stop.
-        const after = tryLstat(lockPath);
-        if (
-          after === null ||
-          !after.isDirectory() ||
-          after.dev !== acquired.dev ||
-          after.ino !== acquired.ino
-        ) {
-          failStop(
-            `lock dir at ${lockPath} was replaced during heartbeat — the fresh heartbeat landed only on this holder's own token; fail-stop and stop spending on this lock`,
-          );
-        }
-        current = fresh;
-      } finally {
-        try {
-          closeSync(fd);
-        } catch {}
+      const buf = Buffer.alloc(256);
+      const bytesRead = readSync(fd, buf, 0, buf.length, 0);
+      const observed = parseLockToken(buf.toString('utf8', 0, bytesRead));
+      if (observed === null || !tokenEquals(observed, current)) {
+        failStop(
+          `owner token at ${ownerFile} is no longer ours — refusing to heartbeat into a foreign token`,
+        );
       }
+      const fresh: LockToken = {
+        ...current,
+        last_heartbeat_ts_ms: clockNowMs(clock),
+      };
+      const data = Buffer.from(formatLockToken(fresh), 'utf8');
+      // The rewrite of our OWN token through the verified descriptor. A
+      // partial write must never leave a parseable truncated prefix
+      // standing as our token: keep writing until every byte has landed;
+      // zero forward progress or a write failure fail-stops the driver
+      // loudly. (The body never shrinks in practice — pid and birth are
+      // fixed, the timestamp's digits never lose places — the truncate
+      // covers the theoretical remainder.)
+      let written = 0;
+      while (written < data.length) {
+        let n: number;
+        try {
+          n = writeSync(fd, data, written, data.length - written, written);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          failStop(
+            `cannot rewrite own token at ${ownerFile} (${code ?? 'fs error'} after ${written} of ${data.length} bytes) — token state unverifiable; fail-stop and stop spending on this lock`,
+          );
+        }
+        if (n <= 0) {
+          failStop(
+            `short write while rewriting own token at ${ownerFile} (${written} of ${data.length} bytes, no forward progress) — token state unverifiable; fail-stop and stop spending on this lock`,
+          );
+        }
+        written += n;
+      }
+      if (data.length < bytesRead) {
+        ftruncateSync(fd, data.length);
+      }
+      // A replacement that landed after the checks above got nothing (the
+      // write went to our inode wherever the directory now lives) — but
+      // this holder's lock is gone: detect it on the same beat and stop.
+      const after = tryLstat(lockPath);
+      if (
+        after === null ||
+        !after.isDirectory() ||
+        after.dev !== acquired.dev ||
+        after.ino !== acquired.ino
+      ) {
+        failStop(
+          `lock dir at ${lockPath} was replaced during heartbeat — the fresh heartbeat landed only on this holder's own token; fail-stop and stop spending on this lock`,
+        );
+      }
+      current = fresh;
     },
     release(): void {
       if (released) return;
+      if (identitiesClosed) {
+        released = true;
+        return;
+      }
       // `released` flips only after the outcome is decided (Important 3): a
       // cleanup failure throws with the held path and the handle stays
       // retryable — while it is genuinely still held, heartbeats keep
@@ -873,6 +941,7 @@ function makeHandle(
         severAndRemove(lockPath, acquired, { kind: 'ours' }, label);
       }
       released = true;
+      closeIdentity();
       try {
         cancelHeartbeat(); // C8: a throwing cancel never masks the release outcome
       } catch {
