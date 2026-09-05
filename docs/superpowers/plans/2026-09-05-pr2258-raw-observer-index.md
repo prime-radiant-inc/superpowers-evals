@@ -313,6 +313,8 @@ const callId = nativeId === null
 
 The separate `native:`/`anchor:` namespaces cannot collide. Use Task 1's `canonicalJson` for replay comparisons; no timestamp field is silently omitted from an identity-bearing payload. For a repeated native call ID compare the entire physical call payload; identical payload produces a replay entry, different payload throws `replay_conflict`. ID-less calls are never deduplicated by content. Results link by native call ID and retain their original anchor; identical result payload replays, conflicting result payload rejects.
 
+For `function_call` and `custom_tool_call`, the index call name is the explicit `payload.name`. For native `local_shell_call`, `web_search_call`, and `tool_search_call`, use the raw type discriminant verbatim as the call name. Do not substitute normalized names such as Bash or ToolSearch. The complete physical payload remains available to later classification.
+
 Recognized record grammar for this inactive index is closed at record/block discriminants:
 
 | Raw form | Index behavior |
