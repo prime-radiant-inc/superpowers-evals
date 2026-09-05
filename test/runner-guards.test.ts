@@ -230,7 +230,9 @@ test('A-launch-cwd-sentinel: bogus .quorum-launch-cwd path -> runner error', asy
     if (prevPath === undefined) delete process.env['PATH'];
     else process.env['PATH'] = prevPath;
   }
-});
+  // This guard follows real provisioning and setup subprocesses; it tests the
+  // error boundary, not whether host I/O fits Bun's five-second default.
+}, 10_000);
 
 // PRI-2494: even a guard-tripped (setup-indeterminate) verdict carries the
 // provenance block — the stamp lives at the single identity site.
