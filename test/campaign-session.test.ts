@@ -9,6 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { compareAdmissionOrder } from '../src/campaign/admission.ts';
 import {
   AttemptPublicationStorageError,
   publishExecution,
@@ -86,6 +87,7 @@ function fixture(
     extraScenario?: boolean;
     fourAliases?: boolean;
     reorderKeys?: boolean;
+    threeComparisons?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'session-'));
@@ -225,6 +227,55 @@ function fixture(
     }
     delete registry['subject'];
     registry['grader']!.max_concurrency = 4;
+  }
+  if (options.threeComparisons) {
+    const comparisonIds = ['c1', 'c2', 'c3'];
+    const surface = experiment.execution_surface[0]!;
+    const arms = comparisonIds.flatMap((comparisonId) => [
+      `${comparisonId}_base`,
+      `${comparisonId}_head`,
+    ]);
+    experiment.refs.superpowers_by_arm = Object.fromEntries(
+      arms.map((arm) => [arm, null]),
+    );
+    experiment.execution_surface = arms.map((name) => ({ ...surface, name }));
+    const comparisons = comparisonIds.map((comparisonId) => ({
+      comparison_id: comparisonId,
+      baseline: `${comparisonId}_base`,
+      treatment: `${comparisonId}_head`,
+    }));
+    experiment.comparisons = comparisons;
+    experiment.suite.comparisons = comparisons.map((comparison) => ({
+      baseline: comparison.baseline,
+      treatment: comparison.treatment,
+      scenarios: ['case'],
+      n: 2,
+    }));
+    experiment.cells = comparisons.map((comparison) => ({
+      comparison_id: comparison.comparison_id,
+      scenario: 'case',
+      arms: [comparison.baseline, comparison.treatment],
+      n: 2,
+      coupling: 'arm-independent',
+    }));
+    experiment.planned_slots = experiment.cells.flatMap((cell) =>
+      [1, 2].flatMap((replicate) =>
+        cell.arms.map((arm) => ({
+          sample_id: `sample-${cell.comparison_id}-${arm}-${replicate}`,
+          primary_block_id: `${cell.comparison_id}:case:b${replicate}`,
+          comparison_id: cell.comparison_id,
+          scenario: 'case',
+          arm,
+          replicate,
+        })),
+      ),
+    );
+    experiment.reserve_slots = [];
+    experiment.suite.reserve = 0;
+    experiment.suite.attempt_bounds.max_attempts = 1;
+    experiment.contention.global_run_cap = 6;
+    registry['subject']!.max_concurrency = 6;
+    registry['grader']!.max_concurrency = 6;
   }
   const activeNames = [
     ...experiment.execution_surface.map((a) => a.credential),
@@ -1154,6 +1205,84 @@ test('greedy session admission retains longest duration priority independently o
   ]);
   f.complete(2);
   f.complete(3);
+  await settle(f, run);
+});
+
+test('equal-priority admission visits each comparison before a later repetition', () => {
+  const blocks = ['c1:case:b2', 'c2:case:b1', 'c3:case:b1', 'c1:case:b1'].map(
+    (block_id) => ({ block_id }),
+  );
+
+  expect(
+    blocks.sort(compareAdmissionOrder).map((block) => block.block_id),
+  ).toEqual(['c1:case:b1', 'c2:case:b1', 'c3:case:b1', 'c1:case:b2']);
+});
+
+test('admission tie-break remains a total order over block kinds, lineage, and malformed IDs', () => {
+  const blocks = [
+    'invalid-z',
+    'c2:case:b1',
+    'c1:case:b2',
+    'c1:other:b1',
+    'c1:case:x1',
+    'c1:case:b1:i2',
+    'c1:case:b1:i1',
+    'c1:case:b1',
+    'c01:case:b01',
+    'invalid-a',
+  ].map((block_id) => ({ block_id }));
+
+  expect(
+    blocks.sort(compareAdmissionOrder).map((block) => block.block_id),
+  ).toEqual([
+    'c01:case:b01',
+    'c1:case:b1',
+    'c1:case:b1:i1',
+    'c1:case:b1:i2',
+    'c1:case:x1',
+    'c1:other:b1',
+    'c2:case:b1',
+    'c1:case:b2',
+    'invalid-a',
+    'invalid-z',
+  ]);
+  expect(
+    compareAdmissionOrder({ block_id: 'invalid' }, { block_id: 'c1:case:b99' }),
+  ).toBeGreaterThan(0);
+});
+
+test('the first six runtime starts cover repetition one of all three comparisons', async () => {
+  const f = fixture({ threeComparisons: true });
+  const run = runCampaignDispatch(f.context, f.deps);
+  for (let index = 0; index < 10 && f.started.length < 6; index++)
+    await flush();
+
+  expect(f.started).toHaveLength(6);
+  expect(
+    f.started
+      .slice(0, 6)
+      .map((attempt) => attempt.intent.identity.block_id)
+      .sort(),
+  ).toEqual([
+    'c1:case:b1',
+    'c1:case:b1',
+    'c2:case:b1',
+    'c2:case:b1',
+    'c3:case:b1',
+    'c3:case:b1',
+  ]);
+
+  f.complete(0);
+  f.complete(1);
+  await flush();
+  expect(
+    f.started.slice(6).map((attempt) => attempt.intent.identity.block_id),
+  ).toEqual(['c1:case:b2', 'c1:case:b2']);
+  expect(f.alive.size).toBe(6);
+  for (let index = 2; index < 8; index++) f.complete(index);
+  await flush();
+  expect(f.started).toHaveLength(12);
+  for (let index = 8; index < 12; index++) f.complete(index);
   await settle(f, run);
 });
 

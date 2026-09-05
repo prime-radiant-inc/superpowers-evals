@@ -31,8 +31,8 @@ export function blockPrioritySeconds(args: {
   return max;
 }
 
-/** Deterministic admission tie-break (R-DSP-2): comparison ordinal,
- *  cell key, replicate ordinal, block kind (primary b before reserve x),
+/** Deterministic admission tie-break (R-DSP-2): replicate ordinal,
+ *  comparison ordinal, cell key, block kind (primary b before reserve x),
  *  rerun-lineage seq, then the raw id as the final arbiter — a TOTAL
  *  order over every valid block id (primary c<N>:<cell>:b<R>, reserve
  *  c<N>:<cell>:x<K>, rerun instance <root>:i<seq>; spec ID table).
@@ -44,6 +44,7 @@ export function compareAdmissionOrder(
   const parse = (
     id: string,
   ): {
+    valid: boolean;
     cmp: number;
     cell: string;
     rep: number;
@@ -55,14 +56,16 @@ export function compareAdmissionOrder(
     );
     if (m === null) {
       return {
-        cmp: Number.MAX_SAFE_INTEGER,
-        cell: id,
+        valid: false,
+        cmp: 0,
+        cell: '',
         rep: 0,
         kind: '',
         lineage: 0,
       };
     }
     return {
+      valid: true,
       cmp: Number(m[1]),
       cell: m[2] ?? '',
       rep: Number(m[4]),
@@ -72,9 +75,10 @@ export function compareAdmissionOrder(
   };
   const pa = parse(a.block_id);
   const pb = parse(b.block_id);
+  if (pa.valid !== pb.valid) return pa.valid ? -1 : 1;
+  if (pa.rep !== pb.rep) return pa.rep - pb.rep;
   if (pa.cmp !== pb.cmp) return pa.cmp - pb.cmp;
   if (pa.cell !== pb.cell) return pa.cell < pb.cell ? -1 : 1;
-  if (pa.rep !== pb.rep) return pa.rep - pb.rep;
   if (pa.kind !== pb.kind) return pa.kind < pb.kind ? -1 : 1;
   if (pa.lineage !== pb.lineage) return pa.lineage - pb.lineage;
   return a.block_id < b.block_id ? -1 : a.block_id > b.block_id ? 1 : 0;
