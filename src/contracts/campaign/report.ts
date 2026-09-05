@@ -32,7 +32,16 @@ export const AttemptEvidenceSchema = z
     ),
     artifacts: z.array(ArtifactRefSchema),
   })
-  .strict();
+  .strict()
+  .superRefine((e, ctx) => {
+    for (const role of ['subject', 'grader'] as const) {
+      if (e[`${role}_cost_complete`] && e[`${role}_cost_usd`] === null)
+        ctx.addIssue({
+          code: 'custom',
+          message: 'complete role price requires an observed total',
+        });
+    }
+  });
 export type AttemptEvidence = z.infer<typeof AttemptEvidenceSchema>;
 export const PairedQuantitySchema = z
   .object({
@@ -113,7 +122,8 @@ export const ComparisonReportSchema = z
               .refine(
                 (a) =>
                   a.pass + a.fail + a.indeterminate + a.no_usable_result ===
-                  a.denominator,
+                    a.denominator &&
+                  Object.values(a.available).every((n) => n <= a.denominator),
                 'outcome counts must preserve planned denominator',
               ),
           ),
@@ -159,6 +169,14 @@ export const ComparisonReportSchema = z
   })
   .strict()
   .superRefine((r, ctx) => {
+    if (
+      new Set(r.attempts.map((a) => a.execution_attempt_id)).size !==
+      r.attempts.length
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'attempt identities must be unique',
+      });
     if (
       !r.behavior_available &&
       (r.comparisons.length ||

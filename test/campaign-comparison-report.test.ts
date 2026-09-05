@@ -4,6 +4,12 @@ import {
   initialProjection,
 } from '../src/campaign/execution-state.ts';
 import { foldComparisonReport } from '../src/campaign/report.ts';
+import { missingAttemptEvidence } from '../src/campaign/report-evidence.ts';
+import {
+  evidenceRef,
+  replacementFixture,
+  transition,
+} from './fixtures/core-comparison/factory.ts';
 import { mixedComparisonFixture } from './fixtures/core-comparison/report-fixture.ts';
 
 test('literal twelve-attempt oracle preserves fixed slots and quantity-matched pairs', () => {
@@ -107,4 +113,45 @@ test('the shared transition fold rejects cross-arm replacement, reused reserves 
       transitions.reduce(foldTransition, initialProjection(f.experiment)),
     ).toThrow();
   }
+});
+
+test('completed replacement analysis is complete even though superseded attempts stay in accounting', () => {
+  const f = replacementFixture();
+  f.transitions.push(
+    transition(
+      'block_validated',
+      { block_id: 'successor', evidence_refs: [evidenceRef] },
+      9,
+    ),
+    transition(
+      'ended',
+      { outcome: 'completed', reason: 'done', cancel_intent: null },
+      10,
+    ),
+  );
+  const state = f.transitions.reduce(
+    foldTransition,
+    initialProjection(f.experiment),
+  );
+  const evidenceByAttempt = new Map(
+    [...state.attempts].map(([id, a]) => [
+      id,
+      {
+        ...missingAttemptEvidence(),
+        publication_valid: true,
+        observed_outcome: a.observation!.outcome,
+      },
+    ]),
+  );
+  const report = foldComparisonReport({
+    experiment: f.experiment,
+    state,
+    evidenceByAttempt,
+    validityByBlock: new Map([['successor', { available: true, reasons: [] }]]),
+  });
+  expect(report.complete).toBe(true);
+  expect(report.accounting.subject_cost_usd.attempts).toBe(4);
+  expect(report.excluded_accounting.superseded.subject_cost_usd.attempts).toBe(
+    2,
+  );
 });

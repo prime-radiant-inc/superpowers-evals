@@ -300,7 +300,7 @@ test('known live controller stays running through launcher lease and empty hando
     `${controller.pid + 1}\n123\n${Date.now()}\n`,
   );
   expect(observeCampaignStatus(f, processes)).toEqual({
-    state: 'interrupted',
+    state: 'unresolved',
     next_action: 'cancel',
   });
 });

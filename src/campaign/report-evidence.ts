@@ -25,7 +25,7 @@ import {
   readPublishedArtifact,
   readPublishedArtifactBytes,
 } from './attempt-publish.ts';
-import { parseSidecar } from './contention.ts';
+import { isValidSidecarLine } from './contention.ts';
 import type { BlockProjection, CampaignProjection } from './execution-state.ts';
 
 export type { AttemptEvidence } from '../contracts/campaign/report.ts';
@@ -71,16 +71,20 @@ export function readAttemptEvidence(args: {
   const bodies = new Map<string, Buffer>();
   let runId: string;
   try {
-    const refs = args.artifacts.map((r) => ArtifactRefSchema.parse(r));
-    if (new Set(refs.map((r) => r.path)).size !== refs.length)
-      throw new Error('duplicate artifact reference');
-    const manifests = refs.filter(
+    const manifests = args.artifacts.filter(
       (r) =>
         r.path.split('/').length === 2 && r.path.endsWith('/manifest.json'),
     );
-    const manifestRef = manifests[0];
-    if (manifests.length !== 1 || !manifestRef)
+    const rawManifestRef = manifests[0];
+    if (manifests.length !== 1 || !rawManifestRef)
       throw new Error('one bound manifest required');
+    const manifestRef = ArtifactRefSchema.parse(rawManifestRef);
+    const refs: ArtifactRef[] = [];
+    for (const raw of args.artifacts) {
+      const parsed = ArtifactRefSchema.safeParse(raw);
+      if (parsed.success) refs.push(parsed.data);
+      else fail(raw.path, 'invalid artifact reference');
+    }
     const manifest = parseAttemptManifest(
       readPublishedArtifact(args.resultsRoot, manifestRef),
     );
@@ -98,19 +102,29 @@ export function readAttemptEvidence(args: {
         bytes: f.size,
       })),
       manifestRef,
-    ].sort((a, b) => a.path.localeCompare(b.path));
-    if (
-      jcsCanonicalize(expected) !==
-      jcsCanonicalize([...refs].sort((a, b) => a.path.localeCompare(b.path)))
-    )
-      throw new Error('manifest reference inventory mismatch');
-    e.artifacts = expected;
-    for (const ref of refs)
+    ];
+    e.artifacts = refs;
+    for (const ref of refs) {
+      if (!expected.some((bound) => bound.path === ref.path))
+        fail(ref.path, 'unlisted artifact reference supplies no evidence');
+    }
+    for (const bound of expected) {
+      const matches = refs.filter((ref) => ref.path === bound.path);
+      const ref = matches[0];
+      if (
+        matches.length !== 1 ||
+        !ref ||
+        jcsCanonicalize(ref) !== jcsCanonicalize(bound)
+      ) {
+        fail(bound.path, 'missing, ambiguous or mismatched artifact reference');
+        continue;
+      }
       try {
         bodies.set(ref.path, readPublishedArtifactBytes(args.resultsRoot, ref));
       } catch {
         fail(ref.path, 'artifact authentication failed');
       }
+    }
     e.publication_valid = true;
   } catch (error) {
     return missingAttemptEvidence(
@@ -297,14 +311,7 @@ export function readBlockValidity(args: {
         throw new Error(
           'positive validity identity or exposure shape mismatch',
         );
-      const parsed = parseSidecar(
-        r.details.telemetry.lines.map((l) => JSON.stringify(l)).join('\n') +
-          '\n',
-      );
-      if (
-        parsed.lines.length !== r.details.telemetry.lines.length ||
-        parsed.truncatedTail
-      )
+      if (!r.details.telemetry.lines.every(isValidSidecarLine))
         throw new Error('invalid telemetry receipt shape');
     }
     return { available: true, reasons: [] };

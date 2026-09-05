@@ -23,6 +23,7 @@ import {
   sha256Hex,
 } from '../src/contracts/campaign/digest.ts';
 import { buildRunEconomics } from '../src/economics.ts';
+import { mergeEstimates } from '../src/obol/index.ts';
 import { writeAttemptManifest } from '../src/runner/manifest.ts';
 import {
   blockActivation,
@@ -156,7 +157,7 @@ test('corrupt shared verdict bytes lose every verdict value; independent frozen 
   expect(e.subject_cost_usd).toBe(3);
   expect(e.subject_tokens).toBe(55);
 });
-test('manifest, identity and reference-inventory failures invalidate the whole publication', () => {
+test('manifest and identity failures invalidate the whole publication', () => {
   const p = publication();
   expect(
     readAttemptEvidence({
@@ -170,7 +171,7 @@ test('manifest, identity and reference-inventory failures invalidate the whole p
   expect(
     readAttemptEvidence({ ...p, artifacts: p.artifacts.slice(1) })
       .publication_valid,
-  ).toBe(false);
+  ).toBe(true);
   const q = publication({
     campaign: { ...p.expectedIdentity, sample_id: 'foreign' },
   });
@@ -189,8 +190,11 @@ test('symlink and path tampering cannot authenticate artifact values', () => {
   const refs = structuredClone(p.artifacts);
   refs[0]!.path = '../outside';
   expect(readAttemptEvidence({ ...p, artifacts: refs }).publication_valid).toBe(
-    false,
+    true,
   );
+  expect(
+    readAttemptEvidence({ ...p, artifacts: refs }).observed_outcome,
+  ).toBeNull();
 });
 test('malformed process facts stay unknown without losing judgment or role costs', () => {
   const p = publication({
@@ -245,12 +249,34 @@ test('real economics producer preserves known subtotal with an unpriced model in
     pricing_as_of: '2026-09-04',
     duration_ms: 1000,
   };
+  const captured = mergeEstimates([
+    {
+      total_usd: 3,
+      pricing_as_of: '2026-09-04',
+      unpriced_models: ['unknown'],
+      approximations: [],
+      tokens: { input: 10, output: 10, cache_write: 0, cache_read: 0 },
+      per_model: Object.entries(usage.models).map(([model, m]) => ({
+        model,
+        provider: m.provider,
+        subtotal_usd: m.est_cost_usd ?? 0,
+        tokens: {
+          input: m.total_input,
+          output: m.total_output,
+          cache_write: 0,
+          cache_read: 0,
+        },
+      })),
+    },
+  ]);
+  expect(captured?.est_cost_usd).toBe(3);
+  expect(captured?.unpriced_models).toEqual(['unknown']);
   writeFileSync(
     join(root, 'coding-agent-token-usage.json'),
-    JSON.stringify(usage),
+    JSON.stringify(captured),
   );
   const economics = await buildRunEconomics(root);
-  const e = readAttemptEvidence(publication({ economics }, usage));
+  const e = readAttemptEvidence(publication({ economics }, captured));
   expect(e.subject_cost_usd).toBe(3);
   expect(e.subject_cost_complete).toBe(false);
   expect(e.subject_tokens).toBe(20);
@@ -340,4 +366,24 @@ test('malformed optional usage price and duration do not invalidate independent 
   expect(e.subject_usage?.total_tokens).toBe(3);
   expect(e.subject_usage?.est_cost_usd).toBeNull();
   expect(e.subject_usage?.duration_ms).toBeNull();
+});
+
+test('non-manifest reference path, digest and byte-count failures preserve independent frozen artifacts', () => {
+  for (const field of ['path', 'sha256', 'bytes', 'missing'] as const) {
+    const p = publication(
+      {},
+      { est_cost_usd: 3, unpriced_models: [], total_tokens: 55 },
+    );
+    const refs = structuredClone(p.artifacts);
+    const index = refs.findIndex((r) => r.path.endsWith('/verdict.json'));
+    if (field === 'path') refs[index]!.path = '../untrusted/verdict.json';
+    if (field === 'sha256') refs[index]!.sha256 = 'b'.repeat(64);
+    if (field === 'bytes') refs[index]!.bytes++;
+    if (field === 'missing') refs.splice(index, 1);
+    const e = readAttemptEvidence({ ...p, artifacts: refs });
+    expect(e.publication_valid).toBe(true);
+    expect(e.subject_cost_usd).toBe(3);
+    expect(e.grader_cost_usd).toBeNull();
+    expect(e.observed_outcome).toBeNull();
+  }
 });

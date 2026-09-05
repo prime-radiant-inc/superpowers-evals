@@ -14,6 +14,9 @@ import { readCommittedPrefix } from './execution-journal.ts';
 import { createDurableMarker, fsyncDir } from './journal.ts';
 import { foldComparisonReport } from './report.ts';
 import { readAttemptEvidence, readBlockValidity } from './report-evidence.ts';
+
+const compareText = (a: string, b: string): number =>
+  a < b ? -1 : a > b ? 1 : 0;
 export interface ReadComparisonArgs extends CampaignLifecycleArgs {
   resultsRoot: string;
 }
@@ -39,7 +42,7 @@ export function readComparisonReadout(
       ])
         refs.set(jcsCanonicalize(ref), ref);
       const sorted = [...refs.values()].sort((a, b) =>
-        a.path.localeCompare(b.path),
+        compareText(a.path, b.path),
       );
       artifacts.push(
         ...sorted.map((ref) => ({ ...ref, root: 'results' as const })),
@@ -75,10 +78,12 @@ export function readComparisonReadout(
     ...new Map(artifacts.map((ref) => [jcsCanonicalize(ref), ref])).values(),
   ].sort(
     (a, b) =>
-      a.root.localeCompare(b.root) ||
-      a.path.localeCompare(b.path) ||
-      a.sha256.localeCompare(b.sha256),
+      compareText(a.root, b.root) ||
+      compareText(a.path, b.path) ||
+      compareText(a.sha256, b.sha256) ||
+      a.bytes - b.bytes,
   );
+  const sessionProcess = state.controller ?? state.start?.launcher;
   const last = committed.at(-1);
   return ReportSchema.parse({
     report: foldComparisonReport({
@@ -86,7 +91,11 @@ export function readComparisonReadout(
       state,
       evidenceByAttempt,
       validityByBlock,
-      interrupted: !state.ended && status.state === 'interrupted',
+      interrupted:
+        !state.ended &&
+        status.state === 'interrupted' &&
+        sessionProcess !== undefined &&
+        processes.observe(sessionProcess) === 'dead',
     }),
     anchor: {
       campaign_id: state.experiment.campaign_id,
@@ -182,7 +191,7 @@ export function renderReportMd(value: Report): string {
   );
   for (const a of r.attempts) {
     lines.push(
-      `- ${escapeMarkdown(a.execution_attempt_id)} (${escapeMarkdown(a.comparison_id)} / ${escapeMarkdown(a.arm)}): accepted ${a.accepted_outcome ?? 'unavailable'}, ${a.analysis_usable ? 'analytically usable' : 'not analytically usable'}.`,
+      `- ${escapeMarkdown(a.execution_attempt_id)} (${escapeMarkdown(a.comparison_id)} / ${escapeMarkdown(a.arm)}): accepted ${a.accepted_outcome ?? 'unavailable'}, ${a.analysis_usable ? 'analytically usable' : 'not analytically usable'}. Subject USD ${number(a.evidence.subject_cost_usd)}${a.evidence.subject_cost_complete ? '' : ' (incomplete)'}; grader USD ${number(a.evidence.grader_cost_usd)}${a.evidence.grader_cost_complete ? '' : ' (incomplete)'}; run wall ${number(a.evidence.wall_seconds)} s.`,
     );
     for (const reason of a.reasons) lines.push(`  - ${escapeMarkdown(reason)}`);
     for (const missing of a.evidence.missingness)

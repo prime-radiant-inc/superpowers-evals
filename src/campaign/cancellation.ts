@@ -254,7 +254,10 @@ export function observeCampaignStatus(
           stopped: [...p.attempts.values()].filter((a) => a.stopped).length,
         },
       };
-    return { state: 'interrupted', next_action: 'cancel' };
+    return {
+      state: controllerState === 'dead' ? 'interrupted' : 'unresolved',
+      next_action: 'cancel',
+    };
   } catch {
     return { state: 'unresolved', next_action: 'cancel' };
   }

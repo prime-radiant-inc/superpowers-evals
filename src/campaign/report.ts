@@ -253,7 +253,10 @@ export function foldComparisonReport(args: {
     }
   const records = attempts.map((a) => a.evidence);
   const complete =
-    status === 'completed' && attempts.every((a) => a.analysis_usable);
+    status === 'completed' &&
+    experiment.planned_slots.every((slot) =>
+      attempts.some((a) => a.sample_id === slot.sample_id && a.analysis_usable),
+    );
   return ComparisonReportSchema.parse({
     schema_version: 'quorum.comparison-report/v1',
     fold_version: 1,

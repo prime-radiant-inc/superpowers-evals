@@ -113,7 +113,7 @@ export function appendSidecarLine(
  *  non-negative timestamp, breach as a string array. Extra fields are
  *  tolerated (test fixtures and older writers carry more); a wrong or
  *  missing REQUIRED field is damage, never trusted. */
-function isValidSidecarLine(x: unknown): x is SidecarLine {
+export function isValidSidecarLine(x: unknown): x is SidecarLine {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
   const rec = x as Record<string, unknown>;
   const finite = (v: unknown): v is number =>
