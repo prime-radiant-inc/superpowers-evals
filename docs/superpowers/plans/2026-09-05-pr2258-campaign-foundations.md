@@ -34,7 +34,7 @@
 - Consumes: existing `runPhase(args: RunPhaseArgs): Promise<RunPhaseResult>`, `runScenario`, `writeAttemptManifest`, `publishAttempt` and mock-Gauntlet runner fixtures.
 - Produces: unchanged public signatures; checks use owned scratch HOME and a checks-bearing campaign runner output satisfies the existing publication contract.
 
-- [ ] **Step 1: Add a failing isolation test.** Execute a real check phase that writes `$HOME/marker` and records HOME in an artifact under the fixture workdir. Give it both `runDir` and a subject `configDir` containing a sentinel credential file. Assert:
+- [x] **Step 1: Add a failing isolation test.** Execute a real check phase that writes `$HOME/marker` and records HOME in an artifact under the fixture workdir. Give it both `runDir` and a subject `configDir` containing a sentinel credential file. Assert:
 
 ```ts
 expect(result.exitCode).toBe(0);
@@ -47,7 +47,7 @@ expect(readFileSync(subjectCredential, 'utf8')).toBe('subject-only');
 
 Use the existing phase fixture to obtain `result`, `checkHome`, `runDir`, `subjectHome`, and `subjectCredential`; the shell writes only the observed path, never a secret. Include failure-path cleanup. Existing bootstrap checks continue receiving `QUORUM_AGENT_CONFIG_DIR` explicitly.
 
-- [ ] **Step 2: Run the focused phase tests and retain the expected failure.**
+- [x] **Step 2: Run the focused phase tests and retain the expected failure.**
 
 ```sh
 bun run test test/checks.test.ts
@@ -55,7 +55,7 @@ bun run test test/checks.test.ts
 
 Record the command and failure. The regression must fail because HOME is inside publication, not because a fixture cannot launch.
 
-- [ ] **Step 3: Implement the isolated HOME.** Reuse the already-owned `sinkDir` lifetime:
+- [x] **Step 3: Implement the isolated HOME.** Reuse the already-owned `sinkDir` lifetime:
 
 ```ts
 const home = join(sinkDir, 'home');
@@ -65,7 +65,7 @@ mkdirSync(home, { recursive: true });
 
 Keep existing env allowlist/config-dir projection and cleanup. Do not pass subject HOME into checks, change manifest exclusions, or weaken publication inventory.
 
-- [ ] **Step 4: Add the real publication regression.** Reuse the existing `runScenario` mock-Gauntlet fixture in campaign layout (`campaignAttemptDir/home`, `campaignAttemptDir/staging/runId`). Run a scenario with real pre/post phases and a valid campaign identity. Pass its returned staged result through real `publishAttempt` and authenticated evidence reading. Assert:
+- [x] **Step 4: Add the real publication regression.** Reuse the existing `runScenario` mock-Gauntlet fixture in campaign layout (`campaignAttemptDir/home`, `campaignAttemptDir/staging/runId`). Run a scenario with real pre/post phases and a valid campaign identity. Pass its returned staged result through real `publishAttempt` and authenticated evidence reading. Assert:
 
 ```ts
 expect(existsSync(join(runResult.runDir, 'home'))).toBe(false);
@@ -77,7 +77,7 @@ expect(JSON.parse(readFileSync(join(publishedDir, 'verdict.json'), 'utf8')))
 
 Delete the fixture's original subject home and staging after publication and confirm published verdict/check artifacts remain readable and authenticated. This task proves ordinary publication; observer bundle replay is owned by the evidence plan. Prove an intentionally unlisted file is still refused with the existing publisher regression.
 
-- [ ] **Step 5: Run focused checks, self-review and commit.**
+- [x] **Step 5: Run focused checks, self-review and commit.**
 
 ```sh
 bun run test test/runner-unit.test.ts test/campaign-attempt-publish.test.ts
@@ -101,7 +101,7 @@ Stage the actual assigned test files, not nonexistent example paths. Report exac
 - Consumes/produces: `compareAdmissionOrder(a: { block_id: string }, b: { block_id: string }): number` unchanged.
 - Integration: `runCampaignDispatch` keeps descending `blockPrioritySeconds` before this comparator.
 
-- [ ] **Step 1: Add a failing ordering regression and total-order cases.**
+- [x] **Step 1: Add a failing ordering regression and total-order cases.**
 
 ```ts
 const blocks = ['c1:case:b2', 'c2:case:b1', 'c3:case:b1', 'c1:case:b1']
@@ -114,7 +114,7 @@ expect(compareAdmissionOrder({ block_id: 'invalid' }, { block_id: 'c1:case:b99' 
 
 Include b/x kind at equal ordinal, lineage, different cells and IDs parsing to equal numeric values. Malformed IDs stay last even after replicate moves first.
 
-- [ ] **Step 2: Run the focused comparator test, then reorder the tuple.**
+- [x] **Step 2: Run the focused comparator test, then reorder the tuple.**
 
 ```ts
 // First compare grammar validity, then:
@@ -128,7 +128,7 @@ return a.block_id < b.block_id ? -1 : a.block_id > b.block_id ? 1 : 0;
 
 Use a validity discriminator or malformed sentinel tuple that preserves malformed-last ordering. Update the actual contract comment and preserve existing duration priority.
 
-- [ ] **Step 3: Add a real controller activation regression.** Extend the injected session fixture with three comparisons, two paired repetitions each, canonical block IDs, global/grader caps six and adequate subject caps. Hold fake attempts open. Assert the first six starts have block IDs:
+- [x] **Step 3: Add a real controller activation regression.** Extend the injected session fixture with three comparisons, two paired repetitions each, canonical block IDs, global/grader caps six and adequate subject caps. Hold fake attempts open. Assert the first six starts have block IDs:
 
 ```ts
 expect(firstSix.map((a) => a.block_id).sort()).toEqual([
@@ -140,7 +140,7 @@ expect(firstSix.map((a) => a.block_id).sort()).toEqual([
 
 Map the real fixture's runtime identity into `firstSix`. No b2 starts before capacity frees. Preserve the existing longest-duration regression; cover unequal estimates and capacity backfill without imposing a six-arm barrier.
 
-- [ ] **Step 4: Verify and commit.**
+- [x] **Step 4: Verify and commit.**
 
 ```sh
 bun run test test/campaign-session.test.ts
@@ -164,7 +164,7 @@ Include actual comparator-test/doc files changed in the explicit stage list.
 - Produces: existing readable rows plus `{ selector: string, state: 'unreadable', reason: { code: 'unsafe_path' | 'invalid_campaign' | 'unavailable', message: string } }`.
 - Unchanged: `resolveCampaignDirectory(loaded, selector): string`, status/run/cancel/costs/report resolution.
 
-- [ ] **Step 1: Add failing mixed-directory tests using `helperFixture`.** Register a real V2 fixture, add V1 and malformed JSON neighbors, a bad journal, and a symlink candidate. Preserve before/after document bytes. Assertions:
+- [x] **Step 1: Add failing mixed-directory tests using `helperFixture`.** Register a real V2 fixture, add V1 and malformed JSON neighbors, a bad journal, and a symlink candidate. Preserve before/after document bytes. Assertions:
 
 ```ts
 const rows = commands.list();
@@ -176,7 +176,7 @@ expect(readFileSync(historicalPath, 'utf8')).toBe(before);
 
 Also create prefix-related basenames: listing must examine each listed basename directly, rather than invoking execution prefix resolution. Execution ambiguity/path escape/symlink tests must retain their refusals.
 
-- [ ] **Step 2: Run RED and implement per-entry isolation.** Keep the root no-follow check outside entry catches. For each candidate, validate its basename and no-follow containment, load the frozen V2 document, and observe status using that exact directory. Catch only that entry's failure into the typed unreadable row. Do not derive `campaign_id` from rejected JSON.
+- [x] **Step 2: Run RED and implement per-entry isolation.** Keep the root no-follow check outside entry catches. For each candidate, validate its basename and no-follow containment, load the frozen V2 document, and observe status using that exact directory. Catch only that entry's failure into the typed unreadable row. Do not derive `campaign_id` from rejected JSON.
 
 ```ts
 return names.map((selector) => {
@@ -190,7 +190,7 @@ return names.map((selector) => {
 
 Define these helpers locally if used. Keep successful row shape unchanged; root failures remain command failures. Do not change the supported command list.
 
-- [ ] **Step 3: Verify and commit.**
+- [x] **Step 3: Verify and commit.**
 
 ```sh
 bun run test test/appliance-campaign-cutover.test.ts
@@ -230,7 +230,7 @@ The strict `AttemptRuntimeSpecSchema.public_env` gains only
 `OBOL_PRICING_DIR: AbsoluteRuntimePathSchema.optional()`; arbitrary environment
 keys remain rejected. Test runtime schema round-trip and nonabsolute path refusal.
 
-- [ ] **Step 1: Add RED tests for selection and source integrity.** Create a
+- [x] **Step 1: Add RED tests for selection and source integrity.** Create a
 temporary Evals root with a small real obol `current.json` table. Parse an explicit
 selection and verify:
 
@@ -252,13 +252,13 @@ ancestor, nonregular source, and a basename other than `current.json`. Changing
 the path or digest changes the experiment digest. An absent selection retains
 ordinary bundled pricing; PR2258 readiness will explicitly require a selection.
 
-- [ ] **Step 2: Implement shared strict validation.** Validate a portable
+- [x] **Step 2: Implement shared strict validation.** Validate a portable
 Evals-relative path ending in `current.json`, use the existing pinned no-follow
 file read primitive, compare SHA-256 of raw bytes, and return the verified
 absolute file/directory. No network, environment lookup, refresh or fallback.
 The table is accounting input and does not add budget/admission semantics.
 
-- [ ] **Step 3: Wire registration and worker preparation.** Validate after
+- [x] **Step 3: Wire registration and worker preparation.** Validate after
 frozen Evals materialization/intake and before journal registration. Run the same
 validator in `prepareContainerExecution` before private stage creation. The
 controller supplies `context.experiment.suite.pricing_snapshot`. Set:
@@ -275,7 +275,7 @@ special-case PR2258. Scenario/arm suite checks use the same verifier against the
 checked source tree. Registration failure must not publish a campaign; preparation
 failure must precede credential-stage creation.
 
-- [ ] **Step 4: Prove actual worker pricing selection.** Extend the prepared
+- [x] **Step 4: Prove actual worker pricing selection.** Extend the prepared
 runtime fixture with a selected table and run a fresh Bun subprocess using its
 public environment and a clean HOME to price synthetic ATIF and grader sidecar
 records through the real Quorum/obol functions. Put a deliberately wrong table in
@@ -284,7 +284,7 @@ arithmetic and explicit unknown-model cost, without any provider calls. Obol rea
 its pricing environment at process startup; do not mutate it after import.
 Deleting or changing selected bytes must fail preparation rather than fall back.
 
-- [ ] **Step 5: Verify, self-review and commit.**
+- [x] **Step 5: Verify, self-review and commit.**
 
 ```sh
 bun run test test/campaign-pricing-snapshot.test.ts
@@ -301,9 +301,9 @@ new production rates are invented by this task.
 
 ## Integration acceptance
 
-- [ ] Task-specific spec/quality reviews pass before integrating each branch.
-- [ ] Run `bun run check` and `bun run quorum check` once on the integrated branch.
-- [ ] Preserve explicit skipped Linux/Gauntlet receipts as remaining qualification gates.
-- [ ] Record this foundation slice in the experiment log without claiming observer support or live readiness.
+- [x] Task-specific spec/quality reviews pass before integrating each branch.
+- [x] Run `bun run check` and `bun run quorum check` once on the integrated branch.
+- [x] Preserve explicit skipped Linux/Gauntlet receipts as remaining qualification gates.
+- [x] Record this foundation slice in the experiment log without claiming observer support or live readiness.
 
 The evidence, measurement, six-arm configuration and no-spend preflight plans follow this slice. No source task authorizes installed changes or paid execution.

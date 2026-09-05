@@ -61,6 +61,62 @@ one failed by exceeding its 5,000 ms timeout. The failure was
 receipt; do not claim a completely clean initial full check. Dashboard checks
 were not reached in that failed invocation.
 
+## Foundation implementation receipts
+
+All four tasks are implemented in the isolated integration branch and passed
+independent spec-compliance and code-quality reviews:
+
+| Task | Integrated commit | Focused tests reported by implementer |
+| --- | --- | --- |
+| Check HOME and runner publication | `acf15356` | 68 passed |
+| Repetition-first admission | `fbee7c97` | 60 passed |
+| Per-entry campaign listing | `2931ddbf` | 9 passed |
+| Pinned worker pricing | `b42cf5a0` | 119 passed |
+
+Implementers recorded failing behavior before their fixes, then passing focused
+regressions, lint and typecheck. The pricing proof runs a fresh local Bun process
+through the prepared public environment and real accounting functions; it does
+not constitute an installed Linux worker qualification or establish production
+Opus 5 rates.
+
+The integrated `bun run check` at `b42cf5a0` exited successfully: lint and
+typecheck passed; core tests had 3,515 passes, 14 skips and no failures across
+249 files (176.43 seconds); dashboard tests had 144 passes and no failures.
+`bun run quorum check` passed all 88 scenario/credential/arm-suite checks.
+`git diff --check` was clean. The baseline CLI timeout did not recur.
+
+The 14 core skips cover a Windows hook check, the real Gauntlet/TUI integration,
+and twelve Linux/container qualification cases. These remain unverified here;
+local injected-runtime and subprocess tests do not substitute for them.
+
+One plan correction was necessary: add optional absolute `OBOL_PRICING_DIR` to
+the strict runtime public-environment schema, because otherwise the runtime
+would reject its own verified pricing projection. This introduces a path-bearing
+runtime field; the shared no-follow digest verifier and strict rejection of
+unknown environment keys bound that authority. No ambient pricing fallback is
+permitted when a snapshot is selected.
+
+Final whole-branch review found one correctness gap: credential delivery could
+overwrite the verified pricing directory at launch. The single fix wave
+(`19f52646`, worker commit `110288c0`) rejects `OBOL_PRICING_DIR` in credential
+`api_key_env` and `key_pool`, and independently protects it at the real
+entrypoint. The regression reproduced actual worker launch under the conflicting
+value, then proved refusal before the worker side effect. Focused verification
+went from 42 passes/3 expected failures to 45 passes/no failures; lint and
+typecheck passed. The scoped re-review marked the finding addressed and found
+no residual issue or new breakage.
+
+The final integrated `bun run check` at `19f52646` also exited successfully:
+lint/typecheck passed, core tests had 3,518 passes, the same 14 qualification
+skips and no failures (174.21 seconds), and dashboard tests had 144 passes and
+no failures. Final `bun run quorum check` passed all 88 checks, and
+`git diff --check` was clean. The four-task foundation plan is complete; these
+receipts supersede the earlier source-test totals without erasing the original
+baseline timeout or the final review's negative finding.
+
+The full observer implementation and live comparison remain unfinished;
+PRI-3097 remains In Dev.
+
 ## Evidence integration dependency
 
 Planning found that Gauntlet's current private-TUI shutdown snapshots bare PIDs,
