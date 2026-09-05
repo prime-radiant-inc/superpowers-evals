@@ -1653,6 +1653,99 @@ function persistedJob(harness: ActionHarness, jobId: string) {
   ) as Record<string, unknown>;
 }
 
+test('run CLI persists the selected grader model without changing subject credentials', async () => {
+  const fx = writeRealConfig();
+  seedBundleMetadata(fx);
+  writeScenario(fx.evalsPath, 'writing-plans');
+  writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
+  const harness = actionHarness(fx);
+  const program = createApplianceProgram({
+    loadConfig: () => loadStateConfig(fx.configPath),
+    actions: harness.actions,
+    stdout: () => {},
+  });
+  program.exitOverride();
+  await program.parseAsync(
+    [
+      'run',
+      '--superpowers-ref',
+      'main',
+      '--scenario',
+      'writing-plans',
+      '--coding-agent',
+      'codex',
+      '--credential',
+      'openai_responses',
+      '--grader-model',
+      'anthropic.claude-sonnet-5',
+      '--detach',
+      '--json',
+    ],
+    { from: 'user' },
+  );
+  expect(harness.detachCalls).toHaveLength(1);
+  const record = persistedJob(harness, harness.detachCalls[0] ?? '');
+  expect(record['command']).toEqual({
+    argv: [
+      'quorum',
+      'run',
+      'scenarios/writing-plans',
+      '--coding-agent',
+      'codex',
+      '--credential',
+      'openai_responses',
+      '--grader-model',
+      'anthropic.claude-sonnet-5',
+    ],
+    sanitized: true,
+  });
+  expect(record['credential_scope']).toEqual(OPENAI_RESPONSES_SCOPE);
+});
+
+test('run CLI refuses ambiguous grader selection before persisting a job', async () => {
+  for (const selection of [
+    ['--grader-model', ''],
+    ['--grader-model', '   '],
+    ['--grader-model', 'claude-sonnet-5', '--grader-model', 'another-model'],
+  ]) {
+    const fx = writeRealConfig();
+    seedBundleMetadata(fx);
+    writeScenario(fx.evalsPath, 'writing-plans');
+    writeAgentYaml(fx.evalsPath, 'codex', CODEX_AGENT_LINES);
+    const harness = actionHarness(fx);
+    let exitCode = 0;
+    const program = createApplianceProgram({
+      loadConfig: () => loadStateConfig(fx.configPath),
+      actions: harness.actions,
+      stdout: () => {},
+      stderr: () => {},
+      setExitCode: (code) => {
+        exitCode = code;
+      },
+    });
+    program.exitOverride();
+    await program.parseAsync(
+      [
+        'run',
+        '--superpowers-ref',
+        'main',
+        '--scenario',
+        'writing-plans',
+        '--coding-agent',
+        'codex',
+        ...selection,
+        '--detach',
+        '--json',
+      ],
+      { from: 'user' },
+    );
+    expect(exitCode).not.toBe(0);
+    expect(
+      existsSync(harness.jobsDir) ? readdirSync(harness.jobsDir) : [],
+    ).toEqual([]);
+  }
+});
+
 test('production run persists the credential triple before the worker or Docker', async () => {
   const fx = writeRealConfig();
   seedBundleMetadata(fx);
