@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import {
   DEFAULT_RESOURCE_FLOORS,
@@ -875,19 +875,27 @@ test('I4: campaign-id sidecar failure rolls the lease back — heartbeat stopped
       return () => {};
     },
   };
-  expect(() =>
-    acquireLiveSpendLock({
-      lockPath,
-      campaignId: 'abc123',
-      clock: new FakeClock(5),
-      identity,
-      scheduler,
-    }),
-  ).toThrow(/EACCES/);
-  expect(existsSync(lockPath)).toBe(false); // the lease unwound fully
-  expect(beats).toHaveLength(1);
-  beats[0]!(); // a beat after the rollback must be a no-op
-  expect(existsSync(lockPath)).toBe(false);
+  try {
+    expect(() =>
+      acquireLiveSpendLock({
+        lockPath,
+        campaignId: 'abc123',
+        clock: new FakeClock(5),
+        identity,
+        scheduler,
+      }),
+    ).toThrow(/EACCES/);
+    expect(existsSync(lockPath)).toBe(false); // the lease unwound fully
+    expect(beats).toHaveLength(1);
+    beats[0]!(); // a beat after the rollback must be a no-op
+    expect(existsSync(lockPath)).toBe(false);
+  } finally {
+    // Rollback can park the read-only directory under its severed name.
+    const workdir = dirname(lockPath);
+    for (const entry of readdirSync(workdir)) {
+      chmodSync(join(workdir, entry), 0o700);
+    }
+  }
 });
 
 test('I1: empty-dir polling runs on the injected clock — a FakeClock terminates deterministically with no wall-time waiting', () => {
