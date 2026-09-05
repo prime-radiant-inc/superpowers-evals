@@ -1,12 +1,14 @@
 # PR 2258: Astra and Sol brainstorming evaluation
 
-**Status:** Drew authorized restarting eight fresh pilot runs with the corrected
-observer under the existing $500 total allowance. The fresh Astra baseline is
-job-20260905T021332Z-bf8a, submitted at 02:13:32 UTC September 5. Runtime is
-pinned to a39346053ffb124f1f7b76e6a7f49f256623c083. Review the first Astra
-base/head pair before admitting the remaining six. Both previous cancellations
-remain excluded diagnostics; their observed usage and unresolved in-flight
-reserve remain inside the same budget. No matched effect estimate exists yet.
+**Status:** Pilot paused at the first Astra pair's evidence gate. The fresh base
+run is a usable purpose-discovery failure. The PR-head run elicited and preserved
+the learning purpose through actual spec review/approval, but its observer omitted
+the required preapproval capture receipt; it was cancelled and remains diagnostic
+only. The remaining six runs, including all Sol runs, were not admitted. No
+full-chain effect or performance comparison exists. Recorded estimated spend is
+$4.7709727 across all attempts/checks, with possible unrecorded in-flight usage
+and the existing $10 reserve inside the approved $500 allowance. The appliance
+is restored and idle. A separate scorer repair is committed at b4ca9d7a.
 
 **Question:** Does [Superpowers PR 2258](https://github.com/obra/superpowers/pull/2258)
 make Astra establish and preserve shared understanding through brainstorming,
@@ -813,3 +815,102 @@ applied to the running instrument in response to this finding.
 Astra r1 head submitted as job-20260905T022552Z-7265 at 02:25:52 UTC,
 using the same runtime and exact PR head 069edf3ffc2ffdce80a84d3344a4064acec7e10c.
 The first-pair gate remains closed to the remaining six while this run proceeds.
+
+
+### Restart head: promising subject behavior, unusable capture protocol
+
+Job job-20260905T022552Z-7265 used the same frozen runtime a3934605, the exact
+PR head, and Astra xhigh. Subject raw digest:
+fab44dc0c634b15b802b046a3992bdeeddc4a657e2308c58cbec4a009661e417.
+The observed prefix differs materially from the baseline:
+
+| Raw line | Observation |
+| ---: | --- |
+| 38 | Asks the main goal of building the todo list. |
+| 44 | Actor supplies the prescribed React-learning purpose. |
+| 55 | Reflects a small learning example and an event → state → UI success criterion. |
+| 61 | Actor confirms the reflected scope. |
+| 86, 92 | Proposes one readable component with a walkthrough/exercise; receives design approval. |
+| 108, 110 | Writes a spec preserving that learning purpose; write succeeds. |
+| 133 | Presents the actual saved spec and requests review. |
+| 139 | Actor approves after reading the saved file, but without a capture receipt. |
+| 142–163 | Agent loads writing-plans and performs read-only planning/tooling exploration. |
+
+The grader's own raw log pinpoints the capture failure. Events 7–10 at
+02:26:13 UTC successfully read both private observer guides, including the exact
+snapshot command and instruction to run it before approval. Events 116/118 at
+02:31:06 read the actual saved spec with cat and retain its contents. Event 121
+at 02:31:08 sends saved-spec approval. No snapshot command occurs; the
+brainstorming-evidence directory remained empty. This is a received instruction
+that was omitted at the action boundary, not an unavailable guide or a snapshot
+command error. The old prompt-only capture mechanism permits this omission.
+
+Independent review also found that the observer sent its first substantive
+reply (grader event 61) without the required raw-call inspection. That is the
+earliest demonstrated observer omission; the missing receipt at event 121 is the
+decisive capture failure. The exposed skill also asks for committing the spec,
+while raw 156 still shows it untracked. Preserve this secondary instruction-
+following omission rather than calling the subject fully skill-compliant; it
+is separate from the pilot's purpose and stage-approval outcomes.
+
+The operator cancelled through the helper at 02:32:18 UTC after confirming the
+missing receipt. Canonical verdict is indeterminate due to cancellation; no
+actor review or score was fabricated afterward. The retained raw cat output
+supports diagnostic spec-content and actual-review observations, but it does not
+satisfy the frozen receipt contract and must not be relabeled as a timely receipt.
+The subject did not demonstrably violate a stage in the observed prefix. Plan
+approval, execution choice, successful implementation, and full-chain completion
+remain unobserved. The independent blinded reviewer reached the same partial
+subject-progress/observer-capture distinction. This does not establish the PR's
+full-chain improvement or an Astra-versus-Sol effect.
+
+Recorded head usage is $1.682523 subject plus $0.1943211 grader, $1.8768441
+total. Both observed sides are priced; cancellation may omit in-flight charges.
+The subject session duration is 339.907 seconds and the wall span is 370.421
+seconds, neither a valid time-to-completion. Raw contexts confirm xhigh and the
+maximum observed request input is 44,637 tokens. Subject Standard service remains
+an explicit pricing assumption. Total observed estimated spend across both fresh
+runs, both earlier cancelled attempts, and the connectivity probe is $4.7709727.
+The conservative $10 unresolved-usage reserve remains inside $500; it is not
+reported as spend. The remaining six slots are unlaunched, including every Sol
+inference run. No automatic replacement or broader screen was started.
+
+### Offline scorer repair and next launch decision
+
+Commit b4ca9d7a repairs the independent scorer-location defect. Scope approval
+without understanding no longer immediately latches a violation; it still cannot
+authorize a specification write. Missing purpose now fails at that write as
+spec_before_understanding. Purpose discovery followed by a newly approved design
+can proceed; omitting that new approval still fails. The regressions failed
+before the repair, then all 23 chronology/integration tests, lint and typecheck
+passed. Independent static review found no blocker. The original runtime,
+canonical scores, and reviews are unchanged. A separate offline rescore of the
+fresh baseline returns FAIL at raw 79, matching the independent judgment.
+
+Recommended next change is to make capture part of the actor input path rather
+than another remembered prompt step. A concrete boundary exists in Gauntlet's
+TUI adapter: executeTool handles type, press, and type_and_submit, and its
+isMutatingTool already identifies those routes. An opt-in observer capture step
+should run before conversational input reaches the subject, save actual current
+artifact bytes with a stable raw-transcript prefix, and refuse the reply if that
+capture fails. Capture should not rely on recognizing exact approval wording;
+independent review still decides whether a reply approves an artifact and which
+revision it covers. Startup and stop/cancellation controls must remain usable,
+and direct terminal-input escape paths must be accounted for before claiming
+that a receipt is enforced. This is a design proposal, not an implemented gate.
+
+Before another paid pilot, exercise the input boundary with a fake actor that
+omits capture, changes approval wording, uses both submit and type/Enter routes,
+encounters a changed/unflushed transcript, rewrites a document, and experiences a
+capture failure. Demonstrate that the exact preapproval bytes are retained and
+an uncaptured approval cannot reach the subject. This changes the Gauntlet/Quorum
+instrument boundary and needs a design decision before implementation. It also
+needs a new pinned runtime and an explicit replacement-run decision under the
+agreed no-automatic-replacements policy. Another prompt-only clarification does
+not provide evidence that the capture step will be reliable.
+
+After cancelling the head, helper prepare removed the live credential scope.
+Guarded restoration succeeded at 02:33:59.952 UTC: original evals/main, original
+Superpowers and Gauntlet revisions, exact config bytes/mode, and pricing-file
+absence. Final doctor is healthy, the original blessed bundle is selected, and
+run/sync locks are absent. No live eval remains active.
