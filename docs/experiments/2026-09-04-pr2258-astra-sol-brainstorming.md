@@ -446,3 +446,102 @@ must not be described as already verified by local tests.
 Record every admitted run ID, toolchain/protocol revision, accounting total,
 negative outcome, and adjudication in the eventual readout. Pilot results remain
 separate from the planned fractals cases and the 204-run exploratory screen.
+
+## Appliance preparation completed September 4
+
+Drew authorized pricing and staging preparation after reviewing the next steps.
+No live pilot or screen was launched, and no paid inference request was made.
+The earlier undeployed-pricing gap above is now resolved for the staged
+instrument. Live endpoint access, effective effort/native prompts, actor
+adherence, and evidence quality remain first-pair validation questions.
+
+The frozen [pricing snapshot and executable probe](2026-09-04-pr2258-pricing/README.md)
+use obol's existing on-disk snapshot mechanism. No production pricing code,
+dependency version, credential, or appliance helper was changed. The snapshot
+covers Astra, Sol, known Terra/Luna delegates, and both Sonnet 5 model IDs at
+current Standard/global rates, including request-size tiers and grader cache
+durations. Require empty unpriced_models lists for subject and grader before
+admitting another run; a non-null mixed-model subtotal is not complete cost
+coverage. Non-Standard service or regional pricing requires explicit accounting
+adjustment and preserved original estimates.
+
+Both official helper prepare jobs passed with the following exact identities:
+
+| Item | Prepared identity |
+| --- | --- |
+| Evals runtime | `0e11ce124384ba7360304de5e82bc200b159b947` |
+| Gauntlet | `fb34bcd03cc169f8841a2e4c8cf1d9173a229f18` |
+| Codex | `0.146.0`, same Linux image recorded above |
+| Pricing SHA256 | `f1d4981ba73a6e69d3fafcd6c9f3eaacd3b38fb4f1e0987f2b4f720713642b81` |
+| Base preparation | `job-20260905T005447Z-05cd` |
+| Head preparation | `job-20260905T005610Z-dbbb` |
+
+These are preparation job IDs, not model samples. Each resolved its requested
+Superpowers SHA exactly and passed the container tool/scenario preflight.
+All 149 targeted pilot/normalizer/credential/pinning tests passed on the real
+Linux appliance (zero failures). All 15 pricing probes also passed there with
+OBOL_PRICING_DIR absent, proving the default container-home table was selected
+by the real Quorum capture functions. The probe initially failed against the
+bundled local table with Astra explicitly unpriced, then passed with the frozen
+snapshot. Its separate TypeScript check passed. Independent review found no
+material blocker and confirmed mixed-model and per-request pricing behavior.
+
+Preparation used a private Git bundle and a frozen local Gauntlet remote;
+no GitHub push was needed. Private receipts, bundle, commands, and restoration
+record are retained under local results/pri3097-prep/ and the appliance's
+state/experiments/pri3097-prep/. The remote experiment branch and bundle remain
+staged at the runtime commit above. Later documentation-only commits are not
+part of that frozen runtime.
+
+At 00:58:03 UTC on September 5 (September 4 local), the original evals main
+commit c89d6e2b94e08d70134d446a37847a520eb45b29, Superpowers checkout, config
+bytes/mode, and pricing-file absence were restored under the helper's run/sync
+mutation locks. Config SHA256 is
+7833695b75490ca99950b5adeca0e9055ee25a943a557e231880bee489aa8dc7.
+The subsequent doctor passed, with no run/sync locks. The container is running
+with the empty credential scope created by prepare; it is not the prior live
+container. The next helper run reconciles its credential scope and provenance.
+The private activate.ts command was then rehearsed successfully, the pricing
+probe passed again without an override, and restore.ts returned the appliance
+to the same baseline at 01:00:35 UTC. The final doctor was healthy with no
+run/sync locks. A checksummed manifest.json binds the local preparation receipts.
+
+Retained preparation failures: the first maintenance probe used Docker top
+with only a command column; Docker requires a PID column. It refused before
+source/config/pricing changes, released the locks, and succeeded after that
+probe was corrected. The offline probe's initial typecheck found obol's runtime
+pricing_source field absent from its TypeScript declaration; an explicit
+property-presence assertion resolved that without changing the dependency.
+
+### Launch handoff
+
+After live-spend approval, reactivate the staged runtime and pricing under
+the same locks, verifying the restoration record still matches current state.
+The rehearsed command is `bun state/experiments/pri3097-prep/activate.ts` from
+the appliance root; its restore.ts counterpart restores the recorded baseline.
+Keep both evals and Gauntlet on their frozen local remotes. Recheck doctor and
+the pricing digest/probe, then submit the eight serial jobs in the order above.
+The first two concrete helper commands are:
+
+```sh
+evals-appliance run --json --detach \
+  --superpowers-ref fd02874aa5c55ba3c2bca431253b48e0e4c8be5a \
+  --scenario scenarios/brainstorming-todo-shared-intent \
+  --coding-agent codex --credential openai_responses_6astra
+
+evals-appliance run --json --detach \
+  --superpowers-ref 069edf3ffc2ffdce80a84d3344a4064acec7e10c \
+  --scenario scenarios/brainstorming-todo-shared-intent \
+  --coding-agent codex --credential openai_responses_6astra
+```
+
+Wait for each job to terminate before submitting the next. The Phase 1 helper
+does not consume the suite's grader alias: its frozen Quorum default is
+claude-sonnet-5, delivered through the blessed QUORUM_GRADER_* channels.
+Confirm the actual grader endpoint and served model from the first job before
+accepting it as the intended Sonnet 5 control. Both emitted model IDs are in
+the price table; that does not itself prove the route. Stop for mismatched
+model/effort/instructions, unusable observer evidence, incomplete accounting,
+or insufficient remaining budget. The proposed eight-run $100 budget and
+approximately five-hour reservation are unchanged. Restore shared source,
+config, and pricing when the pilot finishes or pauses.
