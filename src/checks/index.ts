@@ -110,7 +110,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
   // are prelude functions (no PATH entry), so PATH carries no quorum-specific
   // component.
   const path = getEnv('PATH') ?? '/usr/bin:/bin';
-  const home = args.runDir !== undefined ? join(args.runDir, 'home') : sinkDir;
+  const home = join(sinkDir, 'home');
   const checkTmp = join(sinkDir, 'tmp');
   mkdirSync(home, { recursive: true });
   mkdirSync(checkTmp, { recursive: true });
