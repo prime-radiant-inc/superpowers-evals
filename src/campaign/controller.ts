@@ -197,6 +197,11 @@ function productionDependencies(
         binRoot: dirname(snapshot.gauntletBin),
         superpowersTree: tree,
         scenarioDir: join(snapshot.evalsRoot, 'scenarios', args.slot.scenario),
+        ...(context.experiment.suite.pricing_snapshot === undefined
+          ? {}
+          : {
+              pricingSnapshot: context.experiment.suite.pricing_snapshot,
+            }),
       });
     },
     runtime(authority) {

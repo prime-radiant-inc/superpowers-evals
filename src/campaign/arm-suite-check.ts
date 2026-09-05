@@ -13,6 +13,7 @@ import {
   type Credential,
   parseCredentialsFile,
 } from '../contracts/credential.ts';
+import { verifyPricingSnapshot } from './pricing-snapshot.ts';
 
 export interface ArmSuiteCheckOptions {
   readonly repoRoot: string;
@@ -141,6 +142,12 @@ export function checkArmSuiteFiles(
       }
       const { grader: _stripped, ...suiteFields } = raw ?? {};
       suite = parseCheckedSuite(suiteFields);
+      if (suite.pricing_snapshot !== undefined) {
+        verifyPricingSnapshot({
+          evalsRoot: opts.repoRoot,
+          snapshot: suite.pricing_snapshot,
+        });
+      }
       if (credentials !== undefined && grader !== undefined) {
         const graderCredential = credentials[grader.credential];
         if (graderCredential === undefined) {

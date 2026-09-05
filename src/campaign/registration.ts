@@ -74,6 +74,7 @@ import {
   type JournalFsOps,
 } from './journal.ts';
 import { acquireLease, type ProcessIdentityProbe } from './locks.ts';
+import { verifyPricingSnapshot } from './pricing-snapshot.ts';
 import {
   assertFeasible,
   blockDemandVector,
@@ -1168,6 +1169,12 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       throw new RegistrationError(
         `materialized snapshot input digest ${experiment.input_digest} differs from object-store intake ${staged.input_digest}`,
       );
+    }
+    if (experiment.suite.pricing_snapshot !== undefined) {
+      verifyPricingSnapshot({
+        evalsRoot: handle.evalsRoot,
+        snapshot: experiment.suite.pricing_snapshot,
+      });
     }
     probeChildContract(handle.evalsRoot, evalsSha, args);
     createBallast(campaignDir, DEFAULT_BALLAST_BYTES, args.fsOps);

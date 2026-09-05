@@ -22,6 +22,8 @@ import {
   removeAttemptStage,
 } from '../src/campaign/attempt-projection.ts';
 import { sha256Hex } from '../src/contracts/campaign/digest.ts';
+import { AttemptRuntimeSpecSchema } from '../src/contracts/campaign/execution.ts';
+import type { PricingSnapshot } from '../src/contracts/campaign/suite.ts';
 import { gauntletEnvBase } from '../src/runner/gauntlet-env.ts';
 
 const SUBJECT = "subject value '$tick' `quoted` ;";
@@ -454,6 +456,7 @@ function prepareV2(
   fx: ReturnType<typeof projectionFixture>,
   model = 'claude-grader',
   grants: { subjectKeyEnv?: string; graderKeyEnv?: string } = {},
+  pricingSnapshot?: PricingSnapshot,
 ) {
   return prepareContainerExecution({
     campaignDir: fx.campaignDir,
@@ -481,6 +484,7 @@ function prepareV2(
     binRoot: join(fx.campaignDir, 'bin'),
     superpowersTree: null,
     scenarioDir: join(fx.corpus, 'scenarios', 'test'),
+    ...(pricingSnapshot === undefined ? {} : { pricingSnapshot }),
   });
 }
 function addGrader(fx: ReturnType<typeof projectionFixture>) {
@@ -493,6 +497,211 @@ function addGrader(fx: ReturnType<typeof projectionFixture>) {
     "SELECTED_GRADER='selected-grader-secret'\n",
   );
 }
+
+function selectedPricing(fx: ReturnType<typeof projectionFixture>) {
+  const directory = join(fx.corpus, 'pricing');
+  const file = join(directory, 'current.json');
+  const bytes = `${JSON.stringify({
+    as_of: '2026-09-05',
+    namespaces: {
+      litellm: {
+        'selected-model': {
+          input: 1,
+          output: 2,
+          cache_read: 3,
+          cache_write: 4,
+        },
+      },
+    },
+  })}\n`;
+  mkdirSync(directory);
+  writeFileSync(file, bytes);
+  return {
+    directory,
+    file,
+    snapshot: { path: 'pricing/current.json', sha256: sha256Hex(bytes) },
+  };
+}
+
+test('V2 preparation verifies selected pricing before staging and exports its existing read-only source directory', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const pricing = selectedPricing(fx);
+
+  expect(() =>
+    prepareV2(
+      fx,
+      'claude-grader',
+      {},
+      {
+        ...pricing.snapshot,
+        sha256: '0'.repeat(64),
+      },
+    ),
+  ).toThrow(/digest/i);
+  expect(
+    existsSync(join(fx.campaignDir, 'attempts', 'attempt', '.stage')),
+  ).toBe(false);
+
+  const prepared = prepareV2(fx, 'claude-grader', {}, pricing.snapshot);
+  expect(prepared.intent.runtime_spec.public_env.OBOL_PRICING_DIR).toBe(
+    pricing.directory,
+  );
+  expect(
+    prepared.intent.runtime_spec.mounts.filter(
+      (mount) => mount.source === fx.corpus && mount.target === fx.corpus,
+    ),
+  ).toEqual([{ source: fx.corpus, target: fx.corpus, mode: 'ro' }]);
+});
+
+test('prepared runtime schema accepts only an absolute selected pricing directory', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const pricing = selectedPricing(fx);
+  const spec = prepareV2(fx, 'claude-grader', {}, pricing.snapshot).intent
+    .runtime_spec;
+
+  expect(AttemptRuntimeSpecSchema.parse(spec)).toEqual(spec);
+  expect(() =>
+    AttemptRuntimeSpecSchema.parse({
+      ...spec,
+      public_env: {
+        ...spec.public_env,
+        OBOL_PRICING_DIR: 'pricing',
+      },
+    }),
+  ).toThrow(/absolute canonical private path/i);
+});
+
+test.each([
+  'deleted',
+  'changed',
+])('V2 preparation refuses %s selected pricing bytes without fallback', (mutation) => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const pricing = selectedPricing(fx);
+  if (mutation === 'deleted') rmSync(pricing.file);
+  else writeFileSync(pricing.file, '{}\n');
+
+  expect(() => prepareV2(fx, 'claude-grader', {}, pricing.snapshot)).toThrow();
+  expect(
+    existsSync(join(fx.campaignDir, 'attempts', 'attempt', '.stage')),
+  ).toBe(false);
+});
+
+test('prepared public environment selects exact pricing for real ATIF and grader accounting in a clean HOME', () => {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const pricing = selectedPricing(fx);
+  const prepared = prepareV2(fx, 'claude-grader', {}, pricing.snapshot);
+  const spec = prepared.intent.runtime_spec;
+  const trajectory = join(
+    prepared.intent.output_root,
+    'synthetic-trajectory.json',
+  );
+  const sidecar = join(prepared.intent.output_root, 'synthetic-usage.jsonl');
+  writeFileSync(
+    trajectory,
+    `${JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'fixture', version: '1', model_name: 'selected-model' },
+      steps: [
+        {
+          step_id: 1,
+          source: 'agent',
+          model_name: 'selected-model',
+          metrics: {
+            prompt_tokens: 1_000_000,
+            completion_tokens: 1_000_000,
+            cached_tokens: 1_000_000,
+          },
+          extra: { cache_write: 1_000_000 },
+        },
+        {
+          step_id: 2,
+          source: 'agent',
+          model_name: 'explicitly-unknown-model',
+          metrics: { prompt_tokens: 1 },
+        },
+      ],
+    })}\n`,
+  );
+  writeFileSync(
+    sidecar,
+    `${JSON.stringify({
+      type: 'obol.usage',
+      v: '2026-06-08',
+      provider: 'anthropic',
+      model: 'selected-model',
+      usage: {
+        input_tokens: 1_000_000,
+        cache_read_input_tokens: 1_000_000,
+        cache_creation_input_tokens: 1_000_000,
+        cache_creation: {
+          ephemeral_5m_input_tokens: 1_000_000,
+          ephemeral_1h_input_tokens: 0,
+        },
+        output_tokens: 1_000_000,
+      },
+    })}\n`,
+  );
+  const hostile = mkdtempSync(join(tmpdir(), 'hostile-pricing-'));
+  writeFileSync(
+    join(hostile, 'current.json'),
+    `${JSON.stringify({
+      as_of: 'hostile',
+      namespaces: {
+        litellm: {
+          'selected-model': {
+            input: 100,
+            output: 200,
+            cache_read: 300,
+            cache_write: 400,
+          },
+        },
+      },
+    })}\n`,
+  );
+  const obolModule = join(import.meta.dir, '..', 'src', 'obol', 'index.ts');
+  const child = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `const obol = await import(${JSON.stringify(obolModule)}); const trajectory = await obol.estimateTrajectory(${JSON.stringify(trajectory)}); const grader = await obol.estimateUsageSidecar(${JSON.stringify(sidecar)}); console.log(JSON.stringify({ trajectory, grader }));`,
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        OBOL_PRICING_DIR: hostile,
+        ...spec.public_env,
+      },
+    },
+  );
+  expect(child.status).toBe(0);
+  expect(child.stderr).toBe('');
+  const result = JSON.parse(child.stdout) as {
+    trajectory: {
+      est_cost_usd: number;
+      pricing_as_of: string;
+      unpriced_models: string[];
+      models: Record<string, { est_cost_usd: number | null }>;
+    };
+    grader: { est_cost_usd: number; pricing_as_of: string };
+  };
+  expect(result.trajectory.est_cost_usd).toBe(10);
+  expect(result.trajectory.pricing_as_of).toBe('2026-09-05');
+  expect(result.trajectory.unpriced_models).toEqual([
+    'explicitly-unknown-model',
+  ]);
+  expect(
+    result.trajectory.models['explicitly-unknown-model']?.est_cost_usd,
+  ).toBeNull();
+  expect(result.grader.est_cost_usd).toBe(10);
+  expect(result.grader.pricing_as_of).toBe('2026-09-05');
+  expect(spec.public_env.HOME.startsWith(prepared.intent.output_root)).toBe(
+    true,
+  );
+});
 
 test('V2 preparation freezes timeout, exact grader model and authority outside writable aliases', () => {
   const fx = projectionFixture();
@@ -516,6 +725,7 @@ test('V2 preparation freezes timeout, exact grader model and authority outside w
   ).toBe('start');
   expect(spec.entrypoint).toEqual(['/usr/bin/timeout']);
   expect(spec.max_time_s).toBe(120);
+  expect(spec.public_env).not.toHaveProperty('OBOL_PRICING_DIR');
   expect(spec.args[spec.args.indexOf('--grader-model') + 1]).toBe(
     'claude-grader',
   );

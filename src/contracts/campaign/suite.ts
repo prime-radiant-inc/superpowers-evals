@@ -41,7 +41,15 @@ export const ComparisonSchema = z.union([
 ]);
 export type Comparison = z.infer<typeof ComparisonSchema>;
 
-/** The finite V2 experiment declaration. Pricing and release policy are not inputs. */
+export const PricingSnapshotSchema = z
+  .object({
+    path: z.string().min(1),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export type PricingSnapshot = z.infer<typeof PricingSnapshotSchema>;
+
+/** The finite V2 experiment declaration. */
 export const SuiteSchema = z
   .object({
     schema_version: z.literal(2),
@@ -55,6 +63,7 @@ export const SuiteSchema = z
         max_time_s: FiniteNumberSchema.positive(),
       })
       .strict(),
+    pricing_snapshot: PricingSnapshotSchema.optional(),
   })
   .strict()
   .superRefine((suite, ctx) => {
