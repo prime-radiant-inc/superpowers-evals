@@ -42,7 +42,12 @@ function isJsonValue(value: unknown): value is JsonValue {
 }
 
 function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
-  return value !== null && !Array.isArray(value) && isJsonValue(value);
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    isJsonValue(value)
+  );
 }
 
 export function parseCompleteJsonl(

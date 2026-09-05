@@ -124,6 +124,9 @@ test.each([
   ['blank physical line', encode('{}\n\n'), 'invalid_jsonl'],
   ['null row', encode('null\n'), 'invalid_record'],
   ['array row', encode('[]\n'), 'invalid_record'],
+  ['string row', encode('"text"\n'), 'invalid_record'],
+  ['number row', encode('42\n'), 'invalid_record'],
+  ['boolean row', encode('true\n'), 'invalid_record'],
   ['broken JSON', encode('{broken}\n'), 'invalid_jsonl'],
   [
     'invalid UTF-8',
@@ -133,6 +136,18 @@ test.each([
 ] as const)('%s rows reject without returning a partial index', (_name, bytes, code) => {
   const error = evidenceError(() => parseCompleteJsonl(source, bytes));
   expect(error.code).toBe(code);
+});
+
+test('a primitive after a valid row rejects the whole input and its prefix', () => {
+  const bytes = encode('{"valid":true}\n42\n');
+  for (const operation of [
+    () => parseCompleteJsonl(source, bytes),
+    () => createRawPrefix(source, bytes),
+  ]) {
+    const error = evidenceError(operation);
+    expect(error.code).toBe('invalid_record');
+    expect(error.anchor).toEqual(anchor(2));
+  }
 });
 
 test('UTF-8 BOM rejects before row parsing', () => {
