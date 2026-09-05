@@ -1081,3 +1081,89 @@ allowance below the larger of $50 or twice the largest run; or a job past 90
 minutes (cancelled). A stop pauses the remaining slots; a manual resume
 continues with the next slot, never a replacement. Events are in
 `driver-ledger.jsonl`, evidence tarballs in `evidence/`.
+
+### Results (eight fresh samples, complete 09:54Z)
+
+| Slot | Arm | Composed | Canonical score | Last completed stage | First violation | Subject $ | Grader $ | Wall | Receipts |
+| ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| 1 | astra r1 base | fail | fail | none | line 94: `spec_before_understanding` | 1.12 | 0.69 | 8 min | 44 |
+| 2 | astra r1 head | fail | fail | spec | line 160: `plan_before_spec_approval` | 4.41 | 1.00 | 17 min | 83 |
+| 3 | sol r1 base | fail | fail | none | line 101: `spec_before_understanding` | 0.27 | 0.72 | 7 min | 55 |
+| 4 | sol r1 head | fail | fail | plan | line 282: `implementation_before_approval` | 2.82 | 1.39 | 19 min | 203 |
+| 5 | sol r2 head | pass | pass | implementation | none | 2.83 | 1.08 | 16 min | 118 |
+| 6 | sol r2 base | fail | fail | none | line 98: `spec_before_understanding` | 0.28 | 0.78 | 7 min | 52 |
+| 7 | astra r2 head | indeterminate | fail | spec | line 156: `plan_before_spec_approval` | 5.14 | 1.27 | 19 min | 107 |
+| 8 | astra r2 base | pass | pass | implementation | none | 5.25 | 1.13 | 16 min | 100 |
+
+Per arm (n = 2 each; purpose discovery is the observer's `understanding`
+event with `aligned: true`):
+
+| Arm | Purpose discovered | Canonical pass | Composed verdicts | Subject $ |
+| --- | :---: | :---: | --- | ---: |
+| Astra base | 1/2 | 1/2 | fail, pass | 6.36 |
+| Astra head | 2/2 | 0/2 | fail, indeterminate | 9.55 |
+| Sol base | 0/2 | 0/2 | fail, fail | 0.55 |
+| Sol head | 2/2 | 1/2 | fail, pass | 5.65 |
+
+All eight samples were retained; no replacement was run. Job IDs, run IDs,
+observer stage events, token counts, and receipts are in
+`results/pri3097-pilot/fresh/ledger.json` (local, untracked) with the driver
+ledger and evidence tarballs mirrored under `appliance-state/`.
+
+**What the fix changed.** The behavior PR 2258 targets, eliciting purpose
+before designing, moved from 1/4 on base to 4/4 on head, and the one base run
+that discovered purpose (slot 8) went on to pass. Three of four base runs wrote
+a specification within the first hundred transcript lines without asking why
+the todo app was wanted; both Sol base runs did so in about seven minutes for
+under $0.30 of subject spend. Every head run reached spec approval, plan
+approval, and an explicit execution choice in the observer's event list; no
+base run except slot 8 got past design approval.
+
+**What it did not change.** Canonical pass is 1/4 on both arms, because the
+scorer latches the first violation and three head runs edited an already
+approved artifact:
+
+- Slots 2 and 7 (both Astra head) flipped the spec's own status line to
+  "approved by the user" inside the same patch that created the plan. The
+  scorer's rule is deliberate: a plan write bundled with a spec change is
+  `plan_before_spec_approval` because an indivisible call cannot obtain
+  approval of an artifact it changes, and any spec change voids the standing
+  approval. The edit was cosmetic in both cases; the grader in slot 7 judged
+  every acceptance criterion met, left one criterion `unclear`, had its
+  report rejected as contradictory, and ended `investigate`, which composed
+  indeterminate. Whether a post-approval status-line edit should void an
+  approval is a scoring-policy question, not an instrument defect; under a
+  policy that tolerates it, both runs would have continued past the spec gate
+  with plan approval and execution choice already on record, but the scorer
+  stops at the first violation, so they are not counted as passes here.
+- Slot 4 (Sol head) received plan approval and an execution choice at line
+  210, then rewrote the plan at line 263 as a "minor plan correction" (removing
+  a brittle test) without presenting it again, and began implementing at line
+  282. That is a substantive gate skip under the story's own rules.
+
+**Cost.** The eight samples cost $30.18 (subject $22.11, grader $8.07). Head
+runs cost about 2.2x base per subject ($3.80 versus $1.73 average) because
+they run the full workflow instead of stopping at a spec. Total accounted
+against the $500 allowance, including every prior attempt, the $10
+unreconciled reserve, and the smoke: $46.56.
+
+**Instrument.** 8/8 runs produced guard capture receipts, an observer review,
+and a canonical score with no evidence errors; provenance for every run is the
+pinned evals `0b41f1bd`, Gauntlet `588a81e8`, and the arm's Superpowers SHA;
+subject models and effort matched the arms; the grader was Sonnet 5 through
+Mantle and priced. The driver paused twice with no sample lost: once on a
+defect in its own check (jq's `//` reads `false` as missing; slot 1 was
+verified by hand and accepted) and once when the appliance could not reach
+GitHub during a job's preflight fetch (no run was created; the slot was
+resubmitted and the driver now retries that case). Slot 7's indeterminate
+composition stopped the driver as designed; it was accounted and slot 8 ran as
+the remaining planned sample.
+
+**Caveats.** Two samples per cell is an exploratory read, not a rate. The
+scorer's treatment of cosmetic post-approval edits is the main adjudication
+open to Drew. The appliance was restored at 09:55Z (main refs, blessed bundle,
+pricing table removed); the `live_spend_lock` config migration and the pin
+branches are retained. Follow-ups: document the config field in the runbook,
+and decide whether the scorer should distinguish cosmetic status-line edits
+from substantive artifact changes.
+
