@@ -410,7 +410,16 @@ function observeRoot(root: FinalStateRoot): FinalStateNode[] {
     }
 
     const afterEntries = readEntries(absolutePath, true);
-    const after = readStats(absolutePath, true);
+    let after: BigIntStats;
+    if (relativeParts.length === 0) {
+      try {
+        after = fstatSync(pin.fd, { bigint: true });
+      } catch {
+        sourceUnavailable();
+      }
+    } else {
+      after = readStats(absolutePath, true);
+    }
     if (!sameDirectory(before, after, beforeEntries, afterEntries)) {
       sourceChanged();
     }

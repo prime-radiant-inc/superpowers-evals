@@ -185,6 +185,45 @@ describe('observer final-state inventory', () => {
     expect(snapshotTree(base)).toEqual(originalSource);
   });
 
+  const pinnedViaPathCases: readonly {
+    name: string;
+    prepare?: (base: string) => void;
+  }[] = [
+    {
+      name: 'empty',
+      prepare: (base) => {
+        rmSync(join(base, 'logs', 'parent.jsonl'));
+        rmSync(join(base, 'workdir', 'design.md'));
+      },
+    },
+    { name: 'file-bearing' },
+  ];
+
+  for (const pathCase of pinnedViaPathCases) {
+    test(`accepts unchanged ${pathCase.name} roots through local pinned-path symlinks`, () => {
+      const { base, roots } = fixture();
+      pathCase.prepare?.(base);
+      const realPin = credentialScope.pinAbsoluteDir.bind(credentialScope);
+      let aliasNumber = 0;
+      const pinSpy = spyOn(
+        credentialScope,
+        'pinAbsoluteDir',
+      ).mockImplementation((path, label) => {
+        const pin = realPin(path, label);
+        const viaPath = join(base, `pinned-via-${aliasNumber++}`);
+        symlinkSync(path, viaPath);
+        return { ...pin, viaPath };
+      });
+
+      try {
+        const candidate = captureFinalState(roots);
+        expect(() => verifyFinalState(roots, candidate)).not.toThrow();
+      } finally {
+        pinSpy.mockRestore();
+      }
+    });
+  }
+
   test('rejects a transcript append after candidate capture without changing evidence', () => {
     const { base, roots } = fixture();
     const candidate = captureFinalState(roots);
