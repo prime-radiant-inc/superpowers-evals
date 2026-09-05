@@ -209,6 +209,7 @@ const DELIVERY_TABLE: readonly ExpectedDelivery[] = [
   envRow('codex', 'codex', 'glm_5_2_responses', 'GLM_API_KEY'),
   envRow('codex', 'codex', 'openai_responses', 'OPENAI_API_KEY'),
   envRow('codex', 'codex', 'openai_responses_56sol', 'OPENAI_API_KEY'),
+  envRow('codex', 'codex', 'openai_responses_6astra', 'OPENAI_API_KEY'),
   envRow('codex', 'codex', 'openai_responses_56luna', 'OPENAI_API_KEY'),
   // gemini: api-key mode is derived from credential.auth.
   {

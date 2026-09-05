@@ -1,0 +1,6 @@
+schema_version: 1
+name: codex_sol_pr2258_head
+agent: codex
+os: linux
+credential: openai_responses_56sol
+superpowers: 069edf3ffc2ffdce80a84d3344a4064acec7e10c
