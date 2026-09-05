@@ -84,6 +84,32 @@ aligned with that required status; the actual check commands are unchanged.
 Linux CI and normal repository merge requirements govern landing these fixes.
 Final merged revisions belong in the next run's pinned manifest.
 
+Gauntlet PR 16 merged normally to main at
+`588a81e80fe3cd7b7d3bc2c7f4207bed4ecb14df` after its Linux check passed.
+Evals' first two Linux checks exposed ten failures outside the observer tests.
+Three lock failures share an inode-reuse cause: saved device/inode numbers can
+identify a successor after the original object is deleted. Lease acquisition,
+reclamation and release now retain open identity references through their use.
+Deterministic replacement tests reproduce the failures without depending on
+the host filesystem's allocation timing; the existing Linux race tests remain.
+
+The other failures came from fixtures missing their fake Claude binary or a
+real main-branch Superpowers checkout, plus an Antigravity probe that used Bun's
+startup PATH instead of the current explicit PATH. The Antigravity regression
+failed before its fix. Removing installed agent CLIs from PATH reproduced all
+five affected runner failures, then the same eight tests passed after correcting
+the fixtures. The environment, Antigravity and campaign CLI suites passed all
+68 tests together. These are source and fixture repairs, not skipped checks;
+Evals remains unmerged pending independent review and full Linux qualification.
+
+Independent lock review additionally found that directory opens must reject
+FIFO replacements and inspection errors must preserve retryable release. Both
+were reproduced before correction. The final focused lock/provisioning run
+passed 64 tests, including real FIFO child-process and permission-recovery
+regressions. Typecheck and targeted formatting checks passed. A full local
+check was deliberately interrupted before completion when these findings
+arrived; it is not a passing full-suite receipt. Full Linux CI is still required.
+
 No paid run was launched during this repair. Prior canonical receipts and the
 $4.7709727 observed estimate plus $10 cancellation reserve remain unchanged.
 
