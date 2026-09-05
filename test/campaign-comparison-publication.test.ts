@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,6 +23,7 @@ import {
   jcsCanonicalize,
   sha256Hex,
 } from '../src/contracts/campaign/digest.ts';
+import { ReportSchema } from '../src/contracts/campaign/report.ts';
 import { writeAttemptManifest } from '../src/runner/manifest.ts';
 import {
   blockActivation,
@@ -170,7 +172,7 @@ test('a live bound controller with a foreign lease cannot expose interrupted beh
   ).toThrow('active');
 });
 
-function completedPublicationFixture() {
+function completedPublicationFixture(validityBlockId = 'primary') {
   const f = lifecycleFixture();
   roots.push(f.root);
   const resultsRoot = join(f.root, 'custom-results');
@@ -265,7 +267,7 @@ function completedPublicationFixture() {
     campaign_id: f.experiment.campaign_id,
     input_digest: f.experiment.input_digest,
     start_id: 'start',
-    block_id: 'primary',
+    block_id: validityBlockId,
     at: fixtureTime(6),
     verdict: 'valid',
     details: {
@@ -316,6 +318,38 @@ function completedPublicationFixture() {
   );
   return { ...f, resultsRoot, observations };
 }
+function finishPublicationFixture(
+  f: ReturnType<typeof completedPublicationFixture>,
+) {
+  const w = f.elect();
+  w.commitTransition(
+    transition(
+      'ended',
+      { outcome: 'completed', reason: 'done', cancel_intent: null },
+      7,
+    ),
+  );
+  const body = `${jcsCanonicalize({ start: startTransition(f.experiment).payload, controller: { pid: 102, birth: 'controller', boot_id: 'boot' }, launcher_role_released: true, authorized_terminator: { pid: 102, birth: 'controller', boot_id: 'boot' }, observed_at: fixtureTime(8) })}\n`;
+  writeFileSync(join(f.campaignDir, 'termination.json'), body);
+  w.commitTransition(
+    transition(
+      'termination_verified',
+      {
+        start_id: 'start',
+        stopped: f.observations.map((o) => o.stopped),
+        process_evidence: [
+          {
+            path: 'termination.json',
+            bytes: Buffer.byteLength(body),
+            sha256: sha256Hex(body),
+          },
+        ],
+      },
+      8,
+    ),
+  );
+  w.release();
+}
 test('producer publications flow through one real journal prefix, remain behavior blind while active, and seal the completed anchor', () => {
   const f = completedPublicationFixture();
   const active = publication.readComparisonReadout(f, {
@@ -341,34 +375,7 @@ test('producer publications flow through one real journal prefix, remain behavio
     observe: () => {
       if (!advanced) {
         advanced = true;
-        const w = f.elect();
-        w.commitTransition(
-          transition(
-            'ended',
-            { outcome: 'completed', reason: 'done', cancel_intent: null },
-            7,
-          ),
-        );
-        const body = `${jcsCanonicalize({ start: startTransition(f.experiment).payload, controller: { pid: 102, birth: 'controller', boot_id: 'boot' }, launcher_role_released: true, authorized_terminator: { pid: 102, birth: 'controller', boot_id: 'boot' }, observed_at: fixtureTime(8) })}\n`;
-        writeFileSync(join(f.campaignDir, 'termination.json'), body);
-        w.commitTransition(
-          transition(
-            'termination_verified',
-            {
-              start_id: 'start',
-              stopped: f.observations.map((o) => o.stopped),
-              process_evidence: [
-                {
-                  path: 'termination.json',
-                  bytes: Buffer.byteLength(body),
-                  sha256: sha256Hex(body),
-                },
-              ],
-            },
-            8,
-          ),
-        );
-        w.release();
+        finishPublicationFixture(f);
       }
       return 'live';
     },
@@ -413,4 +420,75 @@ test('producer publications flow through one real journal prefix, remain behavio
   expect(damaged.report.comparisons[0]!.paired.pass_rate.n).toBe(0);
   expect(damaged.report.accounting.subject_cost_usd.known_subtotal).toBe(3);
   expect(damaged.report.complete).toBe(false);
+});
+
+for (const change of [
+  'subtotal',
+  'role completeness',
+  'accounting completeness',
+  'omit termination',
+  'omit attempt',
+  'empty inventory',
+] as const) {
+  test(`seal refuses caller-edited ${change} before publishing`, () => {
+    const f = completedPublicationFixture();
+    finishPublicationFixture(f);
+    const canonical = publication.readComparisonReport(f);
+    const edited = structuredClone(canonical);
+    if (change === 'subtotal')
+      edited.report.accounting.subject_cost_usd.known_subtotal += 100;
+    if (change === 'role completeness')
+      edited.report.attempts[0]!.evidence.subject_cost_complete = false;
+    if (change === 'accounting completeness') {
+      edited.report.accounting.subject_cost_usd.complete = false;
+      edited.report.accounting.subject_cost_usd.observed = 1;
+    }
+    if (change === 'omit termination')
+      edited.anchor.artifacts = edited.anchor.artifacts.filter(
+        (ref) => ref.path !== 'termination.json',
+      );
+    if (change === 'omit attempt')
+      edited.anchor.artifacts = edited.anchor.artifacts.filter(
+        (ref) => ref.root !== 'results',
+      );
+    if (change === 'empty inventory') edited.anchor.artifacts = [];
+    expect(ReportSchema.safeParse(edited).success).toBe(true);
+    expect(() =>
+      sealing.sealReport({ campaignDir: f.campaignDir, report: edited }),
+    ).toThrow('canonical');
+    expect(existsSync(join(f.campaignDir, 'report.json'))).toBe(false);
+    expect(existsSync(join(f.campaignDir, 'report-seal.json'))).toBe(false);
+  });
+}
+test('the unchanged canonical completed report seals idempotently', () => {
+  const f = completedPublicationFixture();
+  finishPublicationFixture(f);
+  const canonical = publication.readComparisonReport(f);
+  const first = sealing.sealReport({
+    campaignDir: f.campaignDir,
+    report: canonical,
+  });
+  const bytes = readFileSync(join(f.campaignDir, 'report.json'));
+  const second = sealing.sealReport({
+    campaignDir: f.campaignDir,
+    report: canonical,
+  });
+  expect(second).toEqual(first);
+  expect(bytes.equals(publication.canonicalReportBytes(canonical))).toBe(true);
+  expect(readFileSync(join(f.campaignDir, 'report.json'))).toEqual(bytes);
+});
+
+test('seal rejects a forged analytical completeness claim despite authentic artifact bytes', () => {
+  const f = completedPublicationFixture('foreign-block');
+  finishPublicationFixture(f);
+  const canonical = publication.readComparisonReport(f);
+  expect(canonical.report.status).toBe('completed');
+  expect(canonical.report.complete).toBe(false);
+  const forged = structuredClone(canonical);
+  forged.report.complete = true;
+  expect(ReportSchema.safeParse(forged).success).toBe(true);
+  expect(() =>
+    sealing.sealReport({ campaignDir: f.campaignDir, report: forged }),
+  ).toThrow('canonical');
+  expect(existsSync(join(f.campaignDir, 'report.json'))).toBe(false);
 });

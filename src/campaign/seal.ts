@@ -2,7 +2,12 @@ import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
 import { type Report, ReportSchema } from '../contracts/campaign/report.ts';
 import { readPublishedArtifactBytes } from './attempt-publish.ts';
 import { readCommittedPrefix } from './execution-journal.ts';
-import { publishReport, publishReportFile } from './report-publication.ts';
+import {
+  canonicalReportBytes,
+  publishReport,
+  publishReportFile,
+  readComparisonFromPrefix,
+} from './report-publication.ts';
 /** Completed execution seals the same immutable report anchor. Interrupted
  * reports remain publishable without claiming final termination or a seal. */
 export function sealReport(args: { campaignDir: string; report: Report }): {
@@ -28,16 +33,28 @@ export function sealReport(args: { campaignDir: string; report: Report }): {
     prefix.projection.experiment.campaign_id !== value.anchor.campaign_id
   )
     throw new Error('seal requires the exact completed final journal prefix');
-  for (const ref of value.anchor.artifacts)
-    readPublishedArtifactBytes(value.anchor.roots[ref.root], ref);
-  const published = publishReport(args);
+  const canonical = readComparisonFromPrefix({
+    campaignDir: args.campaignDir,
+    resultsRoot: value.anchor.roots.results,
+    prefix,
+  });
+  if (!canonicalReportBytes(canonical).equals(canonicalReportBytes(value)))
+    throw new Error(
+      'seal requires the canonical report derived from the exact committed prefix',
+    );
+  for (const ref of canonical.anchor.artifacts)
+    readPublishedArtifactBytes(canonical.anchor.roots[ref.root], ref);
+  const published = publishReport({
+    campaignDir: args.campaignDir,
+    report: canonical,
+  });
   publishReportFile(
     args.campaignDir,
     'report-seal.json',
     `${jcsCanonicalize({
       schema_version: 'quorum.comparison-seal/v1',
       report_digest: published.digest,
-      anchor: value.anchor,
+      anchor: canonical.anchor,
     })}\n`,
   );
   return published;

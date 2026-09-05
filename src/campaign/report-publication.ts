@@ -26,12 +26,32 @@ export function readComparisonReadout(
   args: ReadComparisonArgs,
   processes: Pick<CampaignProcessControl, 'observe'> = campaignProcesses,
 ): Report {
+  const status = observeCampaignStatus(args, processes);
+  const prefix = readCommittedPrefix(args.campaignDir);
+  const state = prefix.projection;
+  const sessionProcess = state.controller ?? state.start?.launcher;
+  return readComparisonFromPrefix({
+    campaignDir: args.campaignDir,
+    resultsRoot: args.resultsRoot,
+    prefix,
+    interrupted:
+      !state.ended &&
+      status.state === 'interrupted' &&
+      sessionProcess !== undefined &&
+      processes.observe(sessionProcess) === 'dead',
+  });
+}
+/** Authenticate evidence and derive the complete report from one supplied
+ * committed-prefix read. Readout and sealing share this exact measurement path. */
+export function readComparisonFromPrefix(args: {
+  campaignDir: string;
+  resultsRoot: string;
+  prefix: ReturnType<typeof readCommittedPrefix>;
+  interrupted?: boolean;
+}): Report {
   if (!isAbsolute(args.resultsRoot) || !isAbsolute(args.campaignDir))
     throw new Error('report storage roots must be explicit absolute paths');
-  const status = observeCampaignStatus(args, processes);
-  const { projection: state, committed } = readCommittedPrefix(
-    args.campaignDir,
-  );
+  const { projection: state, committed } = args.prefix;
   const artifacts: Report['anchor']['artifacts'] = [];
   const evidenceByAttempt = new Map(
     [...state.attempts].map(([id, a]) => {
@@ -83,7 +103,6 @@ export function readComparisonReadout(
       compareText(a.sha256, b.sha256) ||
       a.bytes - b.bytes,
   );
-  const sessionProcess = state.controller ?? state.start?.launcher;
   const last = committed.at(-1);
   return ReportSchema.parse({
     report: foldComparisonReport({
@@ -91,11 +110,7 @@ export function readComparisonReadout(
       state,
       evidenceByAttempt,
       validityByBlock,
-      interrupted:
-        !state.ended &&
-        status.state === 'interrupted' &&
-        sessionProcess !== undefined &&
-        processes.observe(sessionProcess) === 'dead',
+      interrupted: args.interrupted ?? false,
     }),
     anchor: {
       campaign_id: state.experiment.campaign_id,
