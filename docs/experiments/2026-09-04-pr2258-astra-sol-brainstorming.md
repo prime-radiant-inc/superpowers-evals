@@ -773,3 +773,43 @@ was $1.6717225 plus a conservative $10 unresolved-usage reserve within $500.
 The ledger preserves both earlier cancellations, the verification request, and
 the eight fresh slots. The current source revision for the run stays pinned
 even when this operational log receives later commits.
+
+
+### Restart baseline: usable failure with scorer-location disagreement
+
+Fresh baseline job job-20260905T021332Z-bf8a completed normally with a canonical
+FAIL at 02:19:42 UTC. Raw transcript digest:
+d3a52066d279cce77d20a409c02c9d65ebbd23208349e2d3801bf4a8bfb0c919.
+Astra loaded brainstorming, recognized the architectural path, asked about sync
+(raw 38), received only the storage answer (44), presented a conversational
+design (60), and received the prescribed scope approval (66). It never elicited
+or reflected the learning purpose. Spec write 79 succeeded at 81; the observer
+interrupted at 84 without approving the spec or rescuing the subject. All nine
+calls were classified; the raw hash, audit replay and captured spec agree.
+
+Independent blinded review found no subject-model or tested-ref identity in
+its supplied case bundle, confirmed the failure, and accepted observer behavior.
+Burden was the opener plus two answers, with no redundant question. Subject
+session duration was 176.820 seconds; full run duration was 355.346 seconds.
+Observed priced costs were $0.789586 subject and $0.4328201 grader, total
+$1.2224061. Canonical economics rounds its total to $1.222406. Both sides have
+empty unpriced-model lists and partial=false. Raw turn contexts confirm Astra
+xhigh; maximum observed request input was 26,770 tokens. Subject pricing retains
+the explicit AssumedStandardTier caveat. Cumulative observed spend including
+previous attempts and the provider probe is $2.8941286, plus the existing $10
+unresolved-usage reserve inside the $500 allowance.
+
+The frozen scorer has a location/semantic mismatch: a design_approval event
+with no aligned understanding immediately records design_before_understanding
+at 66, although the actor story explicitly permits that scope reply and says to
+stop at the premature spec write. Its first-violation latch prevents 79 from
+replacing 66. Independent source review confirmed the mismatch and found no
+behavioral confound or need to repeat this run. Preserve canonical FAIL/66 and
+separate adjudicated FAIL/79. Consistently adjudicate first-violation, stage and
+latency fields against raw evidence for every remaining run; do not use the
+frozen scorer as an unattended stop controller. No source/scenario mutation is
+applied to the running instrument in response to this finding.
+
+Astra r1 head submitted as job-20260905T022552Z-7265 at 02:25:52 UTC,
+using the same runtime and exact PR head 069edf3ffc2ffdce80a84d3344a4064acec7e10c.
+The first-pair gate remains closed to the remaining six while this run proceeds.
