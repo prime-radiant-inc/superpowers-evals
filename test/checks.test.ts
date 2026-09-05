@@ -1,6 +1,13 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -339,17 +346,26 @@ test('runPhase keeps SUPERPOWERS_ROOT for Kimi bootstrap checks but not generate
   }
 });
 
-test('runPhase pins HOME to runDir/home for flat and nested config dirs', async () => {
-  for (const configParts of [[], ['.pi', 'agent']]) {
-    const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
-    const runDir = mkdtempSync(join(tmpdir(), 'run-'));
-    const expectedHome = join(runDir, 'home');
-    const configDir = join(expectedHome, ...configParts);
-    const out = join(workdir, 'home.txt');
-    const checksSh = checksShWith(
-      `pre() {\n  printf '%s' "$HOME" > '${out}'\n}\npost() { :; }\n`,
-    );
+test('runPhase uses a cleaned scratch HOME outside staging and the subject home', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'check-home-'));
+  const workdir = join(root, 'workdir');
+  const runDir = join(root, 'attempt', 'staging', 'run-id');
+  const subjectHome = join(root, 'attempt', 'home');
+  const configDir = join(subjectHome, '.claude');
+  const subjectCredential = join(configDir, 'credential');
+  const observedHome = join(workdir, 'check-home.txt');
+  const checksSh = join(root, 'scenario', 'checks.sh');
+  mkdirSync(workdir, { recursive: true });
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(configDir, { recursive: true });
+  mkdirSync(join(root, 'scenario'), { recursive: true });
+  writeFileSync(subjectCredential, 'subject-only');
+  writeFileSync(
+    checksSh,
+    `pre() {\n  printf '%s' "$HOME" > '${observedHome}'\n  touch "$HOME/marker"\n}\npost() { :; }\n`,
+  );
 
+  try {
     const result = await runPhase({
       checksSh,
       phase: 'pre',
@@ -358,8 +374,47 @@ test('runPhase pins HOME to runDir/home for flat and nested config dirs', async 
       runDir,
       configDir,
     });
+    const checkHome = readFileSync(observedHome, 'utf8');
+
     expect(result.exitCode).toBe(0);
-    expect(readFileSync(out, 'utf8')).toBe(expectedHome);
+    expect(existsSync(join(runDir, 'home'))).toBe(false);
+    expect(checkHome.startsWith(`${runDir}/`)).toBe(false);
+    expect(checkHome.startsWith(`${subjectHome}/`)).toBe(false);
+    expect(existsSync(checkHome)).toBe(false);
+    expect(readFileSync(subjectCredential, 'utf8')).toBe('subject-only');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runPhase cleans its scratch HOME after a failing check phase', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'check-home-failure-'));
+  const workdir = join(root, 'workdir');
+  const runDir = join(root, 'attempt', 'staging', 'run-id');
+  const observedHome = join(workdir, 'check-home.txt');
+  const checksSh = join(root, 'checks.sh');
+  mkdirSync(workdir, { recursive: true });
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    checksSh,
+    `pre() {\n  printf '%s' "$HOME" > '${observedHome}'\n  touch "$HOME/marker"\n  return 42\n}\npost() { :; }\n`,
+  );
+
+  try {
+    const result = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+      runDir,
+    });
+    const checkHome = readFileSync(observedHome, 'utf8');
+
+    expect(result.exitCode).toBe(42);
+    expect(existsSync(join(runDir, 'home'))).toBe(false);
+    expect(existsSync(checkHome)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
