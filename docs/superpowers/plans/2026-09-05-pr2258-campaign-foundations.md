@@ -204,7 +204,7 @@ git commit -m 'Report unreadable campaign entries independently (PRI-3097)'
 ### Task 4: Carry a selected pricing snapshot into the worker
 
 **Files:**
-- Modify: `src/contracts/campaign/suite.ts`, `src/campaign/registration.ts`, `src/campaign/container-spawner.ts`, `src/campaign/controller.ts`, `src/campaign/arm-suite-check.ts`
+- Modify: `src/contracts/campaign/suite.ts`, `src/contracts/campaign/execution.ts`, `src/campaign/registration.ts`, `src/campaign/container-spawner.ts`, `src/campaign/controller.ts`, `src/campaign/arm-suite-check.ts`
 - Create: `src/campaign/pricing-snapshot.ts`, `test/campaign-pricing-snapshot.test.ts`
 - Test: existing suite-contract, registration and container-spawner test files owning the touched seams
 
@@ -226,6 +226,9 @@ Export `PricingSnapshotSchema` and infer the type from it. `SuiteSchema` gains
 and the digest of the entire suite carry its identity; do not add a second field
 or legacy-format conversion. `PrepareContainerExecutionArgs` gains
 `pricingSnapshot?: PricingSnapshot`; the controller passes the frozen selection.
+The strict `AttemptRuntimeSpecSchema.public_env` gains only
+`OBOL_PRICING_DIR: AbsoluteRuntimePathSchema.optional()`; arbitrary environment
+keys remain rejected. Test runtime schema round-trip and nonabsolute path refusal.
 
 - [ ] **Step 1: Add RED tests for selection and source integrity.** Create a
 temporary Evals root with a small real obol `current.json` table. Parse an explicit
