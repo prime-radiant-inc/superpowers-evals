@@ -38,9 +38,10 @@ import { prepare } from './preflight.ts';
 import { cancelJob, runWorker, spawnDetachedWorker } from './process.ts';
 import { prune as pruneResults } from './prune.ts';
 import { costsPayload, showPayload, statusPayload } from './summary.ts';
-import type {
-  LoadedApplianceConfig,
-  LoadedApplianceStateConfig,
+import {
+  GraderModelSchema,
+  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
 } from './types.ts';
 
 interface BaseCommandArgs {
@@ -337,7 +338,7 @@ function normalizeRunGraderModel(
   if (
     occurrences.length !== 1 ||
     model === undefined ||
-    !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model)
+    !GraderModelSchema.safeParse(model).success
   ) {
     rejectSelection(
       '--grader-model requires exactly one nonempty model identifier',

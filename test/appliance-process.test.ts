@@ -566,6 +566,10 @@ test('liveCommandArgs preserves the legitimate arguments of an unmodified comman
   }[] = [
     { kind: 'run', argv: LEGAL_RUN_ARGV },
     {
+      kind: 'run',
+      argv: [...LEGAL_RUN_ARGV, '--grader-model', 'anthropic.claude-sonnet-5'],
+    },
+    {
       // An omitted --credential is the agent default, preserved verbatim.
       kind: 'run',
       argv: [
@@ -624,6 +628,33 @@ test('liveCommandArgs preserves the legitimate arguments of an unmodified comman
     expect(
       args.slice(args.indexOf('exec') + 1).slice(-entry.argv.length),
     ).toEqual([...entry.argv]);
+  }
+});
+
+test('liveCommandArgs refuses malformed or repeated grader overrides', () => {
+  const cfg = loaded();
+  for (const tail of [
+    ['--grader-model'],
+    ['--grader-model', ''],
+    ['--grader-model', '   '],
+    ['--grader-model', '--out-root'],
+    [
+      '--grader-model',
+      'anthropic.claude-sonnet-5',
+      '--grader-model',
+      'another-model',
+    ],
+    [
+      '--grader-model',
+      'anthropic.claude-sonnet-5',
+      '--out-root',
+      '/tmp/elsewhere',
+    ],
+  ]) {
+    const job = leaseBoundRecord(cfg, 'run', [...LEGAL_RUN_ARGV, ...tail]);
+    expect(() =>
+      liveCommandArgs(cfg, job, liveLease(), SUPERVISOR_FILE),
+    ).toThrow(ApplianceError);
   }
 });
 

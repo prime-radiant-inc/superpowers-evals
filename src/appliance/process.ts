@@ -42,11 +42,12 @@ import {
   preflightLiveJob,
 } from './preflight.ts';
 import { writeProvenance } from './provenance.ts';
-import type {
-  JobRecord,
-  JobStatus,
-  LoadedApplianceConfig,
-  LoadedApplianceStateConfig,
+import {
+  GraderModelSchema,
+  type JobRecord,
+  type JobStatus,
+  type LoadedApplianceConfig,
+  type LoadedApplianceStateConfig,
 } from './types.ts';
 
 const PID_DIR = '/workspace/evals/results/.appliance-pids';
@@ -817,9 +818,9 @@ function requireSelectedRunAllOption(
 /**
  * The exact Quorum command a `run` record authorizes. Submission builds this
  * argv from the normalized scenario and the one selected cell and forwards
- * nothing else, so it is RECONSTRUCTED here rather than pattern matched: the
- * scenario is the only free token, and it must still be a relative path under
- * the trusted scenarios root the normalizer produces.
+ * the optional grader model, so it is reconstructed here. The scenario must
+ * stay under the trusted root, and the only permitted suffix is one validated
+ * grader model selection.
  */
 function requireRunCommand(
   job: JobRecord,
@@ -847,6 +848,13 @@ function requireRunCommand(
       ? []
       : ['--credential', selection.credential]),
   ];
+  if (
+    argv.length === expected.length + 2 &&
+    argv[expected.length] === '--grader-model' &&
+    GraderModelSchema.safeParse(argv[expected.length + 1]).success
+  ) {
+    expected.push('--grader-model', argv[expected.length + 1] as string);
+  }
   if (
     argv.length !== expected.length ||
     argv.some((arg, index) => arg !== expected[index])
