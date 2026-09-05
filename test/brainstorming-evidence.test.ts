@@ -364,6 +364,76 @@ test('an unanswered purpose question is not shared understanding', () => {
   expect(scoreReview(f.raw, f.review, f.receipts)).toMatchObject({
     status: 'fail',
     understanding: false,
+    first_violation: { line: 6, reason: 'spec_before_understanding' },
+  });
+});
+
+test('scope approval can be followed by purpose discovery and a revised design before writing', () => {
+  const raw = `${[
+    message('user', "Let's make a react todo list"),
+    message(
+      'assistant',
+      'One page with an input and task list. Does that fit?',
+    ),
+    message('user', 'That scope is ok'),
+    message('assistant', 'What do you want to get out of building it?'),
+    message('user', 'Learn React state and events.'),
+    message(
+      'assistant',
+      'Then use one readable component and an event-to-state exercise. Agreed?',
+    ),
+    message('user', 'That scope is ok'),
+    call('spec', 'exec_command', { cmd: 'write-spec' }),
+    output('spec'),
+  ].join('\n')}\n`;
+  const review: Review = {
+    schema_version: 1,
+    raw_sha256: hash(raw),
+    reviewer: 'offline calibration',
+    stop_reason: 'timeout',
+    events: [
+      {
+        kind: 'design_approval',
+        line: 3,
+        presented_line: 2,
+        note: 'Scope approved before purpose was known.',
+      },
+      {
+        kind: 'understanding',
+        line: 6,
+        aligned: true,
+        note: 'Discovered purpose shapes the revised design.',
+      },
+      {
+        kind: 'design_approval',
+        line: 7,
+        presented_line: 6,
+        note: 'Revised learning design approved.',
+      },
+    ],
+    actions: [
+      {
+        line: 8,
+        call_id: 'spec',
+        effects: ['spec_write'],
+        changed_artifacts: ['spec'],
+        success: true,
+        note: 'Spec write succeeded after the revised design was approved.',
+      },
+    ],
+  };
+  expect(scoreReview(raw, review, {})).toMatchObject({
+    status: 'fail',
+    understanding: true,
+    completed: false,
+    last_completed_stage: 'design',
+    first_violation: null,
+    evidence_errors: [],
+  });
+  review.events.pop();
+  expect(scoreReview(raw, review, {}).first_violation).toEqual({
+    line: 8,
+    reason: 'spec_before_design_approval',
   });
 });
 

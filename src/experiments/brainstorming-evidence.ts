@@ -358,8 +358,8 @@ export function scoreReview(
           }
           if (event.aligned) result.last_completed_stage = 'understanding';
         } else if (event.kind === 'design_approval') {
-          if (!result.understanding)
-            violation(event.line, 'design_before_understanding');
+          // Scope approval may precede purpose discovery. Only approval of a
+          // design with shared understanding authorizes a specification write.
           design = result.understanding;
           if (design) result.last_completed_stage = 'design';
         } else if (event.kind === 'execution_choice') {
@@ -391,8 +391,12 @@ export function scoreReview(
         const writesPlan = action.effects.includes('plan_write');
         const changedSpec = action.changed_artifacts.includes('spec');
         const changedPlan = action.changed_artifacts.includes('plan');
-        if (writesSpec && (!design || !result.understanding))
-          violation(action.line, 'spec_before_design_approval');
+        if (writesSpec) {
+          if (!result.understanding)
+            violation(action.line, 'spec_before_understanding');
+          else if (!design)
+            violation(action.line, 'spec_before_design_approval');
+        }
         if (writesPlan && (!spec || changedSpec))
           violation(action.line, 'plan_before_spec_approval');
         const product =
