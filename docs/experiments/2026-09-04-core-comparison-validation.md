@@ -4,10 +4,11 @@
 
 **Tracking:** [PRI-2874](https://linear.app/prime-radiant/issue/PRI-2874/quorum-overhaul-campaign-platform-comparative-evals-as-configuration)
 
-**Status:** Local implementation and final staff review complete; all final review
-findings corrected and independently re-reviewed. The full portable gate passed on
-`560ebeb1`. Linux, installed-appliance, paid comparison and timed usability checks
-remain unperformed.
+**Status:** Core comparison is merged and pushed at `607b7818`. Post-push failure
+repairs are complete and independently reviewed at `25ff1002`; the standard portable
+gate and all 86 scenarios pass. The failures and their reproduced causes are recorded
+below. Linux appliance, installed-appliance, paid comparison and timed usability
+checks remain unperformed.
 
 ## Question and scope
 
@@ -40,9 +41,12 @@ They cannot resume dispatch under the old identity.
 - Final reviewed checkpoint/correction base: `0c42cf7728b026b083423ca99e2c48436d02b463`.
 - Final correction commits: `31e784b302a1d4245d32e1faa241a38a421f6eaf` and
   `560ebeb1ece1501ddd136db4a74a82219d8bc2bf`.
-- Accepted executable/test source: `560ebeb1ece1501ddd136db4a74a82219d8bc2bf`;
+- Pre-rebase accepted executable/test source: `560ebeb1ece1501ddd136db4a74a82219d8bc2bf`;
   the final plan/spec/validation checkpoint is documentation only.
-- Local runtime: Bun 1.3.14 on macOS. No Docker, remote or installed-appliance
+- Shipped rebased source: `607b78183840de0b8e45b4d5151a76e7f21aca03`.
+- Post-push repair source: `a791cbf0` (explicit fixture home), `fd9692e4` (isolated
+  test launcher) and `25ff1002031529c6f5588cf9b68b6ca221efa349` (fixture permissions).
+- Local runtime: Bun 1.3.14 on macOS. No Docker or remote/installed-appliance
   operation was performed. No existing campaign/results artifacts were migrated.
 
 Task-specific reports, review findings and full logs are retained locally under
@@ -116,6 +120,53 @@ preparation-produced authority/registry, publisher, readers and seal. External w
 effects, host probe and controller time are fake. An internal launch dependency selects
 the test fixture while asserting the production target remains fixed. These are useful
 portable contracts, not execution of the production container entrypoint on Linux.
+
+## Post-push failure diagnosis and repair — 2026-09-05
+
+The rebased source contained a real integration-fixture mismatch: the brainstorming
+scenario setup requires `QUORUM_CODING_AGENT_HOME`, but its direct fixture did not
+supply it. Production already forwards that explicit home. Commit `a791cbf0` passes
+the fixture's intended home and seeds session evidence under the same path, retaining
+all pass/fail/indeterminate assertions.
+
+The local timeouts had a separately reproduced startup cause. The inherited macOS
+app temp directory contained 663,800 immediate entries. An empty Bun process took
+1,514.73ms beneath that directory, versus 12.65ms from the checkout and 11.61ms beneath
+`/tmp`. Enumerating those temp roots took 1,933.37ms and 1.4ms respectively. The pinned
+[Bun 1.3.14 resolver](https://github.com/oven-sh/bun/blob/bun-v1.3.14/src/resolver/resolver.zig#L2770)
+walks ancestor directories during startup. A local package boundary did not avoid
+the lookup. These controls establish the reproduced startup slowdown; they do not
+retrospectively prove the cause of every older stall.
+
+Root and dashboard checks now use `bun run test`, whose launcher establishes a
+private temp root before starting Bun, outside Git checkouts and independent of
+inherited app temp variables. Ordinary children inherit the same root. Successful
+runs remove their own scratch; failed or cancelled runs retain it and print its
+location. Real process tests cover isolation, ordinary child inheritance, sibling
+preservation, exit status and handled/default termination. Existing deadlines,
+retries, skips and production campaign behavior are unchanged.
+
+Independent review caught handled cancellation returning child exit 0; real SIGTERM
+and SIGINT regressions failed before correction and pass afterward. A subsequent
+full run passed every root assertion but exposed a lock fixture that left a renamed
+directory read-only. Its teardown now restores permissions after the unchanged
+failure and heartbeat assertions. Both corrections received scoped review acceptance.
+
+| Receipt | Result |
+|---|---|
+| Rebased local gate, `607b7818` | 3479 pass, 14 skip, 5 fail; 463.81s; four timeouts and the missing-home fixture; dashboard not reached |
+| [Linux CI on `607b7818`](https://github.com/prime-radiant-inc/superpowers-evals/actions/runs/33950144902) | 3483 pass, 14 skip, 1 fail; only the missing-home fixture failed |
+| Diagnostic full gate after home correction, `a791cbf0` | 3476 pass, 14 skip, 8 subprocess timeouts; 517.01s; dashboard not reached |
+| First isolated-temp full gate, `fd9692e4` | Root 3489 pass, 14 skip, 0 fail, 19676 assertions, 177.38s; wrapper exit 1 on fixture permission cleanup; dashboard not reached |
+| Final standard full gate, `25ff1002` | Exit 0; lint and both typechecks pass; root 3489 pass, 14 skip, 0 fail, 19676 assertions, 178.73s; dashboard 144 pass, 0 fail, 393 assertions, 1.08s |
+| Separate scenario validation | 86 scenarios, credentials and arms/suites pass |
+
+The final command was `QUORUM_TEST_TRACE_ROOT=/tmp/core-temp-fixed-full-traces bun run check`,
+on clean, frozen `25ff1002`. Full logs, failing receipts, timing controls, scoped
+reviews, traces and SHA-256 manifests are retained under the task evidence directory's
+`failure-debugging/` subdirectory. This is portable source/test evidence. Appliance
+execution, installed runtime behavior and native Windows test launching remain
+separate qualification work.
 
 ## Final review and architectural judgment
 
