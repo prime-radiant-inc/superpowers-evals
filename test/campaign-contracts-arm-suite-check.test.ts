@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkArmSuiteFiles } from '../src/campaign/arm-suite-check.ts';
+import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 
 function repo(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), 'arm-suite-check-'));
@@ -106,6 +107,33 @@ test('valid finite V2 suite cross-references cleanly', () => {
   });
 
   expect(check(root)).toEqual({ ok: true, errors: [], warnings: [] });
+});
+
+test('suite checks verify an explicitly selected pricing snapshot from the checked tree', () => {
+  const pricing = '{"as_of":"fixture","namespaces":{}}\n';
+  const selectedSuite = SUITE.replace(
+    'grader:',
+    `pricing_snapshot: {path: pricing/current.json, sha256: ${sha256Hex(pricing)}}\ngrader:`,
+  );
+  const valid = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': selectedSuite,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+    'pricing/current.json': pricing,
+  });
+  expect(check(valid)).toEqual({ ok: true, errors: [], warnings: [] });
+
+  const tampered = repo({
+    'arms/claude_fx.yaml': ARM,
+    'suites/compare_fx.yaml': selectedSuite,
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+    'pricing/current.json': '{}\n',
+  });
+  const result = check(tampered);
+  expect(result.ok).toBe(false);
+  expect(result.errors.join('\n')).toMatch(/pricing snapshot.*digest/i);
 });
 
 test('V2 suite fails validation when finite attempt bounds are missing', () => {

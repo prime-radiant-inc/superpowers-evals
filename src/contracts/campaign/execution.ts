@@ -90,6 +90,7 @@ export const PublicRuntimeEnvSchema = z
     QUORUM_SUBJECT_FILE: z.literal('/run/quorum/subject.env'),
     QUORUM_GRADER_FILE: z.literal('/run/quorum/grader.env'),
     QUORUM_ATTEMPT_AUTHORITY_FILE: AbsoluteRuntimePathSchema,
+    OBOL_PRICING_DIR: AbsoluteRuntimePathSchema.optional(),
   })
   .strict();
 export const AttemptRuntimeSpecSchema = z

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   assertCredentialAuthority,
   assertIdComponent,
@@ -621,6 +622,7 @@ test('buildContentionBlock freezes G, thresholds, sampler parameters, tolerances
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
@@ -630,6 +632,7 @@ import type { CommandRunner } from '../src/agents/command-runner.ts';
 import { loadFrozenCampaign as loadExperiment } from '../src/campaign/campaign-document.ts';
 import { readProjection } from '../src/campaign/execution-journal.ts';
 import { registerCampaign as registerExperimentCampaign } from '../src/campaign/registration.ts';
+import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 
 test('V2 registrations of identical inputs publish distinct IDs with equal input digests', () => {
   const args = experimentRegisterArgs();
@@ -645,6 +648,53 @@ test('V2 registrations of identical inputs publish distinct IDs with equal input
   expect(projection.registered).toBe(true);
   expect(projection.experiment.campaign_id).toBe(first.experiment.campaign_id);
 }, 60_000);
+
+test('registration verifies selected pricing after materialization and before journal publication', () => {
+  const campaignId = 'pricing-registration';
+  const args = experimentRegisterArgs({ campaignId: () => campaignId });
+  const pricing = '{"as_of":"fixture","namespaces":{}}\n';
+  mkdirSync(join(args.evalsCheckout, 'pricing'));
+  writeFileSync(join(args.evalsCheckout, 'pricing', 'current.json'), pricing);
+  const commit = spawnSync(
+    'git',
+    ['-C', args.evalsCheckout, 'add', 'pricing/current.json'],
+    { encoding: 'utf8' },
+  );
+  expect(commit.status).toBe(0);
+  const committed = spawnSync(
+    'git',
+    ['-C', args.evalsCheckout, 'commit', '-qm', 'pricing fixture'],
+    { encoding: 'utf8' },
+  );
+  expect(committed.status).toBe(0);
+  const rev = spawnSync(
+    'git',
+    ['-C', args.evalsCheckout, 'rev-parse', 'HEAD'],
+    {
+      encoding: 'utf8',
+    },
+  );
+  expect(rev.status).toBe(0);
+  const suiteRaw = EXPERIMENT_SUITE_RAW.replace(
+    'grader:',
+    `pricing_snapshot: { path: pricing/current.json, sha256: '${'0'.repeat(64)}' }\ngrader:`,
+  );
+  expect(sha256Hex(pricing)).not.toBe('0'.repeat(64));
+
+  expect(() =>
+    registerExperimentCampaign({
+      ...args,
+      evalsRef: rev.stdout.trim(),
+      suiteRaw,
+    }),
+  ).toThrow(/pricing snapshot.*digest/i);
+  const campaignDir = join(
+    args.campaignsRoot,
+    `${campaignId}-finite_comparison`,
+  );
+  expect(existsSync(join(campaignDir, 'journal.db'))).toBe(false);
+  expect(existsSync(join(campaignDir, 'campaign.json'))).toBe(false);
+});
 
 test('V2 raw registration rejects unsupported grader fields', () => {
   const args = experimentRegisterArgs({

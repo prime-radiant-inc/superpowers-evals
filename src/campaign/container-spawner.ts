@@ -26,12 +26,14 @@ import {
   type VerifiedStopped,
 } from '../contracts/campaign/execution.ts';
 import type { Grader } from '../contracts/campaign/experiment.ts';
+import type { PricingSnapshot } from '../contracts/campaign/suite.ts';
 import type { PrepareAttemptStageArgs } from './attempt-projection.ts';
 import { prepareAttemptStage } from './attempt-projection.ts';
 import {
   ATTEMPT_AUTHORITY_PATH,
   PreparedAttemptAuthoritySchema,
 } from './child-authority.ts';
+import { verifyPricingSnapshot } from './pricing-snapshot.ts';
 
 interface AttemptMount {
   source: string;
@@ -729,6 +731,7 @@ export interface PrepareContainerExecutionArgs extends PrepareAttemptStageArgs {
   readonly binRoot: string;
   readonly superpowersTree: string | null;
   readonly scenarioDir: string;
+  readonly pricingSnapshot?: PricingSnapshot;
 }
 
 /** Prepare private inputs before committing the intent. The one authority file
@@ -738,6 +741,13 @@ export function prepareContainerExecution(
 ): PreparedExecution {
   if (args.identity.execution_attempt_id !== args.attemptId)
     throw new AttemptContainerError('attempt identity mismatch');
+  const verifiedPricing =
+    args.pricingSnapshot === undefined
+      ? undefined
+      : verifyPricingSnapshot({
+          evalsRoot: args.evalsRoot,
+          snapshot: args.pricingSnapshot,
+        });
   const stage = prepareAttemptStage(args);
   const credentialsBody = stage.credentialRegistry;
   if (credentialsBody === undefined)
@@ -820,6 +830,9 @@ export function prepareContainerExecution(
       QUORUM_SUBJECT_FILE: '/run/quorum/subject.env',
       QUORUM_GRADER_FILE: '/run/quorum/grader.env',
       QUORUM_ATTEMPT_AUTHORITY_FILE: ATTEMPT_AUTHORITY_PATH,
+      ...(verifiedPricing === undefined
+        ? {}
+        : { OBOL_PRICING_DIR: verifiedPricing.directory }),
     },
     init: true,
     restart: 'no',
