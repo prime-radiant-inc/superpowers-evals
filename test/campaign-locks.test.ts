@@ -596,6 +596,7 @@ test('HB-2: two owner tokens in the lock dir is corruption — the heartbeat fai
   ).toBe(10_000);
   expect(readFileSync(join(lockPath, planted), 'utf8')).toBe(plantedBody);
   expect(cancelled).toEqual([true]);
+  lease.release();
 });
 
 test('HB-3: a token file swapped for a different file with identical bytes is never beaten through — ownership is the inode, not the content', () => {
@@ -609,6 +610,7 @@ test('HB-3: a token file swapped for a different file with identical bytes is ne
   clock.advance(30);
   expect(() => lease.heartbeat()).toThrow(LockError);
   expect(readFileSync(lease.ownerFile, 'utf8')).toBe(bytes); // untouched
+  lease.release();
 });
 
 // Real thread + Atomics barrier: the parent swaps the judged token for a FIFO
