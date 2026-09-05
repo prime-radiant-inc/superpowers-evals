@@ -244,7 +244,9 @@ source paths disappear. No source or live qualification of this amendment is
 claimed by this documentation update. The next [source plan](../superpowers/plans/2026-09-05-pr2258-final-state-verification.md)
 builds the shared filesystem capture/verification primitive as one task. Runtime
 activation stays with the complete V2 binding/candidate producer so an optional
-missing bundle cannot bypass the eventual publication check.
+missing bundle cannot bypass the eventual publication check. Plan/spec amendment
+was committed at `2f12e7fc`. A fresh Linear read confirms PRI-3097 is In Dev; the
+earlier 502 was transient and did not require a duplicate ticket.
 
 ## Remaining qualification gates
 
