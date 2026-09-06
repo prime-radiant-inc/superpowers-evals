@@ -20,6 +20,7 @@ interface ReplayRecord {
 }
 
 interface CallRecord {
+  nativeWebAction?: string;
   callId: string;
   anchor: RawAnchor;
   payload: string;
@@ -231,11 +232,53 @@ function validateObjectArguments(payload: JsonObject, anchor: RawAnchor): void {
   }
 }
 
+// Native web end telemetry is the earliest persisted descriptor of the web
+// action, not its initiation timestamp. The later completed item witnesses it.
+const NativeWebActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('open_page'), url: z.string() }).strict(),
+  z
+    .object({
+      type: z.literal('search'),
+      query: z.string(),
+      queries: z.array(z.string()),
+    })
+    .strict(),
+]);
+const NativeWebEndSchema = z
+  .object({
+    type: z.literal('web_search_end'),
+    call_id: z.string().min(1),
+    query: z.string(),
+    action: NativeWebActionSchema,
+  })
+  .strict();
+const NativeWebCompletedSchema = z
+  .object({
+    type: z.literal('web_search_call'),
+    id: z.string().min(1),
+    status: z.literal('completed'),
+    action: NativeWebActionSchema,
+    internal_chat_message_metadata_passthrough: z
+      .object({ turn_id: z.string().min(1) })
+      .strict(),
+  })
+  .strict();
+
 function callShape(
   payload: JsonObject,
   anchor: RawAnchor,
 ): { name: string; nativeId: string | null } {
   const type = payload['type'];
+  if (type === 'web_search_end') {
+    const parsed = NativeWebEndSchema.safeParse(payload);
+    if (!parsed.success)
+      fail(
+        'unknown_record',
+        'Web end shape is outside the inspected dialect.',
+        anchor,
+      );
+    return { name: 'web_search_call', nativeId: parsed.data.call_id };
+  }
   if (type === 'function_call') {
     const name = requireNonemptyString(payload['name'], anchor, 'Call name');
     const nativeId = requireNonemptyString(
@@ -328,7 +371,18 @@ function indexCall(
         canonical_anchor: existing.anchor,
       };
     }
-    calls.set(nativeId, { callId, anchor, payload: serialized });
+    calls.set(nativeId, {
+      callId,
+      anchor,
+      payload: serialized,
+      ...(payload['type'] === 'web_search_end'
+        ? {
+            nativeWebAction: canonicalJson(
+              requireObject(payload['action'], anchor, 'Native web action'),
+            ),
+          }
+        : {}),
+    });
   }
   return {
     kind: 'call',
@@ -342,6 +396,16 @@ function indexCall(
 
 function resultNativeId(payload: JsonObject, anchor: RawAnchor): string {
   const type = payload['type'];
+  if (type === 'web_search_call') {
+    const parsed = NativeWebCompletedSchema.safeParse(payload);
+    if (!parsed.success)
+      fail(
+        'unknown_record',
+        'Web completion shape is outside the inspected dialect.',
+        anchor,
+      );
+    return parsed.data.id;
+  }
   const nativeId = requireNonemptyString(
     payload['call_id'],
     anchor,
@@ -375,6 +439,20 @@ function indexResult(
   if (call === undefined) {
     fail('orphan_result', 'Result does not have an earlier call.', anchor);
   }
+  if (
+    (payload['type'] === 'web_search_call') !==
+      (call.nativeWebAction !== undefined) ||
+    (call.nativeWebAction !== undefined &&
+      call.nativeWebAction !==
+        canonicalJson(
+          requireObject(payload['action'], anchor, 'Native web action'),
+        ))
+  )
+    fail(
+      'replay_conflict',
+      'Native web completion conflicts with its call action.',
+      anchor,
+    );
 
   const serialized = canonicalJson(payload);
   const existing = results.get(nativeId);
@@ -613,6 +691,9 @@ function indexResponseItem(
       { kind: 'non_action', anchor, record_type: 'response_item.reasoning' },
     ];
   }
+  if (type === 'web_search_call' && cliVersion === '0.146.0') {
+    return [indexResult(payload, anchor, calls, results)];
+  }
   if (type === 'message') {
     return indexMessage(payload, anchor, identity, messages);
   }
@@ -674,6 +755,16 @@ const TurnContextSchema = z
 // Native 0.146.0 event telemetry duplicates messages or records turn status.
 // It grants no approval or tool authority.
 const NativeEventSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('turn_aborted'),
+      turn_id: z.string().min(1),
+      reason: z.literal('interrupted'),
+      started_at: z.number().int().nonnegative(),
+      completed_at: z.number().int().nonnegative(),
+      duration_ms: z.number().int().nonnegative(),
+    })
+    .strict(),
   z.object({ type: z.literal('agent_reasoning'), text: z.string() }).strict(),
   z
     .object({
@@ -766,7 +857,7 @@ const NativeTokenCountSchema = TokenCountSchema.extend({
     .extend({ spend_control_reached: z.null() })
     .strict(),
 }).strict();
-/** Context records describe settings; only physical response items describe actions. */
+/** Context records describe settings and cannot grant tool or approval authority. */
 function checkContextIdentity(
   context: JsonObject,
   source: RawSource,
@@ -902,6 +993,15 @@ export function indexCodexTranscript(
     }
     if (type === 'event_msg') {
       const payload = row.value['payload'];
+      if (
+        source.expected_cli_version === '0.146.0' &&
+        payload !== undefined &&
+        isJsonObject(payload) &&
+        payload['type'] === 'web_search_end'
+      ) {
+        entries.push(indexCall(payload, row.anchor, calls));
+        continue;
+      }
       if (
         source.expected_cli_version === '0.146.0' &&
         payload !== undefined &&
