@@ -24,6 +24,7 @@ import {
   type RawAnchor,
   RawAnchorSchema,
   type RawIndex,
+  type RawPrefix,
   type RawSource,
   RawSourceSchema,
 } from './contracts.ts';
@@ -34,7 +35,8 @@ import {
   type FinalStateNode,
   verifyFinalState,
 } from './final-state.ts';
-import { parseCompleteJsonl } from './raw.ts';
+import { parseCompleteJsonl, verifyRawPrefix } from './raw.ts';
+import { type SupportingPrefix, verifySupportingPrefixes } from './review.ts';
 
 export interface ObserverBinding {
   schema_version: 2;
@@ -540,4 +542,34 @@ export function readObserverSupportingFiles(
       relative_path: node.path,
       bytes: readObserverNode(binding, node),
     }));
+}
+
+/** A receipt must be interpretable from its own observed bytes, without future trace authority. */
+export function indexObserverPrefix(
+  source: RawSource,
+  raw: Uint8Array,
+  prefix: RawPrefix,
+  supportingFiles: readonly ObserverSupportingFile[],
+  supportingPrefixes: readonly SupportingPrefix[],
+): RawIndex {
+  verifyRawPrefix(source, raw, prefix);
+  verifySupportingPrefixes(supportingFiles, supportingPrefixes, false);
+  const snapshot = supportingPrefixes.map((prefix) => {
+    const file = supportingFiles.find(
+      (file) =>
+        file.root_id === prefix.root_id &&
+        file.relative_path === prefix.relative_path,
+    );
+    if (!file)
+      throw new ObserverEvidenceError(
+        'invalid_source',
+        'Historical supporting member is missing.',
+      );
+    return {
+      root_id: file.root_id,
+      relative_path: file.relative_path,
+      bytes: file.bytes.subarray(0, prefix.bytes),
+    };
+  });
+  return indexObserverSource(source, raw.subarray(0, prefix.bytes), snapshot);
 }

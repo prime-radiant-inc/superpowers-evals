@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   indexBoundObserverSource,
+  indexObserverPrefix,
   indexObserverSource,
   type ObserverBinding,
   validateObserverBinding,
@@ -11,7 +12,7 @@ import {
   type RawAnchor,
   RawAnchorSchema,
 } from './contracts.ts';
-import { verifyRawPrefix, verifyReviewedSuffix } from './raw.ts';
+import { verifyReviewedSuffix } from './raw.ts';
 import {
   type ActorReview,
   ActorReviewSchema,
@@ -234,11 +235,12 @@ export function scoreObserverEvidence(args: {
       )?.source;
       const raw = rawSources.get(receipt.source_prefix.source_id);
       if (!source || !raw) refuse('receipt_source_mismatch');
-      verifyRawPrefix(source, raw, receipt.source_prefix);
-      verifySupportingPrefixes(
+      indexObserverPrefix(
+        source,
+        raw,
+        receipt.source_prefix,
         args.supporting_files,
         receipt.supporting_prefixes,
-        false,
       );
       receipts.set(receipt.observation_id, receipt);
     }

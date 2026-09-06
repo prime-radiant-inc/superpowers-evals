@@ -23,6 +23,7 @@ import {
 } from '../../contracts/campaign/experiment.ts';
 import {
   indexBoundObserverSource,
+  indexObserverPrefix,
   indexObserverSource,
   type ObserverBinding,
 } from './binding.ts';
@@ -32,7 +33,7 @@ import {
   RawAnchorSchema,
   RawPrefixSchema,
 } from './contracts.ts';
-import { createRawPrefix, verifyRawPrefix } from './raw.ts';
+import { createRawPrefix } from './raw.ts';
 import {
   type ActorReview,
   type ArtifactReceipt,
@@ -395,11 +396,12 @@ export function assessIndependentReviews(
               (raw) => raw.source_id === receipt.source_prefix.source_id,
             );
             if (!source || !raw) throw new Error('Receipt source is missing.');
-            verifyRawPrefix(source.source, raw.bytes, receipt.source_prefix);
-            verifySupportingPrefixes(
+            indexObserverPrefix(
+              source.source,
+              raw.bytes,
+              receipt.source_prefix,
               evidence.supporting_files,
               receipt.supporting_prefixes,
-              false,
             );
           }
         }

@@ -18,6 +18,7 @@ import {
 import {
   discoverObserverSources,
   indexBoundObserverSource,
+  indexObserverPrefix,
   type ObserverBinding,
   readObserverNode,
   readObserverSupportingFiles,
@@ -38,7 +39,6 @@ import {
   createSupportingPrefixes,
   validateActorReview,
   validateArtifactReceipt,
-  verifySupportingPrefixes,
 } from './observer/review.ts';
 
 function statePath(workdir: string): string {
@@ -389,15 +389,12 @@ function readObservedReceipt(
     (entry) => entry.source.source_id === observation.binding.parent_source_id,
   );
   if (!parent) throw new Error('Receipt requires its bound parent.');
-  verifyRawPrefix(
+  indexObserverPrefix(
     parent.source,
     Buffer.from(observation.raw_base64, 'base64'),
     receipt.source_prefix,
-  );
-  verifySupportingPrefixes(
     observation.supporting_files,
     receipt.supporting_prefixes,
-    false,
   );
   return { raw, receipt };
 }

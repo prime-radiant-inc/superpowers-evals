@@ -25,6 +25,7 @@ import {
 } from '../../contracts/campaign/execution.ts';
 import {
   indexBoundObserverSource,
+  indexObserverPrefix,
   indexObserverSource,
   type ObserverBinding,
   ObserverBindingSchema,
@@ -47,7 +48,6 @@ import {
   createSupportingPrefixes,
   validateActorReview,
   validateArtifactReceipt,
-  verifySupportingPrefixes,
 } from './review.ts';
 import {
   type StrictScore,
@@ -369,14 +369,15 @@ export function readObserverBundle(bundleDir: string): ObserverBundle {
     );
     if (!source || !ref)
       throw new Error('Receipt source is outside the binding.');
-    verifyRawPrefix(source.source, contentAt(ref.path), receipt.source_prefix);
-    verifySupportingPrefixes(
+    indexObserverPrefix(
+      source.source,
+      contentAt(ref.path),
+      receipt.source_prefix,
       bundle.supporting_files.map((ref) => ({
         ...ref,
         bytes: contentAt(ref.path),
       })),
       receipt.supporting_prefixes,
-      false,
     );
   }
   if (
