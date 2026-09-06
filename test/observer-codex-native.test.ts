@@ -1,0 +1,140 @@
+import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import {
+  indexBoundObserverSource,
+  type ObserverBinding,
+} from '../src/experiments/observer/binding.ts';
+import { indexCodexTranscript } from '../src/experiments/observer/codex.ts';
+import type { RawSource } from '../src/experiments/observer/contracts.ts';
+
+const raw = readFileSync(
+  new URL(
+    './fixtures/observer/codex-0.146.0-refused-parent.jsonl',
+    import.meta.url,
+  ),
+);
+const source: RawSource = {
+  source_id: 'native-parent',
+  runtime: 'codex',
+  expected_session_id: '01a0750a-9200-7783-a181-bd52af4ea40c',
+  expected_cwd: '/capture/codex-parent/workdir',
+  expected_cli_version: '0.146.0',
+};
+const binding: ObserverBinding = {
+  schema_version: 2,
+  run_id: 'capture',
+  campaign: null,
+  runtime: 'codex',
+  dialect: 'codex-response-items-0.146.0',
+  cli_version: '0.146.0',
+  home: '/capture/codex-parent/home',
+  workdir: source.expected_cwd,
+  launch_cwd: source.expected_cwd,
+  roots: [
+    {
+      id: 'sessions',
+      kind: 'transcripts',
+      path: '/capture/codex-parent/home/.codex/sessions',
+    },
+    { id: 'documents', kind: 'artifacts', path: source.expected_cwd },
+  ],
+  phase: 'unbound',
+  parent_source_id: null,
+  sources: [],
+};
+type NativeRow = { type: string; payload: Record<string, unknown> };
+function changed(mutator: (rows: NativeRow[]) => void): Buffer {
+  const rows = raw
+    .toString()
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  mutator(rows);
+  return Buffer.from(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`);
+}
+
+test('indexes the captured Codex 0.146.0 refused turn without inventing tool activity', () => {
+  const index = indexCodexTranscript(source, raw);
+  expect(index.identity.conversation).toBe('parent');
+  expect(index.prefix.after_line).toBe(9);
+  expect(
+    index.entries.filter(
+      (entry) => entry.kind === 'call' || entry.kind === 'result',
+    ),
+  ).toEqual([]);
+  expect(
+    index.entries
+      .filter((entry) => entry.kind === 'message' && entry.role === 'user')
+      .map((entry) => entry.anchor.line),
+  ).toEqual([4, 7]);
+});
+
+test('accepts matched native parent authority and refuses wrong build, parent and cwd', () => {
+  expect(
+    indexBoundObserverSource(binding, source, raw).identity.session_id,
+  ).toBe(source.expected_session_id);
+  for (const [field, value] of [
+    ['cli_version', '0.146.1'],
+    ['originator', 'other'],
+    ['thread_source', 'subagent'],
+    ['cwd', '/other'],
+    ['id', 'other'],
+  ]) {
+    expect(() =>
+      indexBoundObserverSource(
+        binding,
+        source,
+        changed((rows) => {
+          rows[0]!.payload[field!] = value;
+        }),
+      ),
+    ).toThrow();
+  }
+  expect(() =>
+    indexBoundObserverSource(
+      { ...binding, dialect: 'codex-response-items-0.144.3' },
+      source,
+      raw,
+    ),
+  ).toThrow();
+});
+
+test('native context and event allowances remain closed to uninspected fields and builds', () => {
+  for (const type of ['world_state', 'turn_context', 'event_msg']) {
+    expect(() =>
+      indexCodexTranscript(
+        source,
+        changed((rows) => {
+          rows.find((row) => row.type === type)!.payload['hidden_action'] = {};
+        }),
+      ),
+    ).toThrow();
+  }
+  expect(() =>
+    indexCodexTranscript(
+      source,
+      changed((rows) => {
+        rows[1]!.payload['type'] = 'unknown_event';
+      }),
+    ),
+  ).toThrow();
+  expect(() =>
+    indexCodexTranscript(
+      source,
+      changed((rows) => {
+        (rows[4]!.payload['state'] as Record<string, unknown>)[
+          'hidden_action'
+        ] = {};
+      }),
+    ),
+  ).toThrow();
+  const older = { ...source, expected_cli_version: '0.144.3' };
+  expect(() =>
+    indexCodexTranscript(
+      older,
+      changed((rows) => {
+        rows[0]!.payload['cli_version'] = '0.144.3';
+      }),
+    ),
+  ).toThrow();
+});

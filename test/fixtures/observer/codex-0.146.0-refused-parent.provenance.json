@@ -1,0 +1,18 @@
+{
+  "purpose": "Native record-shape fixture; not successful turn, tool or descendant qualification",
+  "source_sha256": "0f7cb755f503e2d52c315645fe5fed94a344085480adc4d5e19d09d04f80e19f",
+  "fixture_sha256": "682367213cc66337f50569c38c6f6607eecbf1ad1bfddb9013925e26fd099c94",
+  "capture_source_commit": "85f52d12",
+  "image": "sha256:500e28caf737a820c3f30f21f757b089b8d548081e714e1a20dff1a82de37691",
+  "native_binary_sha256": "2e863156ed35ecc5253b1e2f907a9143077b9f7cb51942070c61996471ff6e04",
+  "cli_version": "0.146.0",
+  "origin": "Native Codex TUI in isolated Linux container, loopback scripted provider refused advertised tool catalog before returning a response",
+  "transformation": "JSON compact reserialization; generic instruction strings omitted in session_meta.base_instructions.text, developer response content text, world_state.state.host_skills.body and turn_context.collaboration_mode.settings.developer_instructions; all fields and other values preserved",
+  "privacy_review": "Inspected complete raw capture: only synthetic capture paths, generated session IDs, generic bundled instructions, scripted user input and local refusal; no credentials, personal files or production user conversation. Bundled instruction prose omitted from public fixture.",
+  "limits": [
+    "No successful assistant turn",
+    "No physical tool invocation or result",
+    "No descendants or completion joins",
+    "Only captured managed workspace-write context mode"
+  ]
+}

@@ -644,6 +644,139 @@ const TurnContextSchema = z
     summary: z.string(),
   })
   .strict();
+// Shapes observed in the native 0.146.0 refused parent capture. These do not
+// establish successful turns, tool execution, or descendant authority.
+const FileAccessSchema = z
+  .object({
+    path: z.union([
+      z
+        .object({
+          type: z.literal('special'),
+          value: z
+            .object({ kind: z.enum(['root', 'slash_tmp', 'tmpdir']) })
+            .strict(),
+        })
+        .strict(),
+      z.object({ type: z.literal('path'), path: z.string() }).strict(),
+    ]),
+    access: z.enum(['read', 'write']),
+    missing_path_behavior: z.literal('skip').optional(),
+  })
+  .strict();
+const NativeTurnContextSchema = TurnContextSchema.omit({
+  comp_hash: true,
+  multi_agent_mode: true,
+})
+  .extend({
+    sandbox_policy: z
+      .object({
+        type: z.literal('workspace-write'),
+        network_access: z.literal(false),
+        exclude_tmpdir_env_var: z.literal(false),
+        exclude_slash_tmp: z.literal(false),
+      })
+      .strict(),
+    permission_profile: z
+      .object({
+        type: z.literal('managed'),
+        file_system: z
+          .object({
+            type: z.literal('restricted'),
+            entries: z.array(FileAccessSchema),
+          })
+          .strict(),
+        network: z.literal('restricted'),
+      })
+      .strict(),
+    file_system_sandbox_policy: z
+      .object({
+        kind: z.literal('restricted'),
+        entries: z.array(FileAccessSchema),
+      })
+      .strict(),
+    multi_agent_version: z.literal('v1'),
+  })
+  .strict();
+const EmptyObjectSchema = z.object({}).strict();
+const WorldStateSchema = z
+  .object({
+    full: z.literal(true),
+    state: z
+      .object({
+        agents_md: EmptyObjectSchema,
+        apps_instructions: z.literal(false),
+        collaboration_mode: z.literal('default'),
+        environments: z
+          .object({
+            environments: z
+              .object({
+                local: z
+                  .object({
+                    cwd: z.string(),
+                    status: z.literal('available'),
+                    shell: z.literal('bash'),
+                  })
+                  .strict(),
+              })
+              .strict(),
+            current_date: z.string(),
+            timezone: z.string(),
+            filesystem: z.string(),
+          })
+          .strict(),
+        environments_instructions: z.literal(false),
+        git_attribution: z.literal(false),
+        host_skills: z
+          .object({ body: z.string(), includeInstructions: z.literal(true) })
+          .strict(),
+        model: z.string(),
+        multi_agent_mode: EmptyObjectSchema,
+        permissions: z.string(),
+        personality: z
+          .object({ model: z.string(), personality: z.string() })
+          .strict(),
+        plugins_instructions: z.literal(false),
+        realtime: z.object({ active: z.literal(false) }).strict(),
+        skills: z.object({ includeInstructions: z.literal(true) }).strict(),
+      })
+      .strict(),
+  })
+  .strict();
+const NativeEventSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('task_started'),
+      turn_id: z.string().min(1),
+      started_at: z.number().int().nonnegative(),
+      model_context_window: z.number().int().positive(),
+      collaboration_mode_kind: z.literal('default'),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('user_message'),
+      message: z.string(),
+      images: z.tuple([]),
+      local_images: z.tuple([]),
+      audio: z.tuple([]),
+      local_audio: z.tuple([]),
+      text_elements: z.tuple([]),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('task_complete'),
+      turn_id: z.string().min(1),
+      last_agent_message: z.null(),
+      error: z
+        .object({ message: z.string(), codex_error_info: z.literal('other') })
+        .strict(),
+      started_at: z.number().int().nonnegative(),
+      completed_at: z.number().int().nonnegative(),
+      duration_ms: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
 const UsageSchema = z
   .object({
     input_tokens: z.number().int().nonnegative(),
@@ -682,7 +815,11 @@ function indexContext(
   source: RawSource,
   anchor: RawAnchor,
 ): RawEntry {
-  const parsed = TurnContextSchema.safeParse(value);
+  const parsed = (
+    source.expected_cli_version === '0.146.0'
+      ? NativeTurnContextSchema
+      : TurnContextSchema
+  ).safeParse(value);
   if (!parsed.success)
     fail(
       'unknown_record',
@@ -736,8 +873,39 @@ export function indexCodexTranscript(
       entries.push(indexContext(row.value['payload'], source, row.anchor));
       continue;
     }
+    if (type === 'world_state' && source.expected_cli_version === '0.146.0') {
+      const parsed = WorldStateSchema.safeParse(row.value['payload']);
+      if (!parsed.success)
+        fail(
+          'unknown_record',
+          'World state shape is outside the inspected dialect.',
+          row.anchor,
+        );
+      if (
+        parsed.data.state.environments.environments.local.cwd !==
+        source.expected_cwd
+      )
+        fail(
+          'identity_conflict',
+          'World state cwd conflicts with the bound launch cwd.',
+          row.anchor,
+        );
+      entries.push({
+        kind: 'non_action',
+        anchor: row.anchor,
+        record_type: 'world_state',
+      });
+      continue;
+    }
     if (type === 'event_msg') {
-      if (!TokenCountSchema.safeParse(row.value['payload']).success)
+      const native =
+        source.expected_cli_version === '0.146.0'
+          ? NativeEventSchema.safeParse(row.value['payload'])
+          : null;
+      if (
+        !native?.success &&
+        !TokenCountSchema.safeParse(row.value['payload']).success
+      )
         fail(
           'unknown_record',
           'Event shape is outside the inspected dialect.',
@@ -746,7 +914,7 @@ export function indexCodexTranscript(
       entries.push({
         kind: 'non_action',
         anchor: row.anchor,
-        record_type: 'event_msg.token_count',
+        record_type: `event_msg.${native?.success ? native.data.type : 'token_count'}`,
       });
       continue;
     }

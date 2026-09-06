@@ -252,8 +252,21 @@ export const OBSERVER_DIALECTS = {
   claude: null,
 } as const;
 
+export function observerDialectForBuild(
+  runtime: ObserverBinding['runtime'],
+  cliVersion: string,
+): { dialect: string; cli_version: string } | null {
+  if (runtime === 'codex' && cliVersion === '0.146.0')
+    return { dialect: 'codex-response-items-0.146.0', cli_version: '0.146.0' };
+  const supported = OBSERVER_DIALECTS[runtime];
+  return supported?.cli_version === cliVersion ? supported : null;
+}
+
 export function requireObserverDialect(binding: ObserverBinding): void {
-  const supported = OBSERVER_DIALECTS[binding.runtime];
+  const supported = observerDialectForBuild(
+    binding.runtime,
+    binding.cli_version,
+  );
   if (
     !supported ||
     binding.dialect !== supported.dialect ||
