@@ -682,11 +682,12 @@ export function validatePr2258Preflight(
     qualificationChecks.push('fake-provider maximum start skew evidence is missing');
   else {
     if (fakeProviderSkew > suite.max_exposure_skew)
-      qualificationChecks.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
+      blockers.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
     const expectedMargin = Math.max(0, suite.max_exposure_skew - fakeProviderSkew);
-    if (qualification.exposure.start_skew_margin_s !== expectedMargin)
-      qualificationChecks.push(
-        `fake-provider start skew margin must be ${expectedMargin} seconds, got ${qualification.exposure.start_skew_margin_s}`,
+    const observedMargin = qualification.exposure.start_skew_margin_s;
+    if (observedMargin !== expectedMargin)
+      (observedMargin === null ? qualificationChecks : blockers).push(
+        `fake-provider start skew margin must be ${expectedMargin} seconds, got ${observedMargin}`,
       );
   }
   if (!hasReceiptDigest(qualification.exposure.receipt_sha256))

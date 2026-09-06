@@ -602,18 +602,10 @@ const deferredQualificationCases: {
     gap: /start skew evidence is missing/,
   },
   {
-    name: 'excessive observed skew',
-    mutate: (receipts) => {
-      receipts.exposure.maximum_start_skew_s = 61;
-      receipts.exposure.start_skew_margin_s = 0;
-    },
-    gap: /start skew does not satisfy/,
-  },
-  {
-    name: 'incorrect skew margin',
+    name: 'unknown skew margin',
     mutate: (receipts) => {
       receipts.exposure.maximum_start_skew_s = 55;
-      receipts.exposure.start_skew_margin_s = 0;
+      receipts.exposure.start_skew_margin_s = null;
     },
     gap: /start skew margin/,
   },
@@ -638,6 +630,23 @@ test.each(
   expect(measured.ready).toBe(false);
   expect(measured.blockers).toEqual(
     expect.arrayContaining([expect.stringMatching(gap)]),
+  );
+});
+
+test.each([
+  ['diagnostic', 61, null, /start skew does not satisfy/],
+  ['measured', 61, null, /start skew does not satisfy/],
+  ['diagnostic', 55, 0, /start skew margin/],
+  ['measured', 55, 0, /start skew margin/],
+] as const)('%s rejects known skew %s and margin %s despite missing overlap proof', (suiteName, skew, margin, blocker) => {
+  const result = preflight(suiteName, ({ receipts }) => {
+    receipts.exposure.fake_provider_six_way_overlap_verified = false;
+    receipts.exposure.maximum_start_skew_s = skew;
+    receipts.exposure.start_skew_margin_s = margin;
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toEqual(
+    expect.arrayContaining([expect.stringMatching(blocker)]),
   );
 });
 
