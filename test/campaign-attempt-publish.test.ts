@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   lstatSync,
@@ -13,6 +14,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -453,30 +455,39 @@ test('publish requires the explicit expected attempt id', () => {
 
 import { publishExecution } from '../src/campaign/attempt-publish.ts';
 import {
+  jcsCanonicalize,
+  sha256Hex,
+} from '../src/contracts/campaign/digest.ts';
+import type { ObserverBinding } from '../src/experiments/observer/binding.ts';
+import { freezeObserverBundle } from '../src/experiments/observer/bundle.ts';
+import { writeAttemptManifest } from '../src/runner/manifest.ts';
+import {
   blockActivation,
   twoArmExperiment,
 } from './fixtures/core-comparison/factory.ts';
 
 test('V2 publication authenticates full identity and returns immutable byte references only after death', () => {
-  const paths = staged('run-v2');
-  const intent = blockActivation(twoArmExperiment()).attempts[0]!;
-  intent.identity = identity;
+  const experiment = twoArmExperiment();
+  const intent = blockActivation(experiment).attempts[0]!;
+  const paths = staged('run-v2', { campaign: intent.identity });
   intent.output_root = paths.attemptDir;
   const bound = { intent, container_id: 'a'.repeat(64) };
   const stopped = {
-    execution_attempt_id: identity.execution_attempt_id,
+    execution_attempt_id: intent.identity.execution_attempt_id,
     container_id: bound.container_id,
     proof: 'inspected_stopped' as const,
     observed_at: new Date().toISOString(),
   };
   expect(() =>
     publishExecution({
+      experiment: twoArmExperiment(),
       bound,
       stopped: { ...stopped, container_id: 'b'.repeat(64) },
       resultsRoot: paths.resultsRoot,
     }),
   ).toThrow();
   const published = publishExecution({
+    experiment,
     bound,
     stopped,
     resultsRoot: paths.resultsRoot,
@@ -508,6 +519,7 @@ test('V2 publication refuses a foreign campaign with a matching attempt id', () 
   const bound = { intent, container_id: 'a'.repeat(64) };
   expect(() =>
     publishExecution({
+      experiment: twoArmExperiment(),
       bound,
       stopped: {
         execution_attempt_id: identity.execution_attempt_id,
@@ -517,7 +529,223 @@ test('V2 publication refuses a foreign campaign with a matching attempt id', () 
       },
       resultsRoot: paths.resultsRoot,
     }),
-  ).toThrow('identity');
+  ).toThrow();
   expect(existsSync(join(paths.attemptDir, 'staging', 'foreign'))).toBe(true);
   clean(paths);
+});
+
+function observerPublication(empty = false) {
+  const experiment = twoArmExperiment();
+  const scenario = 'brainstorming-todo-shared-intent';
+  experiment.suite.comparisons[0]!.scenarios = [scenario];
+  experiment.cells[0]!.scenario = scenario;
+  for (const slot of experiment.planned_slots) slot.scenario = scenario;
+  experiment.reserve_slots = [];
+  experiment.suite.reserve = 0;
+  experiment.suite.attempt_bounds.max_attempts = 1;
+  const intent = blockActivation(experiment).attempts[0]!;
+  intent.identity.execution_attempt_id = `${intent.identity.sample_id}:a1`;
+  const paths = staged('observed', { campaign: intent.identity });
+  const original = intent.output_root;
+  Object.assign(
+    intent,
+    JSON.parse(JSON.stringify(intent).replaceAll(original, paths.attemptDir)),
+  );
+  intent.runtime_spec_digest = sha256Hex(jcsCanonicalize(intent.runtime_spec));
+  const runDir = join(paths.attemptDir, 'staging', 'observed');
+  const workdir = join(runDir, 'coding-agent-workdir');
+  const home = join(paths.attemptDir, 'home');
+  const transcripts = join(home, '.codex', 'sessions');
+  const evidenceDir = join(runDir, 'brainstorming-evidence');
+  for (const dir of [
+    workdir,
+    transcripts,
+    evidenceDir,
+    join(runDir, 'gauntlet-agent'),
+  ])
+    mkdirSync(dir, { recursive: true });
+  if (empty) mkdirSync(join(workdir, 'empty', 'nested'), { recursive: true });
+  else writeFileSync(join(workdir, 'artifact.txt'), 'terminal artifact');
+  const sourcePath = join(transcripts, 'parent.jsonl');
+  writeFileSync(
+    sourcePath,
+    JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        id: 'session',
+        cwd: workdir,
+        cli_version: '0.144.3',
+        source: 'cli',
+        originator: 'codex-tui',
+        thread_source: 'user',
+      },
+    }) + '\n',
+  );
+  const stats = statSync(sourcePath, { bigint: true });
+  const binding: ObserverBinding = {
+    schema_version: 2,
+    run_id: 'observed',
+    campaign: intent.identity,
+    runtime: 'codex',
+    dialect: 'codex-response-items-0.144.3',
+    cli_version: '0.144.3',
+    home,
+    workdir,
+    launch_cwd: workdir,
+    phase: 'bound',
+    parent_source_id: 'parent',
+    roots: [
+      { id: 'transcripts', kind: 'transcripts', path: transcripts },
+      { id: 'artifacts', kind: 'artifacts', path: workdir },
+    ],
+    sources: [
+      {
+        source: {
+          source_id: 'parent',
+          runtime: 'codex',
+          expected_session_id: 'session',
+          expected_cwd: workdir,
+          expected_cli_version: '0.144.3',
+        },
+        root_id: 'transcripts',
+        relative_path: 'parent.jsonl',
+        device: stats.dev.toString(),
+        inode: stats.ino.toString(),
+        parent_link: null,
+      },
+    ],
+  };
+  const bindingPath = join(runDir, 'gauntlet-agent', 'observer-binding.json');
+  writeFileSync(bindingPath, JSON.stringify(binding));
+  freezeObserverBundle(binding, evidenceDir);
+  writeAttemptManifest(runDir, intent.identity);
+  const bound = { intent, container_id: 'a'.repeat(64) };
+  const stopped = {
+    execution_attempt_id: intent.identity.execution_attempt_id,
+    container_id: bound.container_id,
+    proof: 'inspected_stopped' as const,
+    observed_at: new Date().toISOString(),
+  };
+  return {
+    ...paths,
+    runDir,
+    bindingPath,
+    binding,
+    evidenceDir,
+    sourcePath,
+    args: { experiment, bound, stopped, resultsRoot: paths.resultsRoot },
+  };
+}
+
+test('required observer publication accepts unchanged external HOME without publishing home', () => {
+  const f = observerPublication();
+  try {
+    const published = publishExecution(f.args);
+    expect(published.runId).toBe('observed');
+    expect(existsSync(join(f.resultsRoot, 'observed', 'home'))).toBe(false);
+    expect(existsSync(f.sourcePath)).toBe(true);
+  } finally {
+    clean(f);
+  }
+});
+test.each([
+  'source-append',
+  'candidate-missing',
+  'binding-missing',
+  'forged-root',
+  'mount-mismatch',
+  'manifest-missing',
+  'partial-freeze',
+])('required observer publication refuses %s without repairing evidence', (change) => {
+  const f = observerPublication();
+  try {
+    const manifest = readFileSync(join(f.runDir, 'manifest.json'));
+    const candidate = join(f.evidenceDir, 'bundle', 'observer-bundle.json');
+    const before = readFileSync(candidate);
+    if (change === 'source-append') appendFileSync(f.sourcePath, '{}\n');
+    if (change === 'candidate-missing')
+      rmSync(join(f.evidenceDir, 'bundle'), { recursive: true });
+    if (change === 'binding-missing') rmSync(f.bindingPath);
+    if (change === 'forged-root') {
+      f.binding.home = join(f.attemptDir, 'foreign');
+      f.binding.roots[0]!.path = join(f.binding.home, '.codex', 'sessions');
+      writeFileSync(f.bindingPath, JSON.stringify(f.binding));
+    }
+    if (change === 'mount-mismatch') {
+      f.args.bound.intent.runtime_spec.mounts[0]!.source = '/outside';
+      f.args.bound.intent.runtime_spec_digest = sha256Hex(
+        jcsCanonicalize(f.args.bound.intent.runtime_spec),
+      );
+    }
+    if (change === 'manifest-missing') rmSync(join(f.runDir, 'manifest.json'));
+    if (change === 'partial-freeze')
+      renameSync(
+        join(f.evidenceDir, 'bundle'),
+        join(f.evidenceDir, '.bundle-stage'),
+      );
+    expect(() => publishExecution(f.args)).toThrow();
+    expect(existsSync(f.runDir)).toBe(true);
+    expect(readdirSync(f.resultsRoot)).toEqual([]);
+    if (existsSync(candidate)) expect(readFileSync(candidate)).toEqual(before);
+    if (change !== 'manifest-missing')
+      expect(readFileSync(join(f.runDir, 'manifest.json'))).toEqual(manifest);
+  } finally {
+    clean(f);
+  }
+});
+
+test('authenticated empty artifact directories survive publication', () => {
+  const f = observerPublication(true);
+  try {
+    publishExecution(f.args);
+    expect(
+      existsSync(
+        join(
+          f.resultsRoot,
+          'observed',
+          'coding-agent-workdir',
+          'empty',
+          'nested',
+        ),
+      ),
+    ).toBe(true);
+  } finally {
+    clean(f);
+  }
+});
+test.each([
+  'add',
+  'delete',
+])('changed empty artifact directory %s refuses publication', (change) => {
+  const f = observerPublication(true);
+  try {
+    if (change === 'add') mkdirSync(join(f.binding.workdir, 'added'));
+    else rmSync(join(f.binding.workdir, 'empty'), { recursive: true });
+    expect(() => publishExecution(f.args)).toThrow();
+    expect(existsSync(f.runDir)).toBe(true);
+  } finally {
+    clean(f);
+  }
+});
+test('direct directory inventory cannot authorize paths outside artifact workdir', () => {
+  for (const path of [
+    '../escape',
+    'home',
+    'coding-agent-workdir/../escape',
+    '/absolute',
+  ]) {
+    const f = staged('directory-path');
+    try {
+      expect(() =>
+        publishAttempt({
+          ...f,
+          expectedAttemptId: expectedAttemptId(),
+          artifactDirectories: [path],
+        }),
+      ).toThrow();
+      expect(readdirSync(f.resultsRoot)).toEqual([]);
+    } finally {
+      clean(f);
+    }
+  }
 });

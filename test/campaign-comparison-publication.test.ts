@@ -245,6 +245,7 @@ function completedPublicationFixture(validityBlockId = 'primary') {
       observed_at: fixtureTime(4 + i),
     };
     const result = publishExecution({
+      experiment: f.experiment,
       bound: { intent, container_id },
       stopped,
       resultsRoot,

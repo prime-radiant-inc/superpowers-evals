@@ -405,6 +405,7 @@ export async function runCampaignDispatch(
     try {
       return {
         artifacts: deps.publish({
+          experiment,
           bound: { intent, container_id: stopped.container_id },
           stopped,
           resultsRoot: context.resultsRoot,

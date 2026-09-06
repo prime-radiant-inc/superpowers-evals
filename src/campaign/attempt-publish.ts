@@ -14,13 +14,24 @@ import {
   readPinnedNoFollowFile,
 } from '../appliance/credential-scope.ts';
 import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
-import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
+import { jcsCanonicalize, sha256Hex } from '../contracts/campaign/digest.ts';
 import {
   type ArtifactRef,
   type BoundExecution,
+  RelativeArtifactPathSchema,
   type VerifiedStopped,
   VerifiedStoppedSchema,
 } from '../contracts/campaign/execution.ts';
+import type { Experiment } from '../contracts/campaign/experiment.ts';
+import {
+  observerRequiredForAttempt,
+  validateObserverBinding,
+} from '../experiments/observer/binding.ts';
+import {
+  OBSERVER_BUNDLE_RELATIVE_DIR,
+  readObserverBundle,
+  verifyObserverCandidate,
+} from '../experiments/observer/bundle.ts';
 import { parseAttemptManifest } from '../runner/manifest.ts';
 
 export class AttemptPublishError extends Error {
@@ -42,6 +53,8 @@ export interface PublishAttemptArgs {
   readonly attemptDir: string;
   readonly resultsRoot: string;
   readonly expectedAttemptId: string;
+  /** Exact run-relative artifact directories authenticated by the observer final inventory. */
+  readonly artifactDirectories?: readonly string[];
   readonly expectedIdentity?: CampaignIdentity;
   /** Journaled allocation, when observed; checked before the rename. */
   readonly expectedRunId?: string | undefined;
@@ -69,9 +82,25 @@ function existingPath(path: string): ReturnType<typeof lstatSync> | undefined {
   }
 }
 
-function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
+function verifyInventory(
+  runDir: string,
+  listedPaths: readonly string[],
+  artifactDirectories: readonly string[],
+): void {
   const listedFiles = new Set(listedPaths);
   const listedDirectories = new Set<string>();
+  for (const path of artifactDirectories) {
+    if (
+      !RelativeArtifactPathSchema.safeParse(path).success ||
+      (path !== 'coding-agent-workdir' &&
+        !path.startsWith('coding-agent-workdir/'))
+    )
+      throw refusal(
+        'artifact directory inventory is outside the run artifact root',
+      );
+    listedDirectories.add(path);
+  }
+  const observedDirectories = new Set<string>();
   for (const listedPath of listedPaths) {
     const components = listedPath.split('/');
     components.pop();
@@ -126,6 +155,7 @@ function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
             `artifact directory is non-regular or symlinked: ${relativePath}`,
           );
         }
+        observedDirectories.add(relativePath);
         walk(fullPath, relativePath);
         continue;
       }
@@ -134,6 +164,8 @@ function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
   };
 
   walk(runDir, '');
+  if (artifactDirectories.some((path) => !observedDirectories.has(path)))
+    throw refusal('authenticated artifact directory is missing');
 }
 
 /** Verify a worker's private attempt output, then atomically publish its run.
@@ -293,6 +325,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   verifyInventory(
     runDir,
     manifest.files.map((file) => file.path),
+    args.artifactDirectories ?? [],
   );
 
   const destination = join(args.resultsRoot, runId);
@@ -337,6 +370,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
 /** V2 publication consumes runtime-produced death proof and authenticates every
  * campaign identity field before returning immutable results-root-relative refs. */
 export function publishExecution(args: {
+  experiment: Experiment;
   bound: BoundExecution;
   stopped: VerifiedStopped;
   resultsRoot: string;
@@ -351,6 +385,7 @@ export function publishExecution(args: {
     stopped.proof !== 'inspected_stopped'
   )
     throw refusal('publication requires exact inspected namespace death');
+  const required = observerRequiredForAttempt(args.experiment, intent.identity);
   const staging = join(intent.output_root, 'staging');
   const entries = readdirSync(staging);
   if (entries.length !== 1 || entries[0] === undefined)
@@ -369,8 +404,74 @@ export function publishExecution(args: {
     jcsCanonicalize(manifest.campaign) !== jcsCanonicalize(intent.identity)
   )
     throw refusal('manifest campaign identity mismatch');
+  let artifactDirectories: string[] = [];
+  if (required) {
+    const spec = intent.runtime_spec;
+    const mount = spec.mounts.filter((m) => m.target === intent.output_root);
+    if (
+      sha256Hex(jcsCanonicalize(spec)) !== intent.runtime_spec_digest ||
+      mount.length !== 1 ||
+      mount[0]?.source !== intent.output_root ||
+      mount[0]?.mode !== 'rw' ||
+      spec.mounts.some((m) => m.target.startsWith(`${intent.output_root}/`)) ||
+      spec.public_env.HOME !== join(intent.output_root, 'home') ||
+      spec.public_env.QUORUM_ATTEMPT_DIR !== intent.output_root
+    )
+      throw refusal(
+        'observer runtime roots differ from the exact bound attempt mount',
+      );
+    const body = readPinnedNoFollowFile(
+      staging,
+      [runId, 'gauntlet-agent', 'observer-binding.json'],
+      'observer runner binding',
+      true,
+    );
+    if (body === null) throw refusal('observer runner binding missing');
+    const binding = validateObserverBinding(JSON.parse(body));
+    const workdir = join(staging, runId, 'coding-agent-workdir');
+    const transcriptPath = join(
+      spec.public_env.HOME,
+      binding.runtime === 'codex' ? '.codex/sessions' : '.claude/projects',
+    );
+    if (
+      binding.run_id !== runId ||
+      jcsCanonicalize(binding.campaign) !== jcsCanonicalize(intent.identity) ||
+      binding.home !== spec.public_env.HOME ||
+      binding.workdir !== workdir ||
+      binding.roots.length !== 2 ||
+      binding.roots.some(
+        (root) =>
+          root.path !==
+          (root.kind === 'transcripts' ? transcriptPath : workdir),
+      )
+    )
+      throw refusal(
+        'observer binding differs from frozen selection or bound runtime roots',
+      );
+    verifyObserverCandidate(
+      binding,
+      join(staging, runId, 'brainstorming-evidence'),
+    );
+    const bundle = readObserverBundle(
+      join(staging, runId, OBSERVER_BUNDLE_RELATIVE_DIR),
+    );
+    const artifactRoot = binding.roots.find(
+      (root) => root.kind === 'artifacts',
+    );
+    artifactDirectories = bundle.final_state.nodes
+      .filter(
+        (node) =>
+          node.root_id === artifactRoot?.id && node.kind === 'directory',
+      )
+      .map((node) =>
+        node.path === ''
+          ? 'coding-agent-workdir'
+          : `coding-agent-workdir/${node.path}`,
+      );
+  }
   const published = publishAttempt({
     attemptDir: intent.output_root,
+    artifactDirectories,
     resultsRoot: args.resultsRoot,
     expectedAttemptId: intent.identity.execution_attempt_id,
     expectedIdentity: intent.identity,

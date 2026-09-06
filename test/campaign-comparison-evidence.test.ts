@@ -89,6 +89,7 @@ function publication(
   );
   writeAttemptManifest(runDir, intent.identity);
   const published = publishExecution({
+    experiment: twoArmExperiment(),
     bound: { intent, container_id: 'a'.repeat(64) },
     stopped: {
       execution_attempt_id: intent.identity.execution_attempt_id,

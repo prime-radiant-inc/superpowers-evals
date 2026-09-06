@@ -496,6 +496,7 @@ export async function cancelCampaign(
           ) {
             try {
               artifacts = publishExecution({
+                experiment: p.experiment,
                 bound: { intent: a.intent, container_id: stopped.container_id },
                 stopped,
                 resultsRoot,
