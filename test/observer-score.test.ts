@@ -1103,7 +1103,7 @@ test.each([
 });
 
 test('saved strict score shape retains nullable evidence and rejects malformed fields', () => {
-  const valid = {
+  const valid: import('../src/experiments/observer/score.ts').StrictScore = {
     schema_version: 2,
     status: 'indeterminate',
     purpose_discovered: null,
