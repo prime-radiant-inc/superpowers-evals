@@ -323,6 +323,15 @@ is retired, and PRI-3097 remains In Dev for the unfinished full comparison.
 
 ## Remaining qualification gates
 
+The [completion plan](../superpowers/plans/2026-09-05-pr2258-completion.md)
+now covers all remaining source, Linux, installed, diagnostic and measured work
+in one dependency sequence. Drew requested continuous execution without another
+continuation prompt after each slice. Reviews and scoped fixes are internal
+checkpoints; the plan retains explicit environment/credential/spending boundaries
+and requests diagnostic plus conditional measured authorization in one concrete
+packet. The [completion receipts](2026-09-05-pr2258-completion-receipts.md)
+track execution from `00f4e03d`; no live work is implied by writing this plan.
+
 Source tests, cross-repository Linux instrument tests, installed appliance proof,
 and paid model samples are distinct. Still required after foundation work:
 

@@ -9,6 +9,14 @@ container shutdown, replacing the proposed in-worker termination supervisor.
 
 **Source inspected:** Evals `672a0ad2580b75153e1a954ae3a8cad4c1e97b90`.
 
+**Remaining-work plan:** [Comparison completion](../plans/2026-09-05-pr2258-completion.md)
+consolidates implementation, qualification, diagnostic and measurement into one
+execution sequence at source `00f4e03d`. Foundations, offline raw adapters and
+the offline final-state verifier are complete; their integration and operational
+qualification remain. The gap table below preserves the original design evidence,
+not a claim that every listed source defect is still open. Task reviews are
+internal checkpoints; environment and spending boundaries remain explicit.
+
 **Question:** Does PR 2258 improve shared intent and approval discipline within
 Codex Astra, Codex Sol, and Claude Opus 5, and what does that improvement cost
 in completion, time, tokens, and simulated user attention?
