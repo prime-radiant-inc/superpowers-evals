@@ -835,3 +835,80 @@ passed. Logs are `final-integration-check.log` and `final-scenario-check.log`.
 The skips remain explicit; they are not qualification receipts. A fresh
 diagnostic still needs a new frozen instrument and registered identity, and its
 three valid pairs and full evidence review remain prerequisites for measurement.
+
+### Installed verification: NO-GO
+
+The exact clean source `2375580d927b7a93d430ee3a489918224e36b1e1` was transferred
+as a verified Git bundle and fast-forwarded from `d682f776` on the appliance under
+the installed mutation locks and campaign registration fence. The image,
+dependency files, helper, configuration, origin tracking ref and historical
+campaign manifests were preserved. Installed registration/listing tests passed.
+The overall installation verification did **not** pass, and its success receipt
+was not created. The source remains installed; it was not rolled back or marked
+qualified.
+
+The first network-disabled pinned-image check passed 370 tests and failed two
+launcher tests. A separate probe confirmed that Docker's `/tmp` mount is
+`noexec`: executing a temporary shell file returned `EACCES`, while the same
+file in the existing private output bind mount executed successfully. Running
+the suite with that executable private scratch fixed the launcher tests. The
+second check again passed 370 tests but failed two different existing checks:
+byte-identical source replacement after freeze and replacement of a previously
+bound parent source.
+
+These second failures are a real observer contract gap. The native filesystem
+probe immediately unlinked and recreated a byte-identical regular file and
+observed the same device, inode, birth time, change time and modification time.
+The subsequent same-tick append changed its size but left the recorded times
+equal. The observer persists device/inode and content hashes; timestamps only
+protect an individual read. Neither that persisted identity nor an added birth
+timestamp can prove original-file continuity in this reproduced case. The
+approved design explicitly forbids replaced sources supplying approvals.
+Moving tests to a filesystem that does not reproduce reuse would hide the gap.
+
+Durably retaining the original file through post-worker-exit verification is a
+new ownership decision. Private retained hard links are a candidate for regular
+files; a worker-owned open descriptor dies before controller verification, while
+controller-owned descriptors would require discovery handoff. Directory identity
+and protection of retained witness state need explicit scope. No timestamp
+workaround, weakened replacement rule or new retention mechanism was implemented.
+
+The source-identity diagnosis also found that campaign publication still assumed
+exactly two roots, while the native trace binding now requires a third root.
+That integration correction is tracked separately from the retention decision.
+
+Private installed receipts are under
+`install-transfer-2375580d927b7a93d430ee3a489918224e36b1e1/`: original command log,
+failed image tests, `image-check-2/image-check-output/temp-execution.json`, the
+second failed test log and `identity-probe/identity.json`. Each probe removed its
+container and released its owned appliance locks. No real provider request,
+campaign registration, diagnostic attempt or measured attempt was made.
+
+Publication correction `81bb10e6` derives the exact expected root kind/path map
+from the validated runtime and build. Codex 0.146.0 requires transcripts,
+artifacts and `HOME/.codex/rollout-traces`; other qualified layouts retain two
+roots. A real frozen-bundle test verifies that immutable publication retains the
+supporting bytes without publishing HOME. Missing, extra and forged roots are
+refused. The independent bounded review passed all 38 publisher tests with 142
+assertions and found no actionable issue (`trace-publisher-review.md`). This
+correction is committed locally; it has not been installed on the appliance.
+
+Final readback in the installation packet's `final-state.json` confirms clean
+installed source `2375580d`, unchanged helper/configuration/origin/campaign
+manifests, the same image, no probe containers and both locks released. The shared
+appliance container remains running. This is operational cleanup proof, not
+observer readiness. The inode-reuse defect remains open pending the retention
+design decision; no new retention mechanism or weaker identity contract was
+introduced.
+
+After `81bb10e6`, the broad `bun run check` passed Biome and TypeScript but its
+core test phase finished **4,192 pass, 17 skip, one failure**: the unrelated
+explicit-`--os linux` CLI run-ID test exceeded its 5,000 ms timeout (5,467 ms).
+An isolated unchanged rerun passed in 2,977 ms with three assertions; no timeout
+was raised and no CLI code was changed. The full command remains recorded as a
+failure, not an all-green run. The dashboard was then checked separately:
+144 pass, zero failures. Scenario validation and `git diff --check` passed.
+Receipts: `publisher-final-check.log`, `cli-timeout-rerun.log`,
+`publisher-dashboard-check.log` and `publisher-scenario-check.log` under
+`diagnostic-r3-offline/`. The confirmed installed inode-reuse failure, rather
+than this non-reproducing timeout, remains the design blocker.
