@@ -99,8 +99,8 @@ test('accepts matched native parent authority and refuses wrong build, parent an
   ).toThrow();
 });
 
-test('native context and event allowances remain closed to uninspected fields and builds', () => {
-  for (const type of ['world_state', 'turn_context', 'event_msg']) {
+test('native event allowances remain closed to uninspected fields and builds', () => {
+  for (const type of ['event_msg']) {
     expect(() =>
       indexCodexTranscript(
         source,
@@ -115,16 +115,6 @@ test('native context and event allowances remain closed to uninspected fields an
       source,
       changed((rows) => {
         rows[1]!.payload['type'] = 'unknown_event';
-      }),
-    ),
-  ).toThrow();
-  expect(() =>
-    indexCodexTranscript(
-      source,
-      changed((rows) => {
-        (rows[4]!.payload['state'] as Record<string, unknown>)[
-          'hidden_action'
-        ] = {};
       }),
     ),
   ).toThrow();
@@ -157,4 +147,68 @@ test('preserves the native assistant response without counting its telemetry twi
       (entry) => entry.kind === 'call' || entry.kind === 'result',
     ),
   ).toEqual([]);
+});
+
+test('context settings remain opaque metadata while bound identity stays enforced', () => {
+  const configured = changed((rows) => {
+    const context = rows.find((row) => row.type === 'turn_context')!.payload;
+    context['sandbox_policy'] = { type: 'danger-full-access' };
+    context['permission_profile'] = { type: 'disabled' };
+    context['multi_agent_version'] = 'v2';
+    context['multi_agent_mode'] = 'explicitRequestOnly';
+    const state = rows.find((row) => row.type === 'world_state')!.payload[
+      'state'
+    ] as Record<string, unknown>;
+    state['plugins_instructions'] = { enabled: ['superpowers'] };
+    state['agents_md'] = { '/fixture/AGENTS.md': 'project instructions' };
+  });
+  const index = indexCodexTranscript(source, configured);
+  expect(index.identity.conversation).toBe('parent');
+  expect(index.entries.filter((entry) => entry.kind === 'call')).toEqual([]);
+  for (const type of ['world_state', 'turn_context']) {
+    for (const field of [
+      'session_id',
+      'sessionId',
+      'thread_id',
+      'cli_version',
+      'cwd',
+    ]) {
+      expect(() =>
+        indexCodexTranscript(
+          source,
+          changed((rows) => {
+            rows.find((row) => row.type === type)!.payload[field] = 'foreign';
+          }),
+        ),
+      ).toThrow();
+    }
+  }
+});
+
+test('partial world updates retain metadata and reject conflicting local identity', () => {
+  const partial = changed((rows) => {
+    rows.find((row) => row.type === 'world_state')!.payload = {
+      full: false,
+      state: { plugins_instructions: true },
+    };
+  });
+  expect(
+    indexCodexTranscript(source, partial).entries.some(
+      (entry) =>
+        entry.kind === 'non_action' && entry.record_type === 'world_state',
+    ),
+  ).toBe(true);
+  expect(() =>
+    indexCodexTranscript(
+      source,
+      changed((rows) => {
+        rows.find((row) => row.type === 'world_state')!.payload = {
+          full: false,
+          state: {
+            environments: { environments: { local: { cwd: '/foreign' } } },
+          },
+        };
+      }),
+    ),
+  ).toThrow();
 });

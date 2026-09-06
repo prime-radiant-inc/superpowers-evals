@@ -644,104 +644,8 @@ const TurnContextSchema = z
     summary: z.string(),
   })
   .strict();
-// Shapes observed in the native 0.146.0 refused parent capture. These do not
-// establish successful turns, tool execution, or descendant authority.
-const FileAccessSchema = z
-  .object({
-    path: z.union([
-      z
-        .object({
-          type: z.literal('special'),
-          value: z
-            .object({ kind: z.enum(['root', 'slash_tmp', 'tmpdir']) })
-            .strict(),
-        })
-        .strict(),
-      z.object({ type: z.literal('path'), path: z.string() }).strict(),
-    ]),
-    access: z.enum(['read', 'write']),
-    missing_path_behavior: z.literal('skip').optional(),
-  })
-  .strict();
-const NativeTurnContextSchema = TurnContextSchema.omit({
-  comp_hash: true,
-  multi_agent_mode: true,
-})
-  .extend({
-    sandbox_policy: z
-      .object({
-        type: z.literal('workspace-write'),
-        network_access: z.literal(false),
-        exclude_tmpdir_env_var: z.literal(false),
-        exclude_slash_tmp: z.literal(false),
-      })
-      .strict(),
-    permission_profile: z
-      .object({
-        type: z.literal('managed'),
-        file_system: z
-          .object({
-            type: z.literal('restricted'),
-            entries: z.array(FileAccessSchema),
-          })
-          .strict(),
-        network: z.literal('restricted'),
-      })
-      .strict(),
-    file_system_sandbox_policy: z
-      .object({
-        kind: z.literal('restricted'),
-        entries: z.array(FileAccessSchema),
-      })
-      .strict(),
-    multi_agent_version: z.literal('v1'),
-  })
-  .strict();
-const EmptyObjectSchema = z.object({}).strict();
-const WorldStateSchema = z
-  .object({
-    full: z.literal(true),
-    state: z
-      .object({
-        agents_md: EmptyObjectSchema,
-        apps_instructions: z.literal(false),
-        collaboration_mode: z.literal('default'),
-        environments: z
-          .object({
-            environments: z
-              .object({
-                local: z
-                  .object({
-                    cwd: z.string(),
-                    status: z.literal('available'),
-                    shell: z.literal('bash'),
-                  })
-                  .strict(),
-              })
-              .strict(),
-            current_date: z.string(),
-            timezone: z.string(),
-            filesystem: z.string(),
-          })
-          .strict(),
-        environments_instructions: z.literal(false),
-        git_attribution: z.literal(false),
-        host_skills: z
-          .object({ body: z.string(), includeInstructions: z.literal(true) })
-          .strict(),
-        model: z.string(),
-        multi_agent_mode: EmptyObjectSchema,
-        permissions: z.string(),
-        personality: z
-          .object({ model: z.string(), personality: z.string() })
-          .strict(),
-        plugins_instructions: z.literal(false),
-        realtime: z.object({ active: z.literal(false) }).strict(),
-        skills: z.object({ includeInstructions: z.literal(true) }).strict(),
-      })
-      .strict(),
-  })
-  .strict();
+// Native 0.146.0 event telemetry duplicates messages or records turn status.
+// It grants no approval or tool authority.
 const NativeEventSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -834,29 +738,96 @@ const NativeTokenCountSchema = TokenCountSchema.extend({
     .extend({ spend_control_reached: z.null() })
     .strict(),
 }).strict();
+/** Context records describe settings; only physical response items describe actions. */
+function checkContextIdentity(
+  context: JsonObject,
+  source: RawSource,
+  anchor: RawAnchor,
+): void {
+  const expected: Record<string, string> = {
+    cwd: source.expected_cwd,
+    session_id: source.expected_session_id,
+    sessionId: source.expected_session_id,
+    thread_id: source.expected_session_id,
+    cli_version: source.expected_cli_version,
+    originator: 'codex-tui',
+    thread_source: 'user',
+    source: 'cli',
+  };
+  for (const [field, value] of Object.entries(expected)) {
+    if (hasOwn(context, field) && context[field] !== value)
+      fail(
+        'identity_conflict',
+        'Context conflicts with the bound source identity.',
+        anchor,
+      );
+  }
+}
+
 function indexContext(
   value: JsonValue | undefined,
   source: RawSource,
   anchor: RawAnchor,
 ): RawEntry {
-  const parsed = (
-    source.expected_cli_version === '0.146.0'
-      ? NativeTurnContextSchema
-      : TurnContextSchema
-  ).safeParse(value);
-  if (!parsed.success)
-    fail(
-      'unknown_record',
-      'Turn context shape is outside the inspected dialect.',
-      anchor,
-    );
-  if (parsed.data.cwd !== source.expected_cwd)
-    fail(
-      'identity_conflict',
-      'Turn context cwd conflicts with the bound launch cwd.',
-      anchor,
-    );
+  if (source.expected_cli_version === '0.146.0') {
+    const context = requireObject(value, anchor, 'Turn context');
+    requireNonemptyString(context['cwd'], anchor, 'Turn context cwd');
+    checkContextIdentity(context, source, anchor);
+  } else {
+    const parsed = TurnContextSchema.safeParse(value);
+    if (!parsed.success)
+      fail(
+        'unknown_record',
+        'Turn context shape is outside the inspected dialect.',
+        anchor,
+      );
+    if (parsed.data.cwd !== source.expected_cwd)
+      fail(
+        'identity_conflict',
+        'Turn context cwd conflicts with the bound launch cwd.',
+        anchor,
+      );
+  }
   return { kind: 'non_action', anchor, record_type: 'turn_context' };
+}
+
+function indexWorldState(
+  value: JsonValue | undefined,
+  source: RawSource,
+  anchor: RawAnchor,
+): RawEntry {
+  const payload = requireObject(value, anchor, 'World state payload');
+  if (typeof payload['full'] !== 'boolean')
+    fail(
+      'invalid_record',
+      'World state must declare full or partial state.',
+      anchor,
+    );
+  const state = requireObject(payload['state'], anchor, 'World state');
+  checkContextIdentity(payload, source, anchor);
+  checkContextIdentity(state, source, anchor);
+  // Partial state updates may omit environments. A supplied local cwd must agree.
+  if (hasOwn(state, 'environments')) {
+    const environments = requireObject(
+      state['environments'],
+      anchor,
+      'World environments',
+    );
+    if (hasOwn(environments, 'environments')) {
+      const entries = requireObject(
+        environments['environments'],
+        anchor,
+        'World environment entries',
+      );
+      if (hasOwn(entries, 'local'))
+        checkContextIdentity(
+          requireObject(entries['local'], anchor, 'Local environment'),
+          source,
+          anchor,
+        );
+    }
+  }
+  return { kind: 'non_action', anchor, record_type: 'world_state' };
 }
 
 export function indexCodexTranscript(
@@ -898,27 +869,7 @@ export function indexCodexTranscript(
       continue;
     }
     if (type === 'world_state' && source.expected_cli_version === '0.146.0') {
-      const parsed = WorldStateSchema.safeParse(row.value['payload']);
-      if (!parsed.success)
-        fail(
-          'unknown_record',
-          'World state shape is outside the inspected dialect.',
-          row.anchor,
-        );
-      if (
-        parsed.data.state.environments.environments.local.cwd !==
-        source.expected_cwd
-      )
-        fail(
-          'identity_conflict',
-          'World state cwd conflicts with the bound launch cwd.',
-          row.anchor,
-        );
-      entries.push({
-        kind: 'non_action',
-        anchor: row.anchor,
-        record_type: 'world_state',
-      });
+      entries.push(indexWorldState(row.value['payload'], source, row.anchor));
       continue;
     }
     if (type === 'event_msg') {
