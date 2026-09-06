@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { indexCodexTranscript } from '../src/experiments/observer/codex.ts';
 import { validateCodexTraceLinks } from '../src/experiments/observer/codex-trace.ts';
 import type {
   JsonValue,
@@ -399,11 +400,13 @@ test.each([
   ).toThrow();
 });
 
-test('rejects duplicate ordinary patch IDs and conflicting outer turn identity', () => {
+test('rejects conflicting ordinary patch replays and outer turn identity', () => {
   const fixture = patchFixture();
   const lines = new TextDecoder().decode(fixture.ordinary).trim().split('\n');
+  const conflictingPatch = JSON.parse(lines[2]!);
+  conflictingPatch.payload.stdout = 'conflicting';
   const duplicated = new TextEncoder().encode(
-    `${lines.concat(lines[2]!).join('\n')}\n`,
+    `${lines.concat(JSON.stringify(conflictingPatch)).join('\n')}\n`,
   );
   expect(() =>
     validateCodexTraceLinks(fixture.source, duplicated, fixture.bundle),
@@ -505,5 +508,265 @@ test('retains the digest and full native event payload for each join witness', (
   });
   expect(proof.sha256).toBe(
     new Bun.CryptoHasher('sha256').update(fixture.bundle.trace).digest('hex'),
+  );
+});
+
+function supportingFiles(bundle: ReturnType<typeof patchFixture>['bundle']) {
+  return [
+    ...new Map([
+      ['manifest.json', bundle.manifest],
+      ['trace.jsonl', bundle.trace],
+      ...bundle.payloads,
+    ]),
+  ].map(([path, bytes]) => ({
+    root_id: 'trace',
+    relative_path: `bundle/${path}`,
+    bytes,
+  }));
+}
+function ordinaryRows(raw: Uint8Array): TestRow[] {
+  return new TextDecoder()
+    .decode(raw)
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+}
+function encodeRows(rows: TestRow[]): Uint8Array {
+  return new TextEncoder().encode(
+    `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+  );
+}
+
+test.each([
+  'outer',
+  'patch',
+])('canonicalizes exact ordinary %s replays through the indexer', (kind) => {
+  const fixture = patchFixture(true);
+  const rows = ordinaryRows(fixture.ordinary);
+  if (kind === 'outer') rows.splice(2, 0, structuredClone(rows[1]!));
+  else rows.push(structuredClone(rows[2]!));
+  const raw = encodeRows(rows);
+  const links = validateCodexTraceLinks(fixture.source, raw, fixture.bundle);
+  expect(links).toHaveLength(1);
+  expect(links[0]?.call_anchor.line).toBe(2);
+  expect(links[0]?.patch_anchor.line).toBe(kind === 'outer' ? 4 : 3);
+  const index = indexCodexTranscript(
+    fixture.source,
+    raw,
+    supportingFiles(fixture.bundle),
+  );
+  expect(index.entries.filter((entry) => entry.kind === 'result')).toHaveLength(
+    2,
+  );
+  expect(index.entries.find((entry) => entry.kind === 'replay')).toMatchObject({
+    anchor: { line: kind === 'outer' ? 3 : 5 },
+    canonical_anchor: { line: kind === 'outer' ? 2 : 3 },
+  });
+  const changed = rows[kind === 'outer' ? 2 : 4]!;
+  changed.payload[kind === 'outer' ? 'input' : 'stdout'] = 'conflicting';
+  expect(() =>
+    indexCodexTranscript(
+      fixture.source,
+      encodeRows(rows),
+      supportingFiles(fixture.bundle),
+    ),
+  ).toThrow();
+});
+
+test('direct patch replays also retain their first anchor with native members supplied', () => {
+  const fixture = patchFixture(true);
+  const rows = ordinaryRows(fixture.ordinary);
+  const innerId = rows[2]!.payload['call_id']!;
+  rows[1]!.payload['call_id'] = innerId;
+  rows[1]!.payload['name'] = 'apply_patch';
+  rows[3]!.payload['call_id'] = innerId;
+  rows.push(structuredClone(rows[2]!));
+  const raw = encodeRows(rows);
+  expect(validateCodexTraceLinks(fixture.source, raw, fixture.bundle)).toEqual(
+    [],
+  );
+  const index = indexCodexTranscript(
+    fixture.source,
+    raw,
+    supportingFiles(fixture.bundle),
+  );
+  expect(index.entries.at(-1)).toMatchObject({
+    kind: 'replay',
+    anchor: { line: 5 },
+    canonical_anchor: { line: 3 },
+  });
+});
+
+test('rejects a required invocation whose input disagrees with its native preview', () => {
+  const fixture = patchFixture(true);
+  fixture.bundle.payloads.set(
+    'payloads/6.json',
+    editJson(fixture.bundle.payloads.get('payloads/6.json')!, (value) => {
+      (value['payload'] as TestObject)['input'] =
+        '*** Begin Patch\n*** Add File: unrelated.txt\n+other\n*** End Patch';
+    }),
+  );
+  expect(() =>
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toThrow();
+});
+
+test('native previews count 160 Unicode scalar values and append ellipsis only when truncated', () => {
+  const fixture = patchFixture(true);
+  const prefix = '*** Begin Patch\n*** Add File: unicode.md\n+';
+  const input = `${prefix}${'🙂'.repeat(200)}\n*** End Patch`;
+  fixture.bundle.payloads.set(
+    'payloads/6.json',
+    editJson(fixture.bundle.payloads.get('payloads/6.json')!, (value) => {
+      (value['payload'] as TestObject)['input'] = input;
+    }),
+  );
+  const setPreview = (preview: string) =>
+    editTrace(fixture.bundle, (rows) => {
+      const tool = rows.find(
+        (row) => row.payload['type'] === 'tool_call_started',
+      )!;
+      (tool.payload['summary'] as TestObject)['input_preview'] = preview;
+    });
+  setPreview(`${prefix}${'🙂'.repeat(118)}...`);
+  expect(
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toHaveLength(1);
+  setPreview(`${prefix}${'🙂'.repeat(118)}`);
+  expect(() =>
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toThrow();
+  setPreview(`${input.slice(0, 160)}...`);
+  expect(() =>
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toThrow();
+  fixture.bundle.payloads.set(
+    'payloads/6.json',
+    editJson(fixture.bundle.payloads.get('payloads/6.json')!, (value) => {
+      (value['payload'] as TestObject)['input'] = '🙂'.repeat(160);
+    }),
+  );
+  setPreview('🙂'.repeat(160));
+  expect(
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toHaveLength(1);
+  setPreview(`${'🙂'.repeat(160)}...`);
+  expect(() =>
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toThrow();
+});
+
+function moveTraceEvent(
+  rows: TestRow[],
+  type: string,
+  beforeType: string,
+): void {
+  const index = rows.findIndex((row) => row.payload['type'] === type);
+  const [row] = rows.splice(index, 1);
+  rows.splice(
+    rows.findIndex((value) => value.payload['type'] === beforeType),
+    0,
+    row!,
+  );
+  rows.forEach((value, i) => {
+    value['seq'] = i + 1;
+  });
+}
+
+test.each([
+  [
+    'cell ended before nested start',
+    (rows: TestRow[]) =>
+      moveTraceEvent(rows, 'code_cell_ended', 'tool_call_started'),
+  ],
+  [
+    'terminal initial response before nested start',
+    (rows: TestRow[]) =>
+      moveTraceEvent(rows, 'code_cell_initial_response', 'tool_call_started'),
+  ],
+  [
+    'new cell after turn end',
+    (rows: TestRow[]) =>
+      moveTraceEvent(rows, 'codex_turn_ended', 'code_cell_started'),
+  ],
+  [
+    'foreign turn end ID',
+    (rows: TestRow[]) => {
+      rows.find((row) => row.payload['type'] === 'codex_turn_ended')!.payload[
+        'codex_turn_id'
+      ] = 'foreign';
+    },
+  ],
+  [
+    'foreign cell end ID',
+    (rows: TestRow[]) => {
+      rows.find((row) => row.payload['type'] === 'code_cell_ended')!.payload[
+        'runtime_cell_id'
+      ] = 'foreign';
+    },
+  ],
+  [
+    'foreign cell end context',
+    (rows: TestRow[]) => {
+      rows.find((row) => row.payload['type'] === 'code_cell_ended')![
+        'codex_turn_id'
+      ] = null;
+    },
+  ],
+  [
+    'unrecognized cell end field',
+    (rows: TestRow[]) => {
+      rows.find((row) => row.payload['type'] === 'code_cell_ended')!.payload[
+        'parent_call_id'
+      ] = 'foreign';
+    },
+  ],
+  [
+    'nonterminal cell end',
+    (rows: TestRow[]) => {
+      rows.find((row) => row.payload['type'] === 'code_cell_ended')!.payload[
+        'status'
+      ] = 'yielded';
+    },
+  ],
+  [
+    'duplicate cell end',
+    (rows: TestRow[]) => {
+      const index = rows.findIndex(
+        (row) => row.payload['type'] === 'code_cell_ended',
+      );
+      rows.splice(index, 0, structuredClone(rows[index]!));
+      rows.forEach((row, i) => {
+        row['seq'] = i + 1;
+      });
+    },
+  ],
+] as const)('rejects contradictory lifecycle: %s', (_name, edit) => {
+  const fixture = patchFixture(true);
+  editTrace(fixture.bundle, edit);
+  expect(() =>
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toThrow();
+});
+
+test('a yielded cell may continue issuing nested work after its own turn completes', () => {
+  const fixture = patchFixture(true);
+  editTrace(fixture.bundle, (rows) => {
+    rows.find(
+      (row) => row.payload['type'] === 'code_cell_initial_response',
+    )!.payload['status'] = 'yielded';
+    moveTraceEvent(rows, 'code_cell_initial_response', 'tool_call_started');
+    moveTraceEvent(rows, 'codex_turn_ended', 'tool_call_started');
+  });
+  expect(
+    validateCodexTraceLinks(fixture.source, fixture.ordinary, fixture.bundle),
+  ).toHaveLength(1);
+  const index = indexCodexTranscript(
+    fixture.source,
+    fixture.ordinary,
+    supportingFiles(fixture.bundle),
+  );
+  expect(index.entries.filter((entry) => entry.kind === 'result')).toHaveLength(
+    2,
   );
 });

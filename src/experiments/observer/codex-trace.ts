@@ -148,7 +148,11 @@ export function validateCodexTraceLinks(
   let rootSeen = false;
   let threadSeen = false;
   const turns = new Set<string>();
-  const cellIds = new Set<string>();
+  const cellIds = new Map<string, RawRow>();
+  const cellInitialResponses = new Set<string>();
+  const cellEnds = new Set<string>();
+  const terminalCells = new Set<string>();
+  const endedTurns = new Set<string>();
   const modelIds = new Set<string>();
   const toolIds = new Set<string>();
   const runtimeIds = new Set<string>();
@@ -198,8 +202,43 @@ export function validateCodexTraceLinks(
         modelIds.has(cell.model_visible_call_id)
       )
         fail('Native cell identifiers are duplicated.');
-      cellIds.add(cell.runtime_cell_id);
+      if (
+        env.codex_turn_id === null ||
+        endedTurns.has(env.codex_turn_id) ||
+        env.thread_id !== source.expected_session_id
+      )
+        fail('Native cell starts outside its active owning turn.', row.anchor);
+      cellIds.set(cell.runtime_cell_id, row);
       modelIds.add(cell.model_visible_call_id);
+    }
+    if (
+      value.type === 'code_cell_initial_response' ||
+      value.type === 'code_cell_ended'
+    ) {
+      const lifecycle = parse(CellLifecycleSchema, value);
+      const started = cellIds.get(lifecycle.runtime_cell_id);
+      if (
+        !started ||
+        env.thread_id !== started.value['thread_id'] ||
+        env.codex_turn_id !== started.value['codex_turn_id']
+      )
+        fail(
+          'Native cell lifecycle identity conflicts with its start.',
+          row.anchor,
+        );
+      const observed =
+        lifecycle.type === 'code_cell_ended' ? cellEnds : cellInitialResponses;
+      if (
+        observed.has(lifecycle.runtime_cell_id) ||
+        (lifecycle.type === 'code_cell_ended' && lifecycle.status === 'yielded')
+      )
+        fail(
+          'Native cell lifecycle is duplicated or has a nonterminal end.',
+          row.anchor,
+        );
+      observed.add(lifecycle.runtime_cell_id);
+      if (lifecycle.status !== 'yielded')
+        terminalCells.add(lifecycle.runtime_cell_id);
     }
     if (value.type === 'tool_call_started') {
       const id = parse(nonempty, value['tool_call_id']);
@@ -209,6 +248,11 @@ export function validateCodexTraceLinks(
       if (requester['type'] === 'code_cell') {
         const cellId = parse(nonempty, requester['runtime_cell_id']);
         const runtimeId = parse(nonempty, value['code_mode_runtime_tool_id']);
+        if (terminalCells.has(cellId))
+          fail(
+            'Native tool dispatch starts after its runtime cell terminated.',
+            row.anchor,
+          );
         const key = JSON.stringify([cellId, runtimeId]);
         if (runtimeIds.has(key))
           fail('Native cell-local tool identifier is duplicated.');
@@ -276,6 +320,20 @@ export function validateCodexTraceLinks(
           row.anchor,
         );
       turns.add(turn.codex_turn_id);
+    } else if (value.type === 'codex_turn_ended') {
+      const turn = parse(TurnEndSchema, value);
+      if (
+        endedTurns.has(turn.codex_turn_id) ||
+        !turns.has(turn.codex_turn_id) ||
+        env.codex_turn_id !== turn.codex_turn_id ||
+        env.thread_id !== source.expected_session_id
+      )
+        fail(
+          'Native turn end identity is missing, duplicated, or conflicting.',
+          row.anchor,
+        );
+      endedTurns.add(turn.codex_turn_id);
+      // Completed turns do not terminate yielded cells; they can continue until an explicit cell end.
     }
     if (env.codex_turn_id !== null && !turns.has(env.codex_turn_id))
       fail('Native trace refers to an unestablished turn.', row.anchor);
@@ -284,6 +342,22 @@ export function validateCodexTraceLinks(
     fail('Native trace root metadata is incomplete.');
   return patchLinks(source, ordinary, rows, bundle, proofs);
 }
+
+const TurnEndSchema = z
+  .object({
+    type: z.literal('codex_turn_ended'),
+    codex_turn_id: nonempty,
+    status: z.enum(['completed', 'failed', 'cancelled', 'aborted']),
+  })
+  .strict();
+const CellLifecycleSchema = z
+  .object({
+    type: z.enum(['code_cell_initial_response', 'code_cell_ended']),
+    runtime_cell_id: nonempty,
+    status: z.enum(['yielded', 'completed', 'failed', 'terminated']),
+    response_payload: RefSchema.nullable(),
+  })
+  .strict();
 
 const ChangesSchema = z.record(
   z.discriminatedUnion('type', [
@@ -398,6 +472,27 @@ function object(value: JsonValue | undefined): ObjectValue {
     fail('Expected a native trace object.');
   return value;
 }
+/** Ordinary retries preserve the first physical anchor; native lifecycles remain unique. */
+function canonicalOrdinaryRecords(rows: RawRow[]): RawRow[] {
+  const canonical = new Map<string, RawRow>();
+  for (const row of rows) {
+    const payload = object(row.value['payload']);
+    const id = parse(nonempty, payload['call_id']);
+    const previous = canonical.get(id);
+    if (
+      previous &&
+      canonicalJson(object(previous.value['payload'])) !==
+        canonicalJson(payload)
+    )
+      fail(
+        'Ordinary native ID is reused with a conflicting payload.',
+        row.anchor,
+      );
+    if (!previous) canonical.set(id, row);
+  }
+  return [...canonical.values()];
+}
+
 function patchLinks(
   source: RawSource,
   ordinary: RawRow[],
@@ -406,13 +501,14 @@ function patchLinks(
   identityProofs: CodexTraceEvidence[],
 ): CodexTracePatchLink[] {
   const links: CodexTracePatchLink[] = [];
-  const patches = new Set<string>();
-  const calls = ordinary.filter(
-    (row) =>
-      row.value['type'] === 'response_item' &&
-      ['custom_tool_call', 'function_call'].includes(
-        String(object(row.value['payload'])['type']),
-      ),
+  const calls = canonicalOrdinaryRecords(
+    ordinary.filter(
+      (row) =>
+        row.value['type'] === 'response_item' &&
+        ['custom_tool_call', 'function_call'].includes(
+          String(object(row.value['payload'])['type']),
+        ),
+    ),
   );
   const one = (type: string, field: string, id: string): RawRow => {
     const matched = rows.filter((row) => {
@@ -424,14 +520,16 @@ function patchLinks(
       fail('Required native trace edge is missing or duplicated.');
     return match;
   };
-  for (const ordinaryRow of ordinary) {
-    if (ordinaryRow.value['type'] !== 'event_msg') continue;
+  const patches = canonicalOrdinaryRecords(
+    ordinary.filter(
+      (row) =>
+        row.value['type'] === 'event_msg' &&
+        object(row.value['payload'])['type'] === 'patch_apply_end',
+    ),
+  );
+  for (const ordinaryRow of patches) {
     const ordinaryPayload = object(ordinaryRow.value['payload']);
-    if (ordinaryPayload['type'] !== 'patch_apply_end') continue;
     const patch = parse(NativePatchApplyEndSchema, ordinaryPayload);
-    if (patches.has(patch.call_id))
-      fail('Ordinary patch ID is duplicated.', ordinaryRow.anchor);
-    patches.add(patch.call_id);
     const direct = calls.filter(
       (row) => object(row.value['payload'])['call_id'] === patch.call_id,
     );
@@ -521,10 +619,20 @@ function patchLinks(
       proof.push(evidence(value.path, raw, payload));
       return payload;
     };
-    parse(
+    const invocation = parse(
       InvocationSchema,
       readMember(tool.invocation_payload, 'tool_invocation'),
     );
+    // Native dispatch previews take Rust chars (Unicode scalar values), not UTF-16 units.
+    const inputCharacters = [...invocation.payload.input];
+    const preview =
+      inputCharacters.slice(0, 160).join('') +
+      (inputCharacters.length > 160 ? '...' : '');
+    if (tool.summary.input_preview !== preview)
+      fail(
+        'Native invocation disagrees with its tool-start input preview.',
+        toolRow.anchor,
+      );
     const begun = parse(
       PatchBeginSchema,
       readMember(begin.runtime_payload, 'tool_runtime_event'),
