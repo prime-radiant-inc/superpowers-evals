@@ -309,3 +309,23 @@ test('refuses unresolved parent authority, partial JSONL and source symlinks', (
   symlinkSync(join(f.candidate.workdir, 'missing'), f.path);
   expect(() => acquisition.discoverObserverSources(f.candidate)).toThrow();
 });
+
+test('bound reindexing independently requires inspected parent header authority', () => {
+  const f = acquisitionFixture();
+  writeFileSync(f.path, f.raw);
+  const bound = acquisition.discoverObserverSources(f.candidate);
+  const source = bound.sources[0]!.source;
+  expect(
+    acquisition.indexBoundObserverSource(bound, source, Buffer.from(f.raw))
+      .identity.conversation,
+  ).toBe('parent');
+  expect(() =>
+    acquisition.indexBoundObserverSource(
+      bound,
+      source,
+      Buffer.from(
+        f.raw.replace('"thread_source":"user"', '"thread_source":"internal"'),
+      ),
+    ),
+  ).toThrow();
+});

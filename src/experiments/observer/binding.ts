@@ -302,6 +302,41 @@ export function indexObserverSource(
     : indexClaudeTranscript(source, raw);
 }
 
+/** Recheck raw authority during acquisition and offline replay alike. */
+export function indexBoundObserverSource(
+  binding: ObserverBinding,
+  source: RawSource,
+  raw: Uint8Array,
+): RawIndex {
+  requireObserverDialect(binding);
+  if (
+    source.runtime !== binding.runtime ||
+    source.expected_cwd !== binding.launch_cwd ||
+    source.expected_cli_version !== binding.cli_version
+  )
+    throw new ObserverEvidenceError(
+      'identity_conflict',
+      'Raw source conflicts with runner binding.',
+    );
+  const index = indexObserverSource(source, raw);
+  const header = parseCompleteJsonl(source, raw)[0]?.value;
+  const payload = header?.['payload'];
+  if (
+    header?.['type'] !== 'session_meta' ||
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    index.identity.conversation !== 'parent' ||
+    payload['originator'] !== 'codex-tui' ||
+    payload['thread_source'] !== 'user'
+  )
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Source lacks inspected parent or descendant-link provenance.',
+    );
+  return index;
+}
+
 /** Startup may have no source. Once selected, the parent path and inode are immutable. */
 export function discoverObserverSources(
   input: ObserverBinding,
@@ -353,16 +388,7 @@ export function discoverObserverSources(
         'Source has no canonical session identity.',
       );
     const source = { ...placeholder, expected_session_id: id };
-    const index = indexObserverSource(source, raw);
-    if (
-      index.identity.conversation !== 'parent' ||
-      payload['originator'] !== 'codex-tui' ||
-      payload['thread_source'] !== 'user'
-    )
-      throw new ObserverEvidenceError(
-        'invalid_source',
-        'Source lacks inspected parent or descendant-link provenance.',
-      );
+    indexBoundObserverSource(binding, source, raw);
     candidates.push({
       source,
       root_id: node.root_id,
