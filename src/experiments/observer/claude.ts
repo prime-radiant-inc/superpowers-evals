@@ -130,17 +130,25 @@ export function inspectedClaudeParentIdentity(raw: Uint8Array): {
     expected_cli_version: '2.1.209',
   };
   const rows = parseCompleteJsonl(placeholder, raw);
-  const parent = rows.find(
-    ({ value }) =>
-      isInspectedNativeHumanInput(value) && value['parentUuid'] === null,
-  );
+  const parent = rows.find(({ value }) => isInspectedNativeHumanInput(value));
   if (!parent) {
+    let startupSource: RawSource | null = null;
     for (const { value, anchor } of rows) {
       const type = recordType(value, anchor);
+      if (isStartupHook(value)) {
+        inspectNativeAttachment(value, anchor);
+        startupSource ??= {
+          ...placeholder,
+          expected_session_id: value['sessionId'] as string,
+          expected_cwd: value['cwd'] as string,
+        };
+        continue;
+      }
       if (
         type !== 'mode' &&
         type !== 'permission-mode' &&
-        type !== 'file-history-snapshot'
+        type !== 'file-history-snapshot' &&
+        type !== 'last-prompt'
       ) {
         unknownRecord(
           'Claude source has no inspected native parent input.',
@@ -149,6 +157,7 @@ export function inspectedClaudeParentIdentity(raw: Uint8Array): {
       }
       inspectNativeMetadata(value, type, anchor);
     }
+    if (startupSource) indexClaudeTranscript(startupSource, raw);
     return null;
   }
   const source = {
@@ -196,7 +205,8 @@ function inspectNativeMetadata(
   } else if (type === 'last-prompt') {
     exactKeys(row, ['type', 'lastPrompt', 'leafUuid', 'sessionId'], anchor);
     if (
-      typeof row['lastPrompt'] !== 'string' ||
+      (row['lastPrompt'] !== undefined &&
+        typeof row['lastPrompt'] !== 'string') ||
       typeof row['leafUuid'] !== 'string'
     ) {
       invalidRecord('Claude last-prompt metadata is malformed.', anchor);
@@ -225,6 +235,111 @@ function inspectNativeMetadata(
       invalidRecord('Claude file snapshot is malformed.', anchor);
     }
   }
+}
+
+function isStartupHook(row: JsonObject): boolean {
+  const attachment = row['attachment'];
+  return (
+    row['type'] === 'attachment' &&
+    isObject(attachment) &&
+    (attachment['type'] === 'hook_success' ||
+      attachment['type'] === 'hook_additional_context')
+  );
+}
+
+/** Native hooks and permission metadata carry context, never human approval. */
+function inspectNativeAttachment(row: JsonObject, anchor: RawAnchor): void {
+  if (!isInspectedNativeEnvelope(row)) {
+    unknownRecord('Claude attachment envelope is not inspected.', anchor);
+  }
+  exactKeys(
+    row,
+    [
+      'type',
+      'attachment',
+      'cwd',
+      'entrypoint',
+      'gitBranch',
+      'isSidechain',
+      'parentUuid',
+      'sessionId',
+      'session_id',
+      'timestamp',
+      'userType',
+      'uuid',
+      'version',
+    ],
+    anchor,
+  );
+  if (
+    typeof row['uuid'] !== 'string' ||
+    row['uuid'].length === 0 ||
+    (row['parentUuid'] !== null &&
+      (typeof row['parentUuid'] !== 'string' ||
+        row['parentUuid'].length === 0)) ||
+    typeof row['timestamp'] !== 'string' ||
+    typeof row['gitBranch'] !== 'string'
+  )
+    invalidRecord('Claude attachment identity is malformed.', anchor);
+  const attachment = row['attachment'];
+  if (!isObject(attachment))
+    invalidRecord('Claude attachment is malformed.', anchor);
+  const type = attachment['type'];
+  if (type === 'command_permissions') {
+    exactKeys(attachment, ['type', 'allowedTools'], anchor);
+    if (
+      !Array.isArray(attachment['allowedTools']) ||
+      attachment['allowedTools'].length !== 0
+    ) {
+      unknownRecord(
+        'Claude command-permissions variant is not inspected.',
+        anchor,
+      );
+    }
+    return;
+  }
+  exactKeys(
+    attachment,
+    type === 'hook_success'
+      ? [
+          'type',
+          'hookName',
+          'toolUseID',
+          'hookEvent',
+          'content',
+          'stdout',
+          'stderr',
+          'exitCode',
+          'command',
+          'durationMs',
+        ]
+      : ['type', 'content', 'hookName', 'toolUseID', 'hookEvent'],
+    anchor,
+  );
+  if (
+    attachment['hookEvent'] !== 'SessionStart' ||
+    attachment['hookName'] !==
+      (type === 'hook_success' ? 'SessionStart:startup' : 'SessionStart') ||
+    typeof attachment['toolUseID'] !== 'string' ||
+    attachment['toolUseID'].length === 0
+  )
+    unknownRecord('Claude startup-hook variant is not inspected.', anchor);
+  if (type === 'hook_success') {
+    if (
+      !['content', 'stdout', 'stderr', 'command'].every(
+        (key) => typeof attachment[key] === 'string',
+      ) ||
+      attachment['exitCode'] !== 0 ||
+      typeof attachment['durationMs'] !== 'number' ||
+      !Number.isFinite(attachment['durationMs']) ||
+      attachment['durationMs'] < 0
+    )
+      invalidRecord('Claude startup-hook result is malformed.', anchor);
+  } else if (
+    !Array.isArray(attachment['content']) ||
+    !attachment['content'].every((value) => typeof value === 'string')
+  )
+    invalidRecord('Claude startup-hook context is malformed.', anchor);
 }
 
 function textEntry(
@@ -472,7 +587,10 @@ export function indexClaudeTranscript(
       typeof uuid === 'string' &&
       isInspectedNativeEnvelope(row) &&
       ((!nativeChainStarted &&
-        nativeHumanInput &&
+        (nativeHumanInput ||
+          (isStartupHook(row) &&
+            isObject(row['attachment']) &&
+            row['attachment']['type'] === 'hook_success')) &&
         row['parentUuid'] === null) ||
         (nativeChainUuid !== null && row['parentUuid'] === nativeChainUuid));
     const nativeApprovalEligible = nativeHumanInput && nativeChainLinked;
@@ -562,9 +680,15 @@ export function indexClaudeTranscript(
       if (
         attachmentType !== 'deferred_tools_delta' &&
         attachmentType !== 'skill_listing' &&
-        attachmentType !== 'agent_listing_delta'
+        attachmentType !== 'agent_listing_delta' &&
+        attachmentType !== 'hook_success' &&
+        attachmentType !== 'hook_additional_context' &&
+        attachmentType !== 'command_permissions'
       ) {
         unknownRecord('Claude attachment subtype is not supported.', rowAnchor);
+      }
+      if (isStartupHook(row) || attachmentType === 'command_permissions') {
+        inspectNativeAttachment(row, rowAnchor);
       }
       if (attachmentType === 'agent_listing_delta') {
         if (row['message'] !== undefined)

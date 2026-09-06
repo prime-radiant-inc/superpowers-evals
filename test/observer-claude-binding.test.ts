@@ -20,7 +20,7 @@ afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
 });
-function fixture() {
+function fixture(name = 'claude-2.1.209-native-parent.jsonl') {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), 'native-claude-binding-')),
   );
@@ -49,9 +49,11 @@ function fixture() {
     sources: [],
   };
   const raw = readFileSync(
-    new URL('./fixtures/claude-2.1.209-native-parent.jsonl', import.meta.url),
+    new URL(`./fixtures/${name}`, import.meta.url),
     'utf8',
-  ).replaceAll('/capture/claude-parent/workdir', workdir);
+  )
+    .replaceAll('/capture/claude-parent/workdir', workdir)
+    .replaceAll('/capture/claude-hooks/workdir', workdir);
   return { binding, raw, path: join(transcripts, 'parent.jsonl'), transcripts };
 }
 
@@ -106,4 +108,25 @@ test('does not hide a second pending Claude transcript behind an established par
     `${f.raw.split('\n')[0]}\n`,
   );
   expect(() => discoverObserverSources(f.binding)).toThrow();
+});
+
+// Startup hook metadata must not bind a source before external input exists.
+test('binds the native parent after its startup hook prefix receives typed input', () => {
+  const f = fixture('claude-2.1.209-native-startup-hooks.jsonl');
+  writeFileSync(f.path, `${f.raw.split('\n').slice(0, 6).join('\n')}\n`);
+  expect(discoverObserverSources(f.binding).phase).toBe('unbound');
+  writeFileSync(f.path, f.raw);
+  const bound = discoverObserverSources(f.binding);
+  expect(bound.phase).toBe('bound');
+  expect(bound.sources[0]!.source.expected_session_id).toBe(
+    'native-hooks-parent',
+  );
+  expect(
+    indexBoundObserverSource(
+      bound,
+      bound.sources[0]!.source,
+      Buffer.from(f.raw),
+    ).identity.conversation,
+  ).toBe('parent');
+  expect(discoverObserverSources(bound)).toEqual(bound);
 });
