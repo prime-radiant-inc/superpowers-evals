@@ -11,6 +11,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   readSync,
   realpathSync,
   writeFileSync,
@@ -137,9 +138,13 @@ export function inventoryNativeCapture(
   hooks?: {
     beforeOpen?: (path: string) => void;
     afterReadChunk?: (path: string) => void;
+    afterReadLink?: (path: string) => void;
   },
 ) {
-  const files: { path: string; bytes: number; sha256: string }[] = [];
+  const files: (
+    | { path: string; bytes: number; sha256: string }
+    | { kind: 'symlink'; path: string; target: string }
+  )[] = [];
   let bytes = 0;
   const rootPin = pinAbsoluteDir(root, 'capture root');
   const rootIdentity = fstatSync(rootPin.fd, { bigint: true });
@@ -150,12 +155,23 @@ export function inventoryNativeCapture(
       const path = join(pin.viaPath, name);
       const relativePath = [...parts, name].join('/');
       const before = lstatSync(path, { bigint: true });
-      requireCondition(
-        !before.isSymbolicLink(),
-        `symlink in capture: ${relativePath}`,
-      );
       hooks?.beforeOpen?.(relativePath);
-      if (before.isDirectory()) {
+      if (before.isSymbolicLink()) {
+        // Native CLIs create launcher links. Preserve their targets as metadata,
+        // without opening them or treating them as raw session evidence.
+        const target = readlinkSync(path);
+        hooks?.afterReadLink?.(relativePath);
+        const after = lstatSync(path, { bigint: true });
+        requireCondition(
+          sameIdentity(before, after) &&
+            after.isSymbolicLink() &&
+            before.size === after.size &&
+            before.mtimeNs === after.mtimeNs &&
+            before.ctimeNs === after.ctimeNs,
+          'capture symlink changed during read',
+        );
+        files.push({ kind: 'symlink', path: relativePath, target });
+      } else if (before.isDirectory()) {
         const child = pinChildDir(pin, name, 'capture directory')!;
         try {
           requireCondition(
@@ -682,6 +698,7 @@ export async function captureNativeParent(
       outcome === 'captured' &&
       !files.some(
         (file) =>
+          'bytes' in file &&
           file.path.startsWith('home/') &&
           file.path.endsWith('.jsonl') &&
           file.bytes > 0,

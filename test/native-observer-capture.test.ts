@@ -370,3 +370,59 @@ test('inventory rejects real leaf, directory and ancestor replacement without ha
     );
   }
 });
+
+test('inventory records native launcher links without following file, directory or missing targets', () => {
+  const config = fixture();
+  mkdirSync(config.output);
+  writeFileSync(join(config.output, 'session.jsonl'), 'raw session');
+  for (const [name, target] of [
+    ['apply_patch', config.binary],
+    ['directory', config.output],
+    ['missing.jsonl', '/missing-native-capture-target'],
+  ])
+    symlinkSync(target!, join(config.output, name!));
+  for (const withDigests of [true, false]) {
+    const inventory = inventoryNativeCapture(config.output, withDigests);
+    expect(inventory.find((entry) => entry.path === 'apply_patch')).toEqual({
+      kind: 'symlink',
+      path: 'apply_patch',
+      target: config.binary,
+    });
+    expect(inventory.find((entry) => entry.path === 'directory')).toEqual({
+      kind: 'symlink',
+      path: 'directory',
+      target: config.output,
+    });
+    expect(inventory.find((entry) => entry.path === 'missing.jsonl')).toEqual({
+      kind: 'symlink',
+      path: 'missing.jsonl',
+      target: '/missing-native-capture-target',
+    });
+    expect(inventory).toHaveLength(4);
+    expect(inventory.find((entry) => entry.path === 'session.jsonl')).toEqual({
+      path: 'session.jsonl',
+      bytes: 11,
+      sha256: withDigests
+        ? createHash('sha256').update('raw session').digest('hex')
+        : '',
+    });
+  }
+});
+
+test('inventory rejects replacement of a symlink before or after reading its target', () => {
+  for (const timing of ['beforeOpen', 'afterReadLink'] as const) {
+    const config = fixture();
+    mkdirSync(config.output);
+    const link = join(config.output, 'apply_patch');
+    symlinkSync(config.binary, link);
+    expect(() =>
+      inventoryNativeCapture(config.output, true, {
+        [timing](path: string) {
+          if (path !== 'apply_patch') return;
+          renameSync(link, join(config.output, 'original-link'));
+          symlinkSync('/different-native-target', link);
+        },
+      }),
+    ).toThrow('capture symlink changed during read');
+  }
+});
