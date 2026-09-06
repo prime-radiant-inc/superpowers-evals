@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 export type NativeObserverBlock =
   | { type: 'text'; text: string }
+  | { type: 'custom'; id: string; name: 'exec'; input: string }
   | { type: 'tool'; id: string; name: string; input: unknown };
 
 export interface NativeObserverStep {
@@ -170,7 +171,18 @@ function validateStep(step: ResolvedStep, request: ObjectValue) {
     Array.isArray(request[step.protocol === 'messages' ? 'messages' : 'input']),
     'expected conversation array',
   );
-  const tools = request['tools'] ?? [];
+  const tools =
+    request['tools'] ??
+    (step.protocol === 'responses'
+      ? (request['input'] as unknown[]).flatMap((item) =>
+          object(item) &&
+          item['type'] === 'additional_tools' &&
+          item['role'] === 'developer' &&
+          Array.isArray(item['tools'])
+            ? item['tools']
+            : [],
+        )
+      : []);
   requireCondition(Array.isArray(tools), 'expected tool catalog');
   requireCondition(
     Array.isArray(step.blocks) && step.blocks.length > 0,
@@ -185,7 +197,9 @@ function validateStep(step: ResolvedStep, request: ObjectValue) {
       );
     } else {
       requireCondition(
-        block.type === 'tool' && block.id.length > 0 && !ids.has(block.id),
+        (block.type === 'tool' || block.type === 'custom') &&
+          block.id.length > 0 &&
+          !ids.has(block.id),
         'invalid or duplicate call id',
       );
       ids.add(block.id);
@@ -200,6 +214,23 @@ function validateStep(step: ResolvedStep, request: ObjectValue) {
         'unadvertised or ambiguous tool name',
       );
       const tool = matches[0]!;
+      if (block.type === 'custom') {
+        requireCondition(
+          step.protocol === 'responses' &&
+            block.name === 'exec' &&
+            tool['type'] === 'custom' &&
+            typeof block.input === 'string' &&
+            block.input.length > 0 &&
+            isDeepStrictEqual(tool['format'], {
+              type: 'grammar',
+              syntax: 'lark',
+              definition:
+                '\nstart: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/\n',
+            }),
+          'unsupported custom exec grammar',
+        );
+        continue;
+      }
       requireCondition(
         step.protocol !== 'responses' || tool['type'] === 'function',
         'only JSON function tools are supported',
@@ -346,6 +377,25 @@ function eventsFor(
       };
       add('response.content_part.done', { ...base, content_index: 0, part });
       const completed = { ...item, status: 'completed', content: [part] };
+      output.push(completed);
+      add('response.output_item.done', { output_index, item: completed });
+    } else if (block.type === 'custom') {
+      const item = {
+        id: item_id,
+        type: 'custom_tool_call',
+        call_id: block.id,
+        name: block.name,
+        input: '',
+        status: 'in_progress',
+      };
+      add('response.output_item.added', { output_index, item });
+      for (const delta of parts(block.input))
+        add('response.custom_tool_call_input.delta', { ...base, delta });
+      add('response.custom_tool_call_input.done', {
+        ...base,
+        input: block.input,
+      });
+      const completed = { ...item, input: block.input, status: 'completed' };
       output.push(completed);
       add('response.output_item.done', { output_index, item: completed });
     } else {

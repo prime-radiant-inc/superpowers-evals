@@ -31,6 +31,16 @@ afterEach(() => {
 });
 const tmux = Bun.which('tmux');
 const localTest = test.skipIf(!tmux);
+const nativeExecTool = {
+  type: 'custom',
+  name: 'exec',
+  format: {
+    type: 'grammar',
+    syntax: 'lark',
+    definition:
+      '\nstart: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/\n',
+  },
+};
 function fixture(mode = 'normal', runtime: 'codex' | 'claude' = 'codex') {
   const root = realpathSync(
     mkdtempSync(join(tmpdir(), 'native-capture-test-')),
@@ -61,12 +71,29 @@ for await (const text of createInterface({ input: process.stdin })) {
  const protocol = process.env.ANTHROPIC_BASE_URL ? 'messages' : 'responses';
  const url = process.env.ANTHROPIC_BASE_URL || process.argv[process.argv.indexOf('-c') + 1];
  const base = protocol === 'messages' ? url + '/v1' : process.argv.find(x => x.startsWith('model_providers.quorum.base_url=')).split('=')[1].replaceAll('"', '');
- const body = { model: protocol === 'messages' ? 'claude-opus-5' : 'gpt-6-astra', stream: true, tools: [], [protocol === 'messages' ? 'messages' : 'input']: messages };
+ const body = { model: protocol === 'messages' ? 'claude-opus-5' : process.argv.find(x => x.startsWith('model=')).slice(6).replaceAll('"', ''), stream: true, tools: ${JSON.stringify(mode)} === 'nested-patch' ? undefined : [], [protocol === 'messages' ? 'messages' : 'input']: ${JSON.stringify(mode)} === 'nested-patch' ? [{ type: 'additional_tools', role: 'developer', tools: [${JSON.stringify(nativeExecTool)}] }, ...messages] : messages };
+ let more = true;
+ while (more) {
+ more = false;
  const response = await fetch(base + (${JSON.stringify(mode)} === 'route' ? '/unexpected' : '/' + protocol), { method: 'POST', headers: { 'content-type': 'application/json', ...(protocol === 'messages' ? { 'x-api-key': process.env.ANTHROPIC_API_KEY } : { authorization: 'Bearer ' + process.env.CODEX_PROVIDER_API_KEY }) }, body: JSON.stringify(body) });
  const wire = await response.text();
  appendFileSync(home + '/raw/session.jsonl', JSON.stringify({ wire }) + '\\n');
- for (const line of wire.split('\\n')) if (line.startsWith('data: ')) { const e = JSON.parse(line.slice(6)); if (e.type === 'response.output_text.done') console.log(e.text); if (e.type === 'content_block_delta' && e.delta.type === 'text_delta') process.stdout.write(e.delta.text); }
+ for (const line of wire.split('\\n')) if (line.startsWith('data: ')) { const e = JSON.parse(line.slice(6));
+ if (e.type === 'response.output_item.done' && e.item.type === 'custom_tool_call') {
+   const values = [];
+   const execute = Object.getPrototypeOf(async function(){}).constructor;
+   await new execute('tools', 'text', e.item.input)({ apply_patch: async patch => {
+     const lines = patch.split('\\n');
+     const file = lines.find(line => line.startsWith('*** Add File: ')).slice(14);
+     writeFileSync(process.cwd() + '/' + file, lines.filter(line => line.startsWith('+')).map(line => line.slice(1)).join('\\n') + '\\n');
+     return { success: true };
+   } }, value => values.push(value));
+   body.input.push(e.item, { type: 'custom_tool_call_output', call_id: e.item.call_id, output: JSON.stringify(values) });
+   more = true;
+ }
+ if (e.type === 'response.output_text.done') console.log(e.text); if (e.type === 'content_block_delta' && e.delta.type === 'text_delta') process.stdout.write(e.delta.text); }
  console.log('');
+ }
 }
 `,
   );
@@ -103,6 +130,65 @@ const testBoundary = {
   inspectStorage: () => ({ type: 0x01021994, bsize: 4096, blocks: 65536 }),
   providerPort: 0,
 };
+
+localTest(
+  'selects Sol and confines the optional trace destination to its private home',
+  async () => {
+    const config = {
+      ...fixture(),
+      codexModel: 'gpt-5.6-sol' as const,
+      codexTrace: true,
+    };
+    const result = await captureNativeParent(config, testBoundary);
+    expect(result.outcome).toBe('captured');
+    const observed = JSON.parse(
+      readFileSync(join(config.output, 'home/observed.json'), 'utf8'),
+    );
+    expect(observed.env.CODEX_ROLLOUT_TRACE_ROOT).toBe(
+      join(config.output, 'home/.codex/rollout-traces'),
+    );
+    const requests = JSON.parse(
+      readFileSync(join(config.output, 'requests.json'), 'utf8'),
+    );
+    expect(requests[0].request.model).toBe('gpt-5.6-sol');
+  },
+);
+
+localTest(
+  'drives a nested patch to a native result before submitting the second input',
+  async () => {
+    const config = {
+      ...fixture('nested-patch'),
+      codexModel: 'gpt-5.6-sol' as const,
+      codexTrace: true,
+      codexScenario: 'nested-patch' as const,
+      codexSandbox: 'danger-full-access' as const,
+    };
+    const result = await captureNativeParent(config, testBoundary);
+    expect(result.outcome).toBe('captured');
+    expect(result.cleanup).toBe('stopped');
+    expect(
+      readFileSync(join(config.output, 'workdir/trace-spec.md'), 'utf8'),
+    ).toBe('native trace patch\n');
+    const requests = JSON.parse(
+      readFileSync(join(config.output, 'requests.json'), 'utf8'),
+    );
+    expect(
+      requests.map((record: { decision: string }) => record.decision),
+    ).toEqual(['accepted', 'accepted', 'accepted']);
+    expect(
+      requests[1].request.input.some(
+        (item: { type: string }) => item.type === 'custom_tool_call_output',
+      ),
+    ).toBe(true);
+    const observed = JSON.parse(
+      readFileSync(join(config.output, 'home/observed.json'), 'utf8'),
+    );
+    expect(observed.argv[observed.argv.indexOf('--sandbox') + 1]).toBe(
+      'danger-full-access',
+    );
+  },
+);
 
 localTest(
   'checks the live storage bound while accepting changing native output',

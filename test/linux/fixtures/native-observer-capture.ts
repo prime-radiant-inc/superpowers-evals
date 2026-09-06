@@ -31,12 +31,19 @@ import {
   pinAbsoluteDir,
   pinChildDir,
 } from '../../../src/appliance/credential-scope.ts';
-import { startNativeObserverProvider } from './native-observer-provider.ts';
+import {
+  type NativeObserverStep,
+  startNativeObserverProvider,
+} from './native-observer-provider.ts';
 
 const absolute = z.string().refine(isAbsolute, 'absolute path required');
 const Config = z
   .object({
     runtime: z.enum(['codex', 'claude']),
+    codexModel: z.enum(['gpt-6-astra', 'gpt-5.6-sol']).optional(),
+    codexTrace: z.boolean().optional(),
+    codexScenario: z.enum(['text', 'nested-patch']).optional(),
+    codexSandbox: z.enum(['workspace-write', 'danger-full-access']).optional(),
     binary: absolute,
     expectedVersion: z.string().min(1),
     expectedExecutableSha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -58,7 +65,7 @@ const Config = z
   })
   .strict();
 export type NativeCaptureConfig = z.infer<typeof Config>;
-const inputs = [
+const textInputs = [
   'Please reply with a short text acknowledgment of native capture input one. Do not use tools.',
   'I approve this text-only capture. Please acknowledge native capture input two. Do not use tools.',
 ];
@@ -296,6 +303,18 @@ export async function captureNativeParent(
   } = {},
 ) {
   const config = Config.parse(rawConfig);
+  const nestedPatch = config.codexScenario === 'nested-patch';
+  requireCondition(
+    !nestedPatch ||
+      (config.runtime === 'codex' && config.codexModel === 'gpt-5.6-sol'),
+    'nested patch requires the inspected Sol catalog',
+  );
+  const inputs = nestedPatch
+    ? [
+        'Please create trace-spec.md with the exact text native trace patch via apply_patch, then acknowledge completion.',
+        'I approve this capture. Please acknowledge native capture input two. Do not use tools.',
+      ]
+    : textInputs;
   const boundary = (dependencies.verifyBoundary ?? verifyNativeCaptureBoundary)(
     config,
   );
@@ -539,42 +558,96 @@ export async function captureNativeParent(
       'selected native help lacks required launch flags',
     );
     const protocol = config.runtime === 'codex' ? 'responses' : 'messages';
-    const model = config.runtime === 'codex' ? 'gpt-6-astra' : 'claude-opus-5';
+    const model =
+      config.runtime === 'codex'
+        ? (config.codexModel ?? 'gpt-6-astra')
+        : 'claude-opus-5';
     provider = startNativeObserverProvider({
       port: dependencies.providerPort ?? 43871,
       maxRequests: 4,
-      steps: inputs.map((text, index) => ({
-        protocol,
-        request: (request) => {
-          const conversation =
-            request[protocol === 'responses' ? 'input' : 'messages'];
-          if (request['model'] !== model || !Array.isArray(conversation))
-            return false;
-          const users = conversation.filter(
-            (item) => item && typeof item === 'object' && item.role === 'user',
-          );
-          const last = users.at(-1);
-          if (!last) return false;
-          const content = last.content;
-          return (
-            content === text ||
-            (Array.isArray(content) &&
-              content.some(
-                (block) =>
-                  block &&
-                  typeof block === 'object' &&
-                  ['text', 'input_text'].includes(block.type) &&
-                  block.text === text,
-              ))
-          );
-        },
-        blocks: [{ type: 'text', text: replies[index]! }],
-      })),
+      steps: [
+        ...(nestedPatch
+          ? [
+              {
+                protocol: 'responses',
+                request: (request) =>
+                  request['model'] === model &&
+                  Array.isArray(request['input']) &&
+                  request['input'].some(
+                    (item) =>
+                      item.role === 'user' &&
+                      (item.content === inputs[0] ||
+                        (Array.isArray(item.content) &&
+                          item.content.some(
+                            (block) => block.text === inputs[0],
+                          ))),
+                  ),
+                blocks: [
+                  {
+                    type: 'custom',
+                    id: 'call_native_trace_patch',
+                    name: 'exec',
+                    input:
+                      'text(await tools.apply_patch("*** Begin Patch\\n*** Add File: trace-spec.md\\n+native trace patch\\n*** End Patch"));',
+                  },
+                ],
+              } satisfies NativeObserverStep,
+            ]
+          : []),
+        ...inputs.map(
+          (text, index): NativeObserverStep => ({
+            protocol,
+            request: (request) => {
+              if (nestedPatch && index === 0) {
+                const output =
+                  Array.isArray(request['input']) &&
+                  request['input'].find(
+                    (item) =>
+                      item.type === 'custom_tool_call_output' &&
+                      item.call_id === 'call_native_trace_patch',
+                  );
+                return (
+                  request['model'] === model &&
+                  Boolean(output) &&
+                  existsSync(join(workdir, 'trace-spec.md')) &&
+                  readFileSync(join(workdir, 'trace-spec.md'), 'utf8') ===
+                    'native trace patch\n'
+                );
+              }
+              const conversation =
+                request[protocol === 'responses' ? 'input' : 'messages'];
+              if (request['model'] !== model || !Array.isArray(conversation))
+                return false;
+              const users = conversation.filter(
+                (item) =>
+                  item && typeof item === 'object' && item.role === 'user',
+              );
+              const last = users.at(-1);
+              if (!last) return false;
+              const content = last.content;
+              return (
+                content === text ||
+                (Array.isArray(content) &&
+                  content.some(
+                    (block) =>
+                      block &&
+                      typeof block === 'object' &&
+                      ['text', 'input_text'].includes(block.type) &&
+                      block.text === text,
+                  ))
+              );
+            },
+            blocks: [{ type: 'text', text: replies[index]! }],
+          }),
+        ),
+      ],
     });
     const endpoint = provider.url.origin;
     let argv: string[];
     if (config.runtime === 'codex') {
       env['CODEX_HOME'] = join(home, '.codex');
+      if (config.codexTrace)
+        env['CODEX_ROLLOUT_TRACE_ROOT'] = join(home, '.codex/rollout-traces');
       env['CODEX_PROVIDER_API_KEY'] = 'native-capture-fake';
       writeFileSync(
         join(home, '.codex/config.toml'),
@@ -586,7 +659,7 @@ export async function captureNativeParent(
         workdir,
         '--no-alt-screen',
         '--sandbox',
-        'workspace-write',
+        config.codexSandbox ?? 'workspace-write',
         '--ask-for-approval',
         'never',
         ...[
@@ -688,7 +761,7 @@ export async function captureNativeParent(
         if (
           provider.records.filter((record) => record.decision === 'accepted')
             .length ===
-            index + 1 &&
+            index + 1 + (nestedPatch ? 1 : 0) &&
           text.includes(replies[index]!)
         )
           break;

@@ -55,6 +55,68 @@ async function post(
   });
 }
 
+test('emits native custom exec calls only from the Responses Lite advertised catalog', async () => {
+  const format = {
+    type: 'grammar',
+    syntax: 'lark',
+    definition:
+      '\nstart: pragma_source | plain_source\npragma_source: PRAGMA_LINE NEWLINE SOURCE\nplain_source: SOURCE\n\nPRAGMA_LINE: /[ \\t]*\\/\\/ @exec:[^\\r\\n]*/\nNEWLINE: /\\r?\\n/\nSOURCE: /[\\s\\S]+/\n',
+  };
+  for (const advertised of [true, false]) {
+    const request = {
+      ...bodies.responses,
+      tools: undefined,
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: advertised ? [{ type: 'custom', name: 'exec', format }] : [],
+        },
+        ...bodies.responses.input,
+      ],
+    };
+    const server = startNativeObserverProvider({
+      port: 0,
+      steps: [
+        {
+          protocol: 'responses',
+          request: () => true,
+          blocks: [
+            {
+              type: 'custom',
+              id: 'nested_fixture',
+              name: 'exec',
+              input: 'text(await tools.apply_patch("fixture"));',
+            },
+          ],
+        },
+      ],
+    });
+    try {
+      const response = await post(server.url, 'responses', request);
+      expect(response.status).toBe(advertised ? 200 : 400);
+      const wire = await response.text();
+      if (advertised) {
+        const events = wire
+          .split('\n')
+          .filter((line) => line.startsWith('data: '))
+          .map((line) => JSON.parse(line.slice(6)));
+        const completed = events.find(
+          (event) => event.type === 'response.output_item.done',
+        );
+        expect(completed.item).toMatchObject({
+          type: 'custom_tool_call',
+          call_id: 'nested_fixture',
+          name: 'exec',
+          input: 'text(await tools.apply_patch("fixture"));',
+        });
+      } else expect(server.records[0]?.chunks).toEqual([]);
+    } finally {
+      await server.stop();
+    }
+  }
+});
+
 test('text-only replies leave the native advertised tool catalog opaque', async () => {
   const request = {
     ...bodies.responses,
