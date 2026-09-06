@@ -35,8 +35,10 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 
 ## Execution state
 
-Task 1 is complete; Tasks 2, 3 and 6 are implementing in isolated worktrees.
-Tasks 4, 5 and 7–11 remain pending. Source implementation/review remains authorized. Linux
+Task 1 is complete. Tasks 2, 3 and 6 have source implementations under review
+and correction; Tasks 4 and 5 are implementing against their stable contracts.
+A test-only native-provider fixture is preparing Task 8; qualification has not
+started. Tasks 7 and 9–11 remain pending. Source implementation/review remains authorized. Linux
 qualification, installed changes/credential issuance and provider execution each
 await their concrete packet and applicable authorization. No new spending,
 provider request, Docker run, installed change, push or merge occurred here.
@@ -98,3 +100,43 @@ Current authoritative pricing research is available for the four primary
 model/endpoint combinations. Runtime model IDs/routes, service tiers, delegates,
 cache-duration accounting and actual worker snapshot delivery remain required
 qualification evidence. The historical pricing snapshot is not reused unchanged.
+
+## Source integration in progress
+
+Task 2 source commits `62525b87`, `e43fa4f7` and `6bd8162c` add bound
+source discovery, inspected Codex metadata grammar, private runtime-version
+probing and a closed observer command guard. Worker reports 96 focused tests
+and 24 runner/provenance tests passing, including the real local Gauntlet
+interface. Independent review found that Gauntlet discards successful guard
+stdout, preventing the actor from discovering receipt IDs. A bounded receipt
+discovery command and model-visible Gauntlet regression are being reviewed.
+Claude parent authority and native descendants remain incomplete requirements.
+
+Task 3 source commits `caf19764` and `918664d1` implement V2 raw-byte chronology
+and preserve known violations alongside unknown evidence. Independent review
+found stale completion after later approval invalidation. Correction `81596618`
+clears current completion when its prerequisite chain changes; reapproval alone
+cannot restore completion. Seven failing regression cases became green; the
+worker reports 72 scorer tests, typecheck and scoped lint passing. Scoped review
+marked the finding addressed with no new actionable breakage. Full Task 3
+acceptance still requires passing native Claude parity and descendant chronology.
+
+Task 6 commits `2efa6e95` and `9bbb03b2` declare the two suites, Claude arms,
+separate public grader configuration, verified pricing and non-launching
+preflight. Review found conflated diagnostic/measured gates, unauthenticated
+qualification claims and duplicate model-capacity rows. The correction separates
+capability gates from reviewed diagnostic GO, authenticates explicit receipt
+artifacts and rejects duplicates. The worker reports 22 focused tests plus the
+first-six controller regression, seven pricing checks, lint, typecheck and
+scenario validation passing. Scoped re-review is pending.
+
+All counts above are worker receipts, not reviewer reruns or operational proof.
+The integrated full check and whole-change review remain Task 7. No source slice
+listed here authorizes launch.
+
+A read-only version refresh found installed Codex `0.146.0`, Claude `2.1.209`
+and Bun `1.3.14`. The running image matches the earlier privately recorded
+image digest. These are runtime inventory facts, not native grammar evidence.
+The existing fake provider only drives non-streaming Gauntlet requests; a small
+test-only streaming provider is being implemented to support native CLI capture
+without inference spending. Linux capture still requires its concrete gate.
