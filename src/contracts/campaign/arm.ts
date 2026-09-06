@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EffortLevelSchema } from '../effort.ts';
 
 // Arm names follow the credential-name discipline (registry keys interleave).
 const NAME_RE = /^[a-z0-9_]+$/;
@@ -20,6 +21,9 @@ export const ArmSchema = z
     // Validated against the os-target vocabulary at registration; "windows"
     // parses and is a registration error (parent non-goal).
     os: z.string().min(1).optional(),
+    // Harness effort level for every run of this arm (a treatment constant,
+    // like the model). Registration validates it against the agent's family.
+    effort: EffortLevelSchema.optional(),
     labels: z.record(z.string()).optional(),
   })
   .strict();

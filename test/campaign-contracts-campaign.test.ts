@@ -52,3 +52,22 @@ test('CampaignIdentitySchema is strict; execution_surface takes env-var NAMES on
     }),
   ).toThrow();
 });
+
+test('execution_surface arms carry an optional effort level', () => {
+  const arm = {
+    name: 'claude_xhigh',
+    agent: 'claude',
+    credential: 'opus_fx',
+    auth: 'api-key' as const,
+    api: 'anthropic' as const,
+    model: 'claude-opus-5',
+    key_env_names: ['ANTHROPIC_API_KEY'],
+  };
+  expect(ExecutionSurfaceArmSchema.parse(arm)).toEqual(arm);
+  expect(
+    ExecutionSurfaceArmSchema.parse({ ...arm, effort: 'xhigh' }).effort,
+  ).toBe('xhigh');
+  expect(() =>
+    ExecutionSurfaceArmSchema.parse({ ...arm, effort: 'ultra' }),
+  ).toThrow();
+});

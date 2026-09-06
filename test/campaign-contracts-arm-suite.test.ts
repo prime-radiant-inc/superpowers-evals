@@ -36,6 +36,11 @@ test('arm documents are strict (unknown keys reject)', () => {
   expect(() => ArmSchema.parse({ ...ARM, model: 'claude-opus-5' })).toThrow();
 });
 
+test('arm effort accepts a known level and rejects unknown ones', () => {
+  expect(ArmSchema.parse({ ...ARM, effort: 'xhigh' }).effort).toBe('xhigh');
+  expect(() => ArmSchema.parse({ ...ARM, effort: 'ultra' })).toThrow();
+});
+
 test('V2 suite requires finite attempt and exposure bounds', () => {
   const base = {
     schema_version: 2 as const,

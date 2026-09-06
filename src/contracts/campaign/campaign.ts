@@ -5,6 +5,7 @@ import {
   CREDENTIAL_AUTHS,
   EnvVarNameSchema,
 } from '../credential.ts';
+import { EffortLevelSchema } from '../effort.ts';
 import { FiniteNumberSchema } from '../finite.ts';
 import { ID_COMPONENT_RE } from './suite.ts';
 
@@ -62,6 +63,7 @@ export const ExecutionSurfaceArmSchema = z
     api: z.enum(CREDENTIAL_APIS),
     base_url: z.string().min(1).optional(),
     model: z.string().min(1),
+    effort: EffortLevelSchema.optional(),
     key_env_names: z.array(EnvVarNameSchema),
   })
   .strict();
