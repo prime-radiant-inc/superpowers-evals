@@ -165,3 +165,43 @@ verified bundle's normalized run-relative directory inventory to that existing
 check. The mandatory observer gate must authenticate it first. If wrong, unlisted
 directories could publish; exact added/deleted/empty-directory tests cover this
 ruling without a new manifest schema or optional validation callback.
+
+## Publication, readout and capture preparation
+
+Task 5 independent review approved the four-file implementation with no findings;
+its source is integrated as `65899459`. Worker reports 65 focused tests, typecheck
+and scoped lint passing. Task 4 centralizes its bundle constant and connects the
+flag-only readout CLI.
+
+Task 4 source is integrated through `bae93b8e` for independent review. The worker
+reports 442 focused tests across 17 files passing with an explicit 20-second
+per-test budget, then four CLI contract tests after correcting positional readout
+arguments to the plan's explicit root flags. Earlier broad checks had two default
+timeout failures and a test loaded while its implementation was still changing;
+the settled-source rerun passed. No production deadline or hard-kill grace changed.
+The runner fixtures cover normal and error/stop exits, missing evidence, exact
+publication refusal, immutable saved scoring and copied-run replay. These are
+local synthetic instrument tests, not native/Linux proof.
+
+Root identity wording in the plan is corrected: the approved binding carries root
+paths and selected-source device/inode, while FinalState carries root device/inode.
+Root identities must match capture A/B and final live verification. If a stronger
+startup-to-finish root-identity guarantee were required, this would not provide
+it; the primary spec deliberately claims final-state equality and retains raw
+chronology/input receipts as separate duties. Root replacement during capture
+or after candidate creation must still refuse. No binding schema was expanded.
+
+The test-only native streaming provider and its cancellation coverage passed
+independent review and are integrated through `3d1e76cf`. Worker reports 20 tests
+and 323 assertions with real local SDK stream consumers, typecheck and lint
+passing. A first ordinary-parent TUI capture driver is integrated as `e79ffa61`
+for review; its worker reports 28 tests and 373 assertions using explicit fake
+native binaries, real private tmux and localhost only. Its command still requires
+an approved isolated Linux environment. Direct native-ELF launch, two text-only
+turns and owned-tmux cleanup do not establish wrapper parity, descendant cleanup,
+Gauntlet-route equivalence or native grammar qualification.
+
+All source is now assembled for Task 7 checks; Task 4 and driver reviews remain
+pending. Native parent/child grammar, actual Linux shutdown, installed projections
+and provider execution are still open. No provider call or native session was
+started during source preparation.
