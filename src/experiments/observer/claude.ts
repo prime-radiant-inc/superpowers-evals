@@ -838,6 +838,14 @@ export function indexClaudeTranscript(
       nativeChainStarted = true;
       nativeChainUuid = nativeChainLinked ? uuid : null;
       seenUuids.set(uuid, { canonical_row: canonicalRow, targets });
+    } else if (
+      type === 'user' ||
+      type === 'assistant' ||
+      type === 'attachment' ||
+      type === 'system'
+    ) {
+      nativeChainStarted = true;
+      nativeChainUuid = null;
     }
   }
 

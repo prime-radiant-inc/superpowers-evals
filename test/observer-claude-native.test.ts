@@ -244,3 +244,33 @@ test('turn-duration metadata preserves its anchor but rejects uninspected action
     ).toThrow();
   }
 });
+
+test('UUID-less chain records cannot preserve an earlier native approval link', () => {
+  const missingDurationUuid = structuredClone(twoTurnRows);
+  delete missingDurationUuid[7].uuid;
+  missingDurationUuid[9].parentUuid = missingDurationUuid[6].uuid;
+  const replay = indexClaudeTranscript(
+    twoTurnSource,
+    bytes(missingDurationUuid),
+  );
+  expect(
+    replay.entries.find((entry) => entry.anchor.line === 10),
+  ).toMatchObject({ approval_eligibility: 'unresolved' });
+
+  for (const rowIndex of [3, 4, 6, 7]) {
+    const inserted = {
+      ...twoTurnRows[rowIndex],
+      parentUuid: twoTurnRows[7].uuid,
+    };
+    delete inserted.uuid;
+    const changed = [
+      ...twoTurnRows.slice(0, 8),
+      inserted,
+      ...twoTurnRows.slice(8),
+    ];
+    const index = indexClaudeTranscript(twoTurnSource, bytes(changed));
+    expect(
+      index.entries.find((entry) => entry.anchor.line === 11),
+    ).toMatchObject({ approval_eligibility: 'unresolved' });
+  }
+});
