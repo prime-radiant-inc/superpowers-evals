@@ -612,3 +612,41 @@ The observed parser and served-ID pricing corrections are being developed and
 verified offline. Any subsequent diagnostic requires a fresh frozen source,
 qualification packet and registered identity; these attempts cannot be repaired
 into valid samples or counted as measured results.
+
+### Observed dialect corrections: source verified
+
+The Codex correction (`e0adcebb`) accepts the inspected 0.146.0 reasoning
+response/event records and commentary/final-answer message phases. Reasoning
+remains non-action metadata. Claude (`f66f435b`) validates the observed
+SessionStart hook root and linked native typed input, omitted initial
+`lastPrompt`, and empty command-permissions metadata. Hooks cannot grant
+approval, and unknown variants, broken chains, SDK inputs and sidechains remain
+refused. Privacy-safe reduced fixtures preserve record structure and provenance
+without original content. Tests reproduced the actual refusals before fixes.
+
+Pricing (`c5d31690`) covers the observed `claude-opus-5` ID only within this
+experiment's selected Mantle route. Preflight (`6685f3a6`) requires that exact
+observed ID in measured evidence and pricing coverage for both requested and
+native IDs. It does not rewrite served IDs or accept generic aliases. Future
+suite pricing digest is
+`609f6cbb26be00d29be02614c22abeeb556c9d2235f53d1e830b949cca3b1c6f`.
+
+Independent reviews found no actionable issues in these corrections. Root's
+combined `bun run check` passed **4,050 core tests, 17 qualification/platform
+skips, zero failures**, plus **144 dashboard tests, zero failures**; Biome and
+TypeScript passed. Scenario validation passed. Eight real accounting probes
+include tier boundaries, cache durations, the observed native ID and unknown
+model refusal. These are source checks; installed image verification follows.
+
+The diagnostic NO-GO is final. A new six-attempt diagnostic needs fresh approval,
+source/instrument/pricing binding and registration; no sample is repaired or
+reused. A repeat of the observed token activity is a planning estimate of about
+**$4.69 for six attempts**, conservatively pricing Claude cache creation entirely
+at one-hour rates. Future behavior may differ substantially and the 40-minute
+bound is not a dollar cap. This estimate is not a repaired historical cost total.
+
+Measured admission still requires trustworthy complete evidence. In particular,
+the current preflight's explicitly fake-provider capacity/overlap fields cannot
+honestly be satisfied by relabeling live diagnostic observations. Complete
+native chronology, remaining capability evidence and diagnostic GO stay open;
+source fixes alone do not establish measured readiness.
