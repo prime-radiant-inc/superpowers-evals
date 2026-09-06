@@ -605,6 +605,11 @@ export async function captureNativeParent(
       writeFileSync(
         join(home, '.claude.json'),
         JSON.stringify({
+          // Capture-only hypothesis for the pinned CLI's first-run screens.
+          // A native fake-key run must still prove authenticated model turns;
+          // this does not assert parity with the production API-key adapter.
+          hasCompletedOnboarding: true,
+          theme: 'dark',
           projects: {
             [workdir]: {
               hasTrustDialogAccepted: true,
