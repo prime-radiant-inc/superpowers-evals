@@ -1,0 +1,6 @@
+schema_version: 1
+name: claude_opus5_pr2258_head
+agent: claude
+os: linux
+credential: opus5_bedrock
+superpowers: 069edf3ffc2ffdce80a84d3344a4064acec7e10c
