@@ -1,7 +1,7 @@
 schema_version: 2
 name: pr2258_parallel_measured
 grader:
-  credential: sonnet5_bedrock_pr2258_grader
+  credential: sonnet5_bedrock
   model: anthropic.claude-sonnet-5
 comparisons:
   - baseline: codex_astra_pr2258_base

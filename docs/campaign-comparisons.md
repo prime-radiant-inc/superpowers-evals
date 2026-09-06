@@ -54,14 +54,12 @@ capacity is not a claim about an account's verified provider quota. Claude Mantl
 `AWS_BEARER_TOKEN_BEDROCK`; Codex/Pi OpenAI subjects require `OPENAI_API_KEY`;
 Kimi requires `KIMI_MODEL_API_KEY`. The source cap of two graders (versus six in the Mantle declaration) and
 Kimi's one subject slot intentionally limit throughput. They do not establish
-same-workday readiness or measured quotas. A separately keyed Mantle grader
-remains configuration-only: declare its supported `api: mantle`,
-`auth: bedrock-bearer`, region, model, distinct `api_key_env`, and explicit
-concurrency cap, then select it in the suite. No auth bridge is needed.
-These are prerequisite names, not supplied
-credentials. Keep actual values in the configured blessed bundle, never Git.
-The grader key must differ in value from every selected subject secret. Missing
-keys and aliasing the same secret under different names refuse preparation.
+same-workday readiness or measured quotas. An explicitly selected Mantle grader
+can share the subject's selected bearer source when both credentials declare
+Mantle bearer auth and the same region/source name. This grants shared provider
+authority; it is recorded by the frozen source names and grants, not inferred
+from unequal secret bytes. Other subject/grader secret collisions are rejected.
+Actual values stay in the configured blessed bundle, never Git.
 Those examples' direct Anthropic grading route differs from historical Mantle
 grading: do not infer numerical continuity with those historical runs. No auth
 bridge or expanded harness allowlist is implied by an example.
@@ -175,10 +173,10 @@ Codex Astra, Codex Sol and Claude Opus 5 on
 stack). Both use global cap six, zero reserves, one attempt per slot, a
 2,400-second attempt ceiling and a 60-second exposure-skew bound.
 
-These suites select Mantle `sonnet5_bedrock_pr2258_grader`, whose public key
-variable is `QUORUM_PR2258_GRADER_BEARER`. The actual secret must be distinct
-from the Opus subject bearer. Public configuration alone does not establish
-that separation, quota, native CLI support or installed readiness.
+These suites select existing Mantle `sonnet5_bedrock`, sharing
+`AWS_BEARER_TOKEN_BEDROCK` with the Opus subject. No separate grader key is
+required. Actual projection, cleanup, runtime and pricing checks remain required;
+Opus and Sonnet demand must be assessed against the same AWS account.
 
 Before registration and execution, run the non-launching preflight against the
 approved private qualification root containing `receipt-set.json`:

@@ -24,6 +24,7 @@ import {
   type Credential,
 } from '../src/contracts/credential.ts';
 import { repoRoot } from '../src/paths.ts';
+import { sharesMantleCredentialSource } from '../src/credentials/scope.ts';
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const GIT_SHA_RE = /^[a-f0-9]{40}$/;
@@ -38,7 +39,7 @@ const EXPECTED_REFS = {
   head: '069edf3ffc2ffdce80a84d3344a4064acec7e10c',
 } as const;
 const EXPECTED_SCENARIO = 'brainstorming-todo-shared-intent';
-const EXPECTED_GRADER = 'sonnet5_bedrock_pr2258_grader';
+const EXPECTED_GRADER = 'sonnet5_bedrock';
 const EXPECTED_GRADER_MODEL = 'anthropic.claude-sonnet-5';
 
 export const PR2258_INSTRUMENT_FILES = [
@@ -114,7 +115,7 @@ export const Pr2258QualificationReceiptsSchema = z
       .strict(),
     grader_bearer: z
       .object({
-        values_verified_distinct: z.boolean(),
+        shared_source_verified: z.boolean(),
         receipt_sha256: z.string().nullable(),
       })
       .strict(),
@@ -432,23 +433,20 @@ export function validatePr2258Preflight(
     graderCredential.model !== EXPECTED_GRADER_MODEL ||
     graderCredential.api !== 'mantle' ||
     graderCredential.auth !== 'bedrock-bearer' ||
-    graderCredential.api_key_env !== 'QUORUM_PR2258_GRADER_BEARER' ||
+    graderCredential.api_key_env !== 'AWS_BEARER_TOKEN_BEDROCK' ||
     graderCredential.region !== 'us-east-1' ||
     graderCredential.max_concurrency !== 6
   )
-    blockers.push('public grader credential must pin Sonnet 5 Mantle us-east-1, its dedicated bearer name and cap 6');
+    blockers.push('public grader credential must pin Sonnet 5 Mantle us-east-1, the existing bearer source and cap 6');
   const opusCredential = credentials['opus5_bedrock'];
   if (opusCredential?.max_concurrency !== 4)
     blockers.push('Opus subject credential must retain max_concurrency 4');
-  if (
-    graderCredential?.api_key_env === undefined ||
-    graderCredential.api_key_env === opusCredential?.api_key_env
-  )
-    blockers.push('public grader bearer environment name must differ from the Opus subject bearer name');
-  if (!qualification.grader_bearer.values_verified_distinct)
-    blockers.push('grader bearer values are not verified distinct from the Opus subject bearer');
+  if (!sharesMantleCredentialSource(opusCredential, graderCredential))
+    blockers.push('grader and Opus subject must explicitly select the same regional Mantle source');
+  if (!qualification.grader_bearer.shared_source_verified)
+    blockers.push('grader bearer shared source is not verified in the installed projection');
   if (!hasReceiptDigest(qualification.grader_bearer.receipt_sha256))
-    blockers.push('grader bearer separation receipt is missing');
+    blockers.push('grader bearer shared source receipt is missing');
 
   const runtimeChecks = [
     ['Codex', qualification.runtime.codex, 'xhigh'],
@@ -616,6 +614,9 @@ export function validatePr2258Preflight(
   for (const credential of activeCredentialNames)
     if (!assignedAccounts.has(credential))
       blockers.push(`credential ${credential} has no aggregate account capacity receipt`);
+
+  if (assignedAccounts.get('opus5_bedrock') !== assignedAccounts.get(EXPECTED_GRADER))
+    blockers.push('shared Mantle source must use one aggregate subject/grader account receipt');
 
   const modelDemand: Record<string, number> = { ...subjectDemandByModel };
   addCount(modelDemand, EXPECTED_GRADER_MODEL, 6);

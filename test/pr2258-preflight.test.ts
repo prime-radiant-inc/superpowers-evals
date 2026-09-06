@@ -172,11 +172,11 @@ function completeReceipts(
       complete: true,
       cleaned: true,
       arm_names: armNames,
-      grader_credential: 'sonnet5_bedrock_pr2258_grader',
+      grader_credential: 'sonnet5_bedrock',
       receipt_sha256: '2'.repeat(64),
     },
     grader_bearer: {
-      values_verified_distinct: true,
+      shared_source_verified: true,
       receipt_sha256: '3'.repeat(64),
     },
     pricing: {
@@ -200,15 +200,9 @@ function completeReceipts(
           verified: true,
         },
         {
-          account: 'opus-subject-account',
-          credentials: ['opus5_bedrock'],
-          max_concurrency: 2,
-          verified: true,
-        },
-        {
-          account: 'grader-account',
-          credentials: ['sonnet5_bedrock_pr2258_grader'],
-          max_concurrency: 6,
+          account: 'bedrock-account',
+          credentials: ['opus5_bedrock', 'sonnet5_bedrock'],
+          max_concurrency: 8,
           verified: true,
         },
       ],
@@ -440,7 +434,7 @@ test.each([
   );
 
   expect(grader).toEqual({
-    credential: 'sonnet5_bedrock_pr2258_grader',
+    credential: 'sonnet5_bedrock',
     model: 'anthropic.claude-sonnet-5',
   });
   expect(suite.comparisons).toHaveLength(3);
@@ -494,7 +488,7 @@ test('parsed public policy supports the exact six-subject and six-grader wave', 
     'openai_responses_6astra',
     'openai_responses_56sol',
     'opus5_bedrock',
-    'sonnet5_bedrock_pr2258_grader',
+    'sonnet5_bedrock',
   ];
   const policy = compileResourcePolicy(credentials, names);
   const byModel = Object.fromEntries(
@@ -739,7 +733,7 @@ test('instrument inventory includes scoring, independent review and readout', ()
 
 test('missing qualification evidence stays an explicit no-go', () => {
   const result = preflight('diagnostic', ({ receipts }) => {
-    receipts.grader_bearer.values_verified_distinct = false;
+    receipts.grader_bearer.shared_source_verified = false;
     receipts.runtime.claude.supported = false;
     receipts.chronology.claude.complete = false;
     receipts.pricing.offline_accounting_probe_complete = false;
@@ -753,7 +747,7 @@ test('missing qualification evidence stays an explicit no-go', () => {
   expect(result.ready).toBe(false);
   expect(result.blockers).toEqual(
     expect.arrayContaining([
-      expect.stringMatching(/grader bearer.*distinct/i),
+      expect.stringMatching(/grader bearer.*shared source/i),
       expect.stringMatching(/Claude runtime.*unsupported/i),
       expect.stringMatching(/pricing accounting probe.*incomplete/i),
       expect.stringMatching(/Linux qualification/i),
@@ -834,7 +828,7 @@ test('different pins, unclean projections and incompatible spacing block readine
   const result = preflight('diagnostic', ({ credentials, receipts }) => {
     receipts.installed.evals_sha = '9'.repeat(40);
     receipts.projections.cleaned = false;
-    credentials['sonnet5_bedrock_pr2258_grader']!.launch_spacing_seconds = 31;
+    credentials['sonnet5_bedrock']!.launch_spacing_seconds = 31;
   });
 
   expect(result.blockers).toEqual(
@@ -1038,7 +1032,7 @@ test.each([
     const names =
       kind === 'subjects'
         ? ['openai_responses_6astra', 'openai_responses_56sol']
-        : ['opus5_bedrock', 'sonnet5_bedrock_pr2258_grader'];
+        : ['opus5_bedrock', 'sonnet5_bedrock'];
     for (const name of names) {
       credentials[name]!.quota_pool = 'shared-first-wave';
       credentials[name]!.max_concurrency = cap;
@@ -1052,7 +1046,7 @@ test.each([
     );
     if (ready)
       expect(result.blockers).toEqual([
-        'public grader credential must pin Sonnet 5 Mantle us-east-1, its dedicated bearer name and cap 6',
+        'public grader credential must pin Sonnet 5 Mantle us-east-1, the existing bearer source and cap 6',
         'Opus subject credential must retain max_concurrency 4',
       ]);
   }
@@ -1148,4 +1142,29 @@ test('source mutation during receipt intake refuses qualification reuse', () => 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('shared Mantle source cannot claim independent subject and grader accounts', () => {
+  const result = preflight('diagnostic', ({ receipts }) => {
+    receipts.capacity.accounts[1]!.credentials = ['opus5_bedrock'];
+    receipts.capacity.accounts.push({
+      account: 'different-grader-account',
+      credentials: ['sonnet5_bedrock'],
+      max_concurrency: 6,
+      verified: true,
+    });
+  });
+  expect(result.blockers).toContain(
+    'shared Mantle source must use one aggregate subject/grader account receipt',
+  );
+});
+
+test('PR 2258 refuses substituting a different grader credential source', () => {
+  const result = preflight('diagnostic', ({ credentials }) => {
+    credentials['sonnet5_bedrock']!.api_key_env = 'ANOTHER_BEARER';
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    'grader and Opus subject must explicitly select the same regional Mantle source',
+  );
 });

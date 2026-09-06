@@ -34,7 +34,6 @@ import { repoRoot } from '../src/paths.ts';
 // Corpus facts verified against credentials.yaml / coding-agents/*.yaml:
 //   - Every claude api-key credential declares ANTHROPIC_API_KEY; the standard
 //     bedrock-bearer credentials declare AWS_BEARER_TOKEN_BEDROCK, while the
-//     PR 2258 grader declares its isolated QUORUM_PR2258_GRADER_BEARER;
 //     opus5_sub is auth oauth (Claude Code subscription token).
 //   - kimi_k3 is the only api-key credential omitting api_key_env; the kimi
 //     adapter reads KIMI_MODEL_API_KEY directly (conventional fallback).
@@ -199,12 +198,6 @@ const DELIVERY_TABLE: readonly ExpectedDelivery[] = [
   envRow('claude', 'claude', 'opus_bedrock', 'AWS_BEARER_TOKEN_BEDROCK'),
   envRow('claude', 'claude', 'opus5_bedrock', 'AWS_BEARER_TOKEN_BEDROCK'),
   envRow('claude', 'claude', 'sonnet5_bedrock', 'AWS_BEARER_TOKEN_BEDROCK'),
-  envRow(
-    'claude',
-    'claude',
-    'sonnet5_bedrock_pr2258_grader',
-    'QUORUM_PR2258_GRADER_BEARER',
-  ),
   envRow('claude', 'claude', 'opus5_sub', 'CLAUDE_CODE_OAUTH_TOKEN'),
   // serf
   envRow('serf', 'serf', 'serf_default', 'ANTHROPIC_API_KEY'),

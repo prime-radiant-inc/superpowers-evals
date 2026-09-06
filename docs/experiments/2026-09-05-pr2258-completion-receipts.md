@@ -38,7 +38,8 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 Reviewed source is integrated through `00798a4c`. Both exact installed native
 builds completed two no-provider text turns and clean shutdown on the selected
 Linux appliance. The last scoped review finding is closed. The minimum installed
-source update passed at `0d6eae90`; the dedicated Mantle grader bearer remains missing.
+source update passed at `0d6eae90`. The claimed missing-grader-key blocker was
+subsequently diagnosed as a credential-policy mismatch; see the correction below.
 No diagnostic or measured provider attempt has started.
 
 Drew's approved diagnostic-first sequence below supersedes the older Gate A/B
@@ -476,3 +477,33 @@ HOME rather than adding another configuration mechanism. Assemble and execute
 the reviewed installed preflight only when these claims have supporting evidence.
 Full native chronology and observed parallel overlap remain diagnostic gaps.
 There is no diagnostic GO, provider attempt, measured result, push or merge.
+
+## Correction: existing shared Mantle authentication
+
+Drew challenged the request for a new grader key because Bedrock evaluations
+already work. Investigation confirmed the July Mantle implementation and the
+September 2 campaign's 136 completed attempts using Opus subjects and Sonnet
+Mantle grading. This was not missing Bedrock support or an IMDS migration.
+
+The parent campaign V2 design explicitly allows a shared secret member. Its
+attempt-worker skeleton instead reused Phase 1's all-pairs secret-inequality
+check. The PR 2258 plan then introduced a new grader key to satisfy that check,
+creating an unnecessary operator dependency. The earlier requests for a separate
+secret and proposed IAM investigation were incorrect diagnoses, retained above
+as history rather than current instructions.
+
+The correction restores the explicitly shared regional Mantle source in the
+campaign path. It permits only matching selected source names, Mantle bearer
+auth and region; other collisions remain refused. The existing Phase 1 check
+is unchanged. The six-arm suites use `sonnet5_bedrock`, and preflight verifies
+actual shared-source delivery plus one aggregate AWS account receipt. No new
+credential, SDK, endpoint, IMDS access or IAM policy is introduced. Shared auth
+means shared provider authority, not isolation established by different bytes.
+
+A regression first reproduced the equality rejection through genuine V2
+container preparation. After the fix, both consumer environments carry their
+intended values, grader-only settings stay out of the subject environment,
+public runtime authority contains no secret, and exact stage cleanup succeeds.
+Equal-value aliases and cross-region sharing remain rejected. The combined
+projection/preflight suite passed 82 tests and 276 assertions. Final review and
+installed projection verification follow before claiming operational resolution.

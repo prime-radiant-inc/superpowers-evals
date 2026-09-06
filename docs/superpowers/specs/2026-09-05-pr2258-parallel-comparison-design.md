@@ -412,24 +412,26 @@ campaign pool identity includes model unless a shared `quota_pool` is declared.
 Declare actual shared account constraints instead of borrowing run-all's
 different limiter-key semantics.
 
-Keep Sonnet 5 through Mantle as grader for continuity with the pilot, using a
-separately keyed grader credential and an explicit qualified six-slot limit.
-The existing subject and Mantle grader declarations share
-`AWS_BEARER_TOKEN_BEDROCK` and cannot satisfy campaign secret separation together.
-Provision a genuinely different grader secret via the blessed bundle and its
-own public environment name; aliases of the same secret do not qualify. A
-different grading endpoint requires an explicit instrument revision and fresh
-qualification. No secret value enters Git or the spec.
+Keep Sonnet 5 through Mantle as grader for continuity with the pilot, using
+`sonnet5_bedrock` and its existing `AWS_BEARER_TOKEN_BEDROCK` source, with the
+six-slot grader limit. Opus and Sonnet deliberately share this regional Mantle
+source. Their frozen source names and key grants record that shared provider
+authority; distinct environment deliveries do not imply distinct AWS identities.
+This follows the parent campaign V2 design's explicit shared-member allowance.
 
-Before any paid admission, rehearse every arm's actual private credential
-projection, including secret-value separation, and remove the rehearsal stages.
-Probe exact pricing availability from the worker image and scratch home, not the
-operator's home. Compute achievable concurrent attempts under all frozen subject,
-grader, and global pools for this experiment and name any binding constraint.
-This is a six-way experiment preflight, not a universal registration rule that
-grader capacity must equal the global cap. Credential names/values are not proof
-of independent provider quota. A missing distinct grader bearer is a launch
-blocker; changing an endpoint requires a fresh instrument decision.
+The attempt worker permits sharing only when both selected credentials declare
+Mantle bearer authentication, the same region and the same selected source name.
+Other subject/grader secret collisions remain rejected. Grader-only environment
+aliases and endpoint settings remain separate from the subject launch environment.
+No new bearer, IMDS access, SDK, endpoint or IAM policy is required by this fix.
+
+Before paid admission, verify every arm's actual private credential projection
+and cleanup. Record the shared Mantle source without printing or hashing its
+value. Verify installed pricing and aggregate account/model demand; the shared
+source must use one aggregate account receipt. Configured model caps remain
+Opus four and Sonnet six, with two Opus subjects and six graders requested.
+Credential names are not independent quota proof. Missing actual projection,
+pricing or capacity evidence still blocks launch.
 
 For equal-duration primary blocks, change the deterministic tie-break to visit
 repetition ordinal before comparison and scenario order. Preserve longest-duration
@@ -506,7 +508,7 @@ Implementation is complete only when these contracts have evidence:
 | Final-state acceptance | After exact container shutdown, unchanged candidate evidence publishes; appended logs, changed/replaced sources, added/deleted artifacts, missing bundles and hard-kill partial output refuse publication without repair. |
 | Termination | Existing cancellation and independent deadlines still terminate exact owned workers under concurrent load, including controller loss. Reuse qualified core tests and extend only uncovered integration cases. |
 | Reporting | Primary strict pair and unchanged composed cohorts have separate denominators; authenticated review coverage, conflicts, missingness, and cosmetic annotations never change sealed scores. |
-| Installed readiness | List fault isolation, exact runtime, separate grader secret, six-way capacity, served models and honest effort evidence, skill exposure, worker prices, and portable evidence verified on the appliance. |
+| Installed readiness | List fault isolation, exact runtime, declared shared Mantle source, six-way capacity, served models and honest effort evidence, skill exposure, worker prices, and portable evidence verified on the appliance. |
 
 Run focused behavioral tests during implementation, then the normal Evals checks,
 scenario validation, and required cross-repository/Linux qualification. Do not

@@ -26,6 +26,7 @@ import {
 import {
   resolveCredentialSelection,
   resolveCredentialSelectionFromRegistry,
+  sharesMantleCredentialSource,
 } from '../credentials/scope.ts';
 
 export class AttemptProjectionError extends Error {
@@ -261,10 +262,16 @@ export function prepareAttemptStage(
             }
             return { lines, graderAuthValues: [value] };
           })();
-    // Base URLs and routing values are not authentication secrets. The
-    // shared helper compares every selected subject secret to every grader
-    // authentication value in memory, before any stage directory exists.
-    assertDistinctFromGraderAuth(agent.secrets, supervisor.graderAuthValues);
+    // An explicitly shared Mantle source gives both consumers the same provider
+    // authority. Other deliveries still refuse accidental grader-secret exposure.
+    if (
+      !sharesMantleCredentialSource(
+        projectedRegistry?.[args.credentialName],
+        selectedGrader,
+      )
+    ) {
+      assertDistinctFromGraderAuth(agent.secrets, supervisor.graderAuthValues);
+    }
 
     for (const [name, value] of agent.entries) {
       safeEnvValue(value, `subject env ${name}`, args.attemptId);
