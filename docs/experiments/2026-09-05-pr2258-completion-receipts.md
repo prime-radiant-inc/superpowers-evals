@@ -245,3 +245,35 @@ pinned descriptor reads. Worker reports 30 passes and 395 assertions, including
 actual fake-native PID cleanup and filesystem replacement/growth regressions;
 typecheck and scoped lint passed. Scoped re-review approved with no open or new findings. These tests
 use generated fake binaries, never installed native subjects.
+
+## Six-concurrent rehearsal source
+
+Source commits `523b9e65` and `8063a2e9`, integrated as `f065eeb2` and
+`294513c2`, extend the existing gated Linux fixture to six distinct attempts
+across three paired blocks. A test-only final-response gate waits for all six
+exact attempt witnesses; Docker lifetime intervals must share a common instant.
+The fixture checks separate homes, tmux mounts, output roots and namespaces,
+then exact termination, publication and cleanup. Its generated fake subject and
+scripted grader do not qualify either native observer dialect.
+
+Independent task specification and quality review passed without findings.
+Worker reports nine portable passes, twelve Linux skips and 262 assertions;
+typecheck, scoped lint and scenario validation passed. The actual HTTP/container
+rehearsal, resource margins and failure cleanup remain Gate A evidence.
+Fresh whole-branch specification and code reviews cover integrated `294513c2`;
+full checks on that source passed as recorded below.
+
+## Integrated check at 294513c2
+
+Observed `GAUNTLET_ROOT` set to the isolated Gauntlet checkout at `588a81e8`,
+then `bun run check`: exit 0. Biome and TypeScript passed; **3,937 core tests
+passed, 13 skipped, zero failed** across 262 files (216.91 seconds). The dashboard
+check also ran and passed: **144 tests, zero failures** across eight files.
+Separate `bun run quorum check` exited 0. The twelve Linux skips and one Windows
+skip listed above remain unqualified; no skipped test is counted as passed.
+
+Final specification/code review is still in progress. Both reviewers have
+identified a source-revision preflight gap: mutually consistent receipt strings
+and the observer file list do not authenticate the actual executing checkout.
+Its correction belongs to the final combined fix wave; green tests do not waive
+that finding. Source and dependent qualification pins must be refreshed afterward.
