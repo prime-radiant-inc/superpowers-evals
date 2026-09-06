@@ -199,7 +199,11 @@ function inspectNativeMetadata(
   if (type === 'mode' || type === 'permission-mode') {
     const key = type === 'mode' ? 'mode' : 'permissionMode';
     exactKeys(row, ['type', key, 'sessionId'], anchor);
-    if (row[key] !== (type === 'mode' ? 'normal' : 'dontAsk')) {
+    if (
+      type === 'mode'
+        ? row[key] !== 'normal'
+        : row[key] !== 'dontAsk' && row[key] !== 'bypassPermissions'
+    ) {
       unknownRecord('Claude metadata variant is not inspected.', anchor);
     }
   } else if (type === 'last-prompt') {

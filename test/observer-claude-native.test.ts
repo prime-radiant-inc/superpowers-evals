@@ -274,3 +274,60 @@ test('UUID-less chain records cannot preserve an earlier native approval link', 
     ).toMatchObject({ approval_eligibility: 'unresolved' });
   }
 });
+
+// Production --dangerously-skip-permissions emits this metadata shape; no prompt content is included.
+const productionPermissionMode = {
+  type: 'permission-mode',
+  permissionMode: 'bypassPermissions',
+  sessionId: '6a03937a-1b2a-41e9-aa03-b32f5d1fcf6b',
+};
+const productionPermissionSource = {
+  ...source,
+  expected_session_id: productionPermissionMode.sessionId,
+};
+
+test('production permission metadata retains its anchor without granting parent authority', () => {
+  const index = indexClaudeTranscript(
+    productionPermissionSource,
+    bytes([productionPermissionMode]),
+  );
+  expect(index.entries).toEqual([
+    {
+      kind: 'non_action',
+      anchor: { source_id: 'native', line: 1, block: null },
+      record_type: 'permission-mode',
+    },
+  ]);
+  expect(index.identity.conversation).toBe('unresolved');
+});
+
+test('production permission metadata still rejects hidden actions and identity or build mismatches', () => {
+  for (const changed of [
+    {
+      ...productionPermissionMode,
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'hidden',
+            name: 'Bash',
+            input: { command: 'true' },
+          },
+        ],
+      },
+    },
+    { ...productionPermissionMode, toolUseResult: { stdout: 'hidden' } },
+    { ...productionPermissionMode, sessionId: 'foreign-session' },
+    { ...productionPermissionMode, sessionId: undefined },
+  ])
+    expect(() =>
+      indexClaudeTranscript(productionPermissionSource, bytes([changed])),
+    ).toThrow();
+  expect(() =>
+    indexClaudeTranscript(
+      { ...productionPermissionSource, expected_cli_version: '2.1.177' },
+      bytes([productionPermissionMode]),
+    ),
+  ).toThrow();
+});
