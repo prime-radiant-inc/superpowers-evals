@@ -579,7 +579,11 @@ export async function captureNativeParent(
                       (item.content === inputs[0] ||
                         (Array.isArray(item.content) &&
                           item.content.some(
-                            (block) => block.text === inputs[0],
+                            (block: unknown) =>
+                              block !== null &&
+                              typeof block === 'object' &&
+                              'text' in block &&
+                              block.text === inputs[0],
                           ))),
                   ),
                 blocks: [
