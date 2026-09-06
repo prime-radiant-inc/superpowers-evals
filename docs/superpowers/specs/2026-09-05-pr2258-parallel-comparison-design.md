@@ -3,8 +3,9 @@
 **Date:** 2026-09-05
 
 **Status:** Staff-panel reconciliation incorporated; Drew approved amendment and
-implementation on September 5. Installed qualification and paid execution remain
-separate gates. Drew subsequently approved final source verification after
+implementation on September 5. Drew then approved short plumbing checks and
+minimum capture fixes followed by six real diagnostic attempts; exhaustive
+rehearsal is no longer a prerequisite to those diagnostics. Drew subsequently approved final source verification after
 container shutdown, replacing the proposed in-worker termination supervisor.
 
 **Source inspected:** Evals `672a0ad2580b75153e1a954ae3a8cad4c1e97b90`.
@@ -43,8 +44,10 @@ Three approaches were considered:
 | A custom parallel version of the historical pilot driver | Leaves duplicate orchestration and temporary-home evidence assumptions; insufficient for repeatable campaign use. |
 | Qualify approval observers for every supported harness immediately | Requires unrelated log-format investigations. Other harnesses can implement the same interface later, with explicit qualification. |
 
-This spec does not authorize a live run, appliance cutover, credential changes,
-or additional spending. It defines their reviewable prerequisites. It adds no
+The subsequent execution approval covers the bounded diagnostic-first sequence
+in the completion plan. It does not authorize extra attempts, environment
+fallback, or unbounded spending. Measurement still requires trustworthy scoring;
+unobserved native and parallel behavior must remain explicit diagnostic gaps. It adds no
 campaign resume/restart, historical-format reader, dollar-budget controller,
 six-arm atomic block, or generalized semantic judge. The accepted finite
 [campaign design](2026-09-04-campaign-consolidation-design.md) remains authoritative

@@ -365,3 +365,25 @@ Gate B remains unprepared because it requires actual Linux qualification receipt
 and the exact resulting installed/source/image/credential change packet. Neither
 Gate A preparation nor green source checks authorizes that work or provider
 spending. No diagnostic or measured attempt has started.
+
+## Approved diagnostic-first execution
+
+Drew asked why rehearsal should precede real runs and approved the proposed
+short plumbing check → minimum capture fixes → six real diagnostic attempts →
+twelve fresh measured attempts once scoring is trustworthy. This supersedes the
+large Gate A rehearsal as a diagnostic prerequisite. Counts, zero retries, exact
+refs, credential separation, strict scoring and finite runtime remain unchanged.
+
+The selected appliance doctor was healthy and idle. A detached copy of reviewed
+source `a074608f` was staged privately; dependency installation succeeded. Only
+the two prepared native parent captures were selected, omitting the twelve-case
+fault matrix and already completed local Gauntlet suite. No provider was called.
+
+The first export failed: Docker copy returned success but omitted the mounted
+tmpfs capture contents. A small real-container witness reproduced this behavior:
+the file was visible inside the running container and via a tar stream executed
+inside it, but absent from Docker copy. Exact container cleanup succeeded. The
+private capture command now exports through the running container's mount
+namespace and requires its completion file before accepting the exported bytes.
+This is an operational plumbing correction, not a scoring or production runtime
+change; the original failed receipt is retained.
