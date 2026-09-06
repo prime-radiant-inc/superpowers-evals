@@ -21,4 +21,4 @@ max_exposure_skew: 60
 attempt_bounds: { max_attempts: 1, max_time_s: 2400 }
 pricing_snapshot:
   path: docs/experiments/2026-09-05-pr2258-parallel-pricing/current.json
-  sha256: 35a6ce0ac7add33870ec3a673127eec5afb478beda28ad54534e0f1c01bf8c8f
+  sha256: 609f6cbb26be00d29be02614c22abeeb556c9d2235f53d1e830b949cca3b1c6f

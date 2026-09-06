@@ -554,3 +554,61 @@ requires capacity qualification. Independent bounded review found no actionable
 issues; root observed **55 tests, 158 assertions, zero failures** and a passing
 TypeScript check. This changes readiness classification, not the experiment's
 models, six-attempt count, concurrency caps, timing or pricing.
+
+## First six-attempt diagnostic: NO-GO
+
+Frozen source `c3e1c440b1042de9becd6762dd3911824822447a` was installed under
+owned mutation/registration locks. Six current-source credential projections
+passed and cleaned up. Actual worker-image adapter/launcher/skill/pricing
+verification passed at unchanged production source `4635f4ae`; the final packet
+preserves that original execution identity and authenticates the source-byte
+applicability. The independent packet audit found no corrections. Installed
+preflight reported ready with no blockers and twelve explicit diagnostic gaps.
+
+The installed helper registered and launched campaign
+`d3871573-98b6-41f1-ae27-737f84c7658c`, input digest
+`c5a52e05dd9049681b18d32634e0053123816b4e6c570217f5b02f0686e7e5bc`.
+Readback matched six slots, three n=1 pairs, zero reserves, the frozen pins,
+existing shared Mantle grader, pricing and 2,400-second attempt bounds. All six
+attempt containers ran concurrently. This container observation does not prove
+six overlapping subject exposure intervals.
+
+The campaign ran from `2026-09-06T06:24:14.351Z` to
+`2026-09-06T06:29:34.511Z`: **320.16 seconds**. The terminal report verifies
+shutdown, but is incomplete: **six unusable results, zero valid pairs**. All
+blocks were excluded for exposure and lacked final positive validity and bound
+publication evidence. Strict readout has `interpretation_ready: false`.
+No measured attempt or replacement diagnostic was launched.
+
+Preserved worker outputs locate the observed failure:
+
+- All four Codex workers: `observer finalization: Response item type is not recognized.`
+  Native 0.146.0 output includes reasoning response items, reasoning events and
+  non-null message phases outside the observer's inspected dialect.
+- Both Claude workers: `observer finalization: Claude source has no inspected native parent input.`
+  Native 2.1.209 typed input follows startup-hook attachments via `parentUuid`;
+  the observer incorrectly requires that first human input to have a null parent.
+  Actual startup/permission metadata and an absent `lastPrompt` field also need
+  narrowly validated dialect support.
+- Both Claude trajectories report `claude-opus-5`; the frozen snapshot only has
+  `anthropic.claude-opus-5`. Those subject costs are explicitly unpriced.
+
+Existing native output and nonzero token records establish real subject model
+work for both providers, including the existing Mantle route. All grader usage
+sidecars retain `anthropic.claude-sonnet-5`. This was not a missing-credential
+failure. Canonical accounting has **zero observed cost records**, which means
+missing costs, not zero spend. Four unpublished Codex usage files contain a
+known estimated subtotal of **$1.2355374**, excluding both Claude subjects and
+all graders; this is diagnostic context, not a repaired campaign total.
+
+Private exact-byte report digests:
+
+- Canonical helper response: `aef5d5b9a2b1fa93ca9b49bc7477ace7ba0f5bbb175bc7340d785930ab2a066b`.
+- Strict readout: `1be21ee40db72296da59e3445755effae92056d366587782be7918c9619b71e0`.
+- Redacted worker error inventory: `cd1c3d0da2af4854faaabb71ec632b0048dbfb445db412aee243387504025817`.
+
+Historical staging, logs, manifests, pricing and results remain unchanged.
+The observed parser and served-ID pricing corrections are being developed and
+verified offline. Any subsequent diagnostic requires a fresh frozen source,
+qualification packet and registered identity; these attempts cannot be repaired
+into valid samples or counted as measured results.

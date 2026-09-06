@@ -37,6 +37,13 @@
         "cache_read": 0.22,
         "cache_write": 2.75,
         "cache_write_1h": 4.4
+      },
+      "claude-opus-5": {
+        "input": 5.5,
+        "output": 27.5,
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "cache_write_1h": 11
       }
     }
   }

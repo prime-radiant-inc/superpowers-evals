@@ -109,6 +109,28 @@ try {
     checks.push({ model, kind: 'five-bucket-sidecar', usd: usage.est_cost_usd });
   }
 
+  const servedOpus = join(directory, 'served-opus.json');
+  writeFileSync(
+    servedOpus,
+    JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'claude', version: '2.1.209', model_name: 'claude-opus-5' },
+      steps: [{
+        step_id: 1,
+        source: 'agent',
+        model_name: 'claude-opus-5',
+        metrics: { prompt_tokens: 1_000, completion_tokens: 1_000, cached_tokens: 1_000 },
+        extra: { cache_write: 1_000 },
+      }],
+    }),
+  );
+  const servedUsage = await estimateTrajectory(servedOpus);
+  assert(servedUsage);
+  assert.deepEqual(servedUsage.unpriced_models, []);
+  assert(servedUsage.est_cost_usd !== null);
+  assert(Math.abs(servedUsage.est_cost_usd - 0.040425) < 1e-9);
+  checks.push({ model: 'claude-opus-5', kind: 'mantle-served-id-trajectory', usd: servedUsage.est_cost_usd });
+
   const unknown = join(directory, 'unknown.json');
   writeFileSync(
     unknown,
