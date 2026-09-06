@@ -112,7 +112,7 @@ import {
 } from '../experiments/brainstorming-input-capture.ts';
 import {
   discoverObserverSources,
-  OBSERVER_DIALECTS,
+  observerDialectForBuild,
   observerRequiredForScenario,
   validateObserverBinding,
 } from '../experiments/observer/binding.ts';
@@ -1457,7 +1457,6 @@ export function prepareObserverAfterSetup(args: {
   const runtime = args.runtime;
   if (runtime !== 'codex' && runtime !== 'claude')
     throw new RunnerError('Required observer runtime is unsupported.', 'setup');
-  const supported = OBSERVER_DIALECTS[runtime];
   const probeHome = mkdtempSync(join(args.runDir, '.observer-version-home-'));
   let version: string | null;
   try {
@@ -1465,9 +1464,16 @@ export function prepareObserverAfterSetup(args: {
   } finally {
     rmSync(probeHome, { recursive: true, force: true });
   }
+  const cliVersion = (
+    runtime === 'codex'
+      ? /^codex-cli (\d+\.\d+\.\d+)$/
+      : /^(\d+\.\d+\.\d+) \(Claude Code\)$/
+  ).exec(version ?? '')?.[1];
+  const supported = cliVersion
+    ? observerDialectForBuild(runtime, cliVersion)
+    : null;
   if (
     !supported ||
-    version !== `codex-cli ${supported.cli_version}` ||
     (args.cliPin !== undefined && args.cliPin !== supported.cli_version)
   )
     throw new RunnerError(
