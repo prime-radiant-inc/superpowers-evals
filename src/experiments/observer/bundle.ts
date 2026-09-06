@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync } from 'node:fs';
+import {
+  closeSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import {
@@ -9,14 +18,26 @@ import {
   pinChildDir,
   readPinnedNoFollowBytes,
 } from '../../appliance/credential-scope.ts';
+import { jcsCanonicalize } from '../../contracts/campaign/digest.ts';
 import {
   ArtifactRefSchema,
   RelativeArtifactPathSchema,
 } from '../../contracts/campaign/execution.ts';
-import { type ObserverBinding, ObserverBindingSchema } from './binding.ts';
-import { type FinalState, validateFinalState } from './final-state.ts';
-import { verifyRawPrefix } from './raw.ts';
-import { validateArtifactReceipt } from './review.ts';
+import {
+  type ObserverBinding,
+  ObserverBindingSchema,
+  readObserverNode,
+  validateObserverBinding,
+} from './binding.ts';
+import {
+  captureFinalState,
+  type FinalState,
+  validateFinalState,
+  verifyFinalState,
+} from './final-state.ts';
+import { verifyRawPrefix, verifyReviewedSuffix } from './raw.ts';
+import { validateActorReview, validateArtifactReceipt } from './review.ts';
+import { scoreObserverEvidence } from './score.ts';
 export interface ObserverBundle {
   schema_version: 2;
   binding: ObserverBinding;
@@ -34,6 +55,7 @@ export interface ObserverBundle {
   evidence_errors: { code: string; message: string }[];
 }
 
+export const OBSERVER_BUNDLE_RELATIVE_DIR = 'brainstorming-evidence/bundle';
 export const OBSERVER_BUNDLE_FILENAME = 'observer-bundle.json';
 
 const FinalStateSchema = z.unknown().transform((value, context): FinalState => {
@@ -284,4 +306,183 @@ export function readObserverBundle(bundleDir: string): ObserverBundle {
   )
     throw new Error('Observer bundle changed during authentication.');
   return bundle;
+}
+
+/** Capture once while the runner still owns the live sources. Interrupted stages are never repaired. */
+export function freezeObserverBundle(
+  input: ObserverBinding,
+  evidenceDir: string,
+): ObserverBundle {
+  const binding = validateObserverBinding(input);
+  if (binding.phase !== 'bound')
+    throw new Error('Observer parent is unavailable or already finalized.');
+  const evidence = pinAbsoluteDir(evidenceDir, 'observer evidence');
+  try {
+    if (readdirSync(evidence.viaPath).includes('bundle'))
+      throw new Error('Observer candidate already exists.');
+    const stage = join(evidence.viaPath, '.bundle-stage');
+    mkdirSync(stage, { mode: 0o700 });
+    const inventory = captureFinalState(binding.roots);
+    const bundle: ObserverBundle = {
+      schema_version: 2,
+      binding: validateObserverBinding({ ...binding, phase: 'finalized' }),
+      final_state: inventory,
+      files: [],
+      sources: [],
+      terminal_artifacts: [],
+      receipts: [],
+      actor_review: null,
+      score: null,
+      evidence_errors: [],
+    };
+    const save = (path: string, bytes: Buffer): void => {
+      writeFileSync(join(stage, path), bytes, { flag: 'wx', mode: 0o600 });
+      bundle.files.push({
+        path,
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      });
+    };
+    for (const [index, node] of inventory.nodes.entries()) {
+      if (node.kind !== 'file') continue;
+      const bytes = readObserverNode(binding, node);
+      const bound = binding.sources.find(
+        (source) =>
+          source.root_id === node.root_id && source.relative_path === node.path,
+      );
+      const path = `member-${index}`;
+      save(path, bytes);
+      if (bound)
+        bundle.sources.push({ source_id: bound.source.source_id, path });
+      else if (
+        binding.roots.find((root) => root.id === node.root_id)?.kind ===
+        'artifacts'
+      )
+        bundle.terminal_artifacts.push({
+          root_id: node.root_id,
+          relative_path: node.path,
+          path,
+        });
+      else
+        throw new Error(
+          'Final transcript inventory contains an unbound source.',
+        );
+    }
+    const receiptNames = readdirSync(evidence.viaPath)
+      .filter((name) => name.startsWith('capture-') && name.endsWith('.json'))
+      .sort();
+    for (const [index, name] of receiptNames.entries()) {
+      const bytes = readMember(evidenceDir, name);
+      validateArtifactReceipt(parseJson(bytes));
+      const path = `receipt-${index}.json`;
+      save(path, bytes);
+      bundle.receipts.push(path);
+    }
+    const reviewBytes = readPinnedNoFollowBytes(
+      evidenceDir,
+      ['review.json'],
+      'observer review',
+      false,
+    );
+    if (reviewBytes === null)
+      bundle.evidence_errors.push({
+        code: 'review_unavailable',
+        message: 'Actor review was not recorded.',
+      });
+    else {
+      save('review.json', reviewBytes);
+      bundle.actor_review = 'review.json';
+      try {
+        const review = validateActorReview(
+          parseJson(
+            readMember(join(evidenceDir, '.bundle-stage'), 'review.json'),
+          ),
+        );
+        const raw_sources = bundle.sources.map((ref) => ({
+          source_id: ref.source_id,
+          bytes: readMember(join(evidenceDir, '.bundle-stage'), ref.path),
+        }));
+        if (
+          review.source_prefixes.length !== raw_sources.length ||
+          new Set(review.source_prefixes.map((p) => p.source_id)).size !==
+            raw_sources.length
+        )
+          throw new Error(
+            'Review prefixes must cover the complete source inventory.',
+          );
+        for (const prefix of review.source_prefixes) {
+          const source = binding.sources.find(
+            (s) => s.source.source_id === prefix.source_id,
+          );
+          const raw = raw_sources.find((s) => s.source_id === prefix.source_id);
+          if (!source || !raw) throw new Error('Review source is not bound.');
+          verifyRawPrefix(source.source, raw.bytes, prefix);
+          verifyReviewedSuffix(source.source, raw.bytes, prefix);
+        }
+        const score = scoreObserverEvidence({
+          binding: bundle.binding,
+          raw_sources,
+          review,
+          receipts: bundle.receipts.map((path) =>
+            validateArtifactReceipt(
+              parseJson(readMember(join(evidenceDir, '.bundle-stage'), path)),
+            ),
+          ),
+        });
+        save('score.json', Buffer.from(JSON.stringify(score)));
+        bundle.score = 'score.json';
+      } catch (error) {
+        bundle.evidence_errors.push({
+          code: 'invalid_review',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    writeFileSync(
+      join(stage, OBSERVER_BUNDLE_FILENAME),
+      JSON.stringify(bundle),
+      { flag: 'wx', mode: 0o600 },
+    );
+    const validated = readObserverBundle(join(evidenceDir, '.bundle-stage'));
+    verifyFinalState(binding.roots, inventory);
+    // Persist all copied evidence before the single directory publication.
+    for (const name of [
+      ...bundle.files.map((file) => file.path),
+      OBSERVER_BUNDLE_FILENAME,
+    ]) {
+      const fd = openSync(join(stage, name), 'r');
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    const stageFd = openSync(stage, 'r');
+    try {
+      fsyncSync(stageFd);
+    } finally {
+      closeSync(stageFd);
+    }
+    renameSync(stage, join(evidence.viaPath, 'bundle'));
+    fsyncSync(evidence.fd);
+    return validated;
+  } finally {
+    closePin(evidence);
+  }
+}
+
+/** Read-only acceptance: never change, repair, or rescore a candidate after shutdown. */
+export function verifyObserverCandidate(
+  input: ObserverBinding,
+  evidenceDir: string,
+): void {
+  const binding = validateObserverBinding(input);
+  const bundle = readObserverBundle(join(evidenceDir, 'bundle'));
+  if (
+    binding.phase === 'unbound' ||
+    jcsCanonicalize({ ...binding, phase: 'finalized' }) !==
+      jcsCanonicalize(bundle.binding)
+  )
+    throw new Error('Observer candidate differs from runner binding.');
+  verifyFinalState(binding.roots, bundle.final_state);
 }

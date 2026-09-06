@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   copyFileSync,
+  cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -15,8 +19,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ObserverBinding } from '../src/experiments/observer/binding.ts';
 import {
+  freezeObserverBundle,
   type ObserverBundle,
   readObserverBundle,
+  verifyObserverCandidate,
 } from '../src/experiments/observer/bundle.ts';
 import { captureFinalState } from '../src/experiments/observer/final-state.ts';
 import { createRawPrefix } from '../src/experiments/observer/raw.ts';
@@ -293,4 +299,170 @@ describe('artifact receipts', () => {
       ).toThrow();
     }
   });
+});
+
+function producerFixture() {
+  const f = fixture();
+  rmSync(f.bundleDir, { recursive: true });
+  const evidenceDir = join(f.dir, 'evidence');
+  mkdirSync(evidenceDir);
+  f.binding.phase = 'bound';
+  f.binding.dialect = 'codex-response-items-0.144.3';
+  f.binding.cli_version = '0.144.3';
+  const source = f.binding.sources[0]!.source;
+  source.expected_cli_version = '0.144.3';
+  const raw = Buffer.from(
+    [
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'session',
+          cwd: f.binding.workdir,
+          cli_version: '0.144.3',
+          source: 'cli',
+          originator: 'codex-tui',
+          thread_source: 'user',
+        },
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Build a todo list.' }],
+        },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join('\n') + '\n',
+  );
+  writeFileSync(join(f.binding.roots[0]!.path, 'parent.jsonl'), raw);
+  f.receipt.source_prefix = createRawPrefix(source, raw);
+  writeFileSync(
+    join(evidenceDir, 'capture-observation-1.json'),
+    JSON.stringify(f.receipt),
+  );
+  writeFileSync(
+    join(evidenceDir, 'review.json'),
+    JSON.stringify({
+      schema_version: 2,
+      reviewer: 'contract fixture',
+      stop_reason: 'endpoint',
+      source_prefixes: [createRawPrefix(source, raw)],
+      events: [],
+      actions: [],
+    }),
+  );
+  return { ...f, evidenceDir, candidate: join(evidenceDir, 'bundle') };
+}
+
+describe('observer candidate freeze', () => {
+  test('freezes external home bytes and scores only portable bundle members', () => {
+    const f = producerFixture();
+    mkdirSync(join(f.binding.workdir, 'empty'));
+    const bundle = freezeObserverBundle(f.binding, f.evidenceDir);
+    expect(bundle.binding.phase).toBe('finalized');
+    expect(
+      bundle.final_state.nodes.some(
+        (n) => n.path === 'empty' && n.kind === 'directory',
+      ),
+    ).toBe(true);
+    expect(
+      JSON.parse(readFileSync(join(f.candidate, bundle.score!), 'utf8')).status,
+    ).toBe('fail');
+    expect(() =>
+      verifyObserverCandidate(f.binding, f.evidenceDir),
+    ).not.toThrow();
+    const replay = join(f.dir, 'copied');
+    cpSync(f.candidate, replay, { recursive: true });
+    rmSync(f.binding.home, { recursive: true });
+    rmSync(f.binding.workdir, { recursive: true });
+    expect(readObserverBundle(replay).score).toBe(bundle.score);
+  });
+  test('never repairs or rescores an existing candidate', () => {
+    const f = producerFixture();
+    freezeObserverBundle(f.binding, f.evidenceDir);
+    const before = readFileSync(join(f.candidate, 'observer-bundle.json'));
+    appendFileSync(join(f.binding.roots[0]!.path, 'parent.jsonl'), '{}\n');
+    expect(() => freezeObserverBundle(f.binding, f.evidenceDir)).toThrow();
+    expect(readFileSync(join(f.candidate, 'observer-bundle.json'))).toEqual(
+      before,
+    );
+  });
+  test.each([
+    'append',
+    'replace',
+    'delete',
+    'empty-directory',
+    'artifact-delete',
+  ])('read-only verification rejects %s after freeze', (change) => {
+    const f = producerFixture();
+    freezeObserverBundle(f.binding, f.evidenceDir);
+    const before = readFileSync(join(f.candidate, 'observer-bundle.json'));
+    const source = join(f.binding.roots[0]!.path, 'parent.jsonl');
+    if (change === 'append') appendFileSync(source, '{}\n');
+    if (change === 'replace') {
+      const raw = readFileSync(source);
+      rmSync(source);
+      writeFileSync(source, raw);
+    }
+    if (change === 'delete') rmSync(source);
+    if (change === 'empty-directory')
+      mkdirSync(join(f.binding.workdir, 'added'));
+    if (change === 'artifact-delete')
+      rmSync(join(f.binding.workdir, 'design.bin'));
+    expect(() => verifyObserverCandidate(f.binding, f.evidenceDir)).toThrow();
+    expect(readFileSync(join(f.candidate, 'observer-bundle.json'))).toEqual(
+      before,
+    );
+  });
+  test('records missing review without fabricating a score', () => {
+    const f = producerFixture();
+    rmSync(join(f.evidenceDir, 'review.json'));
+    const bundle = freezeObserverBundle(f.binding, f.evidenceDir);
+    expect(bundle.score).toBeNull();
+    expect(bundle.evidence_errors[0]!.code).toBe('review_unavailable');
+  });
+  test('missing parent cannot become a finalized chain', () => {
+    const f = producerFixture();
+    f.binding.phase = 'unbound';
+    f.binding.sources = [];
+    f.binding.parent_source_id = null;
+    expect(() => freezeObserverBundle(f.binding, f.evidenceDir)).toThrow();
+    expect(existsSync(f.candidate)).toBe(false);
+  });
+  test('rejects substituted terminal bytes even with updated member digest', () => {
+    const f = producerFixture();
+    const bundle = freezeObserverBundle(f.binding, f.evidenceDir);
+    const member = bundle.files.find(
+      (file) => file.path === bundle.terminal_artifacts[0]!.path,
+    )!;
+    const body = Buffer.from('substitution');
+    writeFileSync(join(f.candidate, member.path), body);
+    member.bytes = body.length;
+    member.sha256 = digest(body);
+    writeFileSync(
+      join(f.candidate, 'observer-bundle.json'),
+      JSON.stringify(bundle),
+    );
+    expect(() => verifyObserverCandidate(f.binding, f.evidenceDir)).toThrow();
+  });
+});
+
+test('interrupted freeze cannot be resumed or substituted through a symlink', () => {
+  for (const kind of ['stage', 'source-symlink', 'review-symlink']) {
+    const f = producerFixture();
+    if (kind === 'stage') mkdirSync(join(f.evidenceDir, '.bundle-stage'));
+    else {
+      const path =
+        kind === 'source-symlink'
+          ? join(f.binding.roots[0]!.path, 'parent.jsonl')
+          : join(f.evidenceDir, 'review.json');
+      const outside = join(f.dir, 'outside');
+      renameSync(path, outside);
+      symlinkSync(outside, path);
+    }
+    expect(() => freezeObserverBundle(f.binding, f.evidenceDir)).toThrow();
+    expect(existsSync(f.candidate)).toBe(false);
+  }
 });
