@@ -507,3 +507,35 @@ public runtime authority contains no secret, and exact stage cleanup succeeds.
 Equal-value aliases and cross-region sharing remain rejected. The combined
 projection/preflight suite passed 82 tests and 276 assertions. Final review and
 installed projection verification follow before claiming operational resolution.
+
+### Shared Mantle correction: reviewed and installed
+
+Source `4635f4ae` passed scoped independent review with no actionable findings.
+Root-observed `bun run check` at that immutable source passed **4,017 core tests,
+13 skips, zero failures**, plus **144 dashboard tests, zero failures**; Biome
+and TypeScript passed. Focused projection/preflight/credential coverage passed
+205 tests and 647 assertions. Scenario validation passed. The deferred Linux
+fault tests and Windows test remain skipped.
+
+The existing appliance source fast-forwarded from `0d6eae90` to `4635f4ae`
+under the reviewed mutation and registration locks. Installed health/listing
+checks passed, and configuration/helper/image/dependencies/historical campaign
+records remained preserved. The existing blessed credential bundle was read,
+not changed.
+
+A separately reviewed no-provider probe invoked the installed production
+`prepareAttemptStage` for all six exact suite arms, with the selected Sonnet
+Mantle grader, then the real grader environment mapping. **All six projections
+passed and all six private credential stages were verified removed.** Both
+Claude arms deliberately shared the existing Mantle source with the grader;
+the four OpenAI arms retained their own source. Grader-only settings stayed
+out of the subject environment. The receipt contains names and booleans only;
+no secret values or hashes were recorded. Final doctor passed and run/sync
+locks were missing.
+
+This closes the claimed missing-key blocker and verifies installed credential
+preparation/mapping, not a new provider authentication request or running
+container consumption. No inference request, diagnostic sample or measured
+sample was launched by this correction. Continue the remaining installed
+settings/pricing/capacity evidence and diagnostic receipt packaging with the
+existing credentials; do not request the withdrawn PR-specific grader key.
