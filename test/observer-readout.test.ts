@@ -21,7 +21,10 @@ import type { CampaignIdentity } from '../src/contracts/campaign/campaign.ts';
 import { experimentDigest } from '../src/contracts/campaign/experiment-digest.ts';
 import type { ObserverBinding } from '../src/experiments/observer/binding.ts';
 import type { ObserverBundle } from '../src/experiments/observer/bundle.ts';
-import { captureFinalState } from '../src/experiments/observer/final-state.ts';
+import {
+  captureArtifactDirectories,
+  captureFinalState,
+} from '../src/experiments/observer/final-state.ts';
 import {
   type IndependentReview,
   writeIndependentReview,
@@ -177,6 +180,7 @@ function publishFixture(
     schema_version: 2,
     binding,
     final_state: captureFinalState(binding.roots),
+    artifact_directories: captureArtifactDirectories(binding.roots),
     files: Object.entries(members).map(([path, bytes]) => ({
       path,
       bytes: bytes.length,

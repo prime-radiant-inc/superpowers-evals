@@ -565,6 +565,12 @@ function observerPublication(empty = false) {
     join(runDir, 'gauntlet-agent'),
   ])
     mkdirSync(dir, { recursive: true });
+  for (const path of [
+    '.git/branches',
+    '.git/refs/empty',
+    'node_modules/package/empty',
+  ])
+    mkdirSync(join(workdir, path), { recursive: true });
   if (empty) mkdirSync(join(workdir, 'empty', 'nested'), { recursive: true });
   else writeFileSync(join(workdir, 'artifact.txt'), 'terminal artifact');
   const sourcePath = join(transcripts, 'parent.jsonl');
@@ -757,6 +763,37 @@ test('observer runtime must match the frozen arm selection', () => {
     f.args.experiment.execution_surface[0]!.agent = 'claude';
     expect(() => publishExecution(f.args)).toThrow();
     expect(existsSync(f.runDir)).toBe(true);
+  } finally {
+    clean(f);
+  }
+});
+
+test.each([
+  'added',
+  'deleted',
+  'replaced',
+  'symlink',
+  'file-added',
+])('excluded tree %s refuses publication without changing immutable evidence', (change) => {
+  const f = observerPublication();
+  try {
+    const path = join(f.binding.workdir, 'node_modules/package/empty');
+    const manifest = readFileSync(join(f.runDir, 'manifest.json'));
+    const candidatePath = join(f.evidenceDir, 'bundle/observer-bundle.json');
+    const candidate = readFileSync(candidatePath);
+    if (change === 'added') mkdirSync(join(path, 'late'));
+    else if (change === 'file-added')
+      writeFileSync(join(path, 'unlisted.js'), 'unlisted bytes');
+    else {
+      renameSync(path, join(f.attemptDir, 'old-directory'));
+      if (change === 'replaced') mkdirSync(path);
+      if (change === 'symlink')
+        symlinkSync(join(f.attemptDir, 'old-directory'), path);
+    }
+    expect(() => publishExecution(f.args)).toThrow();
+    expect(readFileSync(candidatePath)).toEqual(candidate);
+    expect(readFileSync(join(f.runDir, 'manifest.json'))).toEqual(manifest);
+    expect(readdirSync(f.resultsRoot)).toEqual([]);
   } finally {
     clean(f);
   }

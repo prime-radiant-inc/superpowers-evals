@@ -17,6 +17,12 @@ export function runObserverFixture(mode: string) {
   }
   const runDir = argv[argv.indexOf('--project-dir') + 1]!;
   const workdir = join(runDir, 'coding-agent-workdir');
+  for (const path of [
+    '.git/branches',
+    '.git/refs/empty/nested',
+    'node_modules/empty/nested',
+  ])
+    mkdirSync(join(workdir, path), { recursive: true });
   const binding = validateObserverBinding(
     JSON.parse(readFileSync(observerBindingPath(workdir), 'utf8')),
   );

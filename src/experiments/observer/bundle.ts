@@ -32,9 +32,13 @@ import {
   validateObserverBinding,
 } from './binding.ts';
 import {
+  ArtifactDirectorySchema,
+  captureArtifactDirectories,
   captureFinalState,
   type FinalState,
+  type FinalStateNode,
   validateFinalState,
+  verifyArtifactDirectories,
   verifyFinalState,
 } from './final-state.ts';
 import { verifyRawPrefix, verifyReviewedSuffix } from './raw.ts';
@@ -48,6 +52,7 @@ export interface ObserverBundle {
   schema_version: 2;
   binding: ObserverBinding;
   final_state: FinalState;
+  artifact_directories: FinalStateNode[];
   files: { path: string; bytes: number; sha256: string }[];
   sources: { source_id: string; path: string }[];
   terminal_artifacts: {
@@ -91,6 +96,7 @@ export const ObserverBundleSchema: z.ZodType<
     schema_version: z.literal(2),
     binding: ObserverBindingSchema,
     final_state: FinalStateSchema,
+    artifact_directories: z.array(ArtifactDirectorySchema).min(1),
     files: z.array(ArtifactRefSchema).min(1),
     sources: z.array(SourceRefSchema).min(1),
     terminal_artifacts: z.array(TerminalArtifactRefSchema),
@@ -157,6 +163,50 @@ export const ObserverBundleSchema: z.ZodType<
       if (!directories.has(key(node.root_id, parent)))
         issue('Final inventory must retain every directory ancestor.');
     }
+    const artifactDirectories = new Map(
+      bundle.artifact_directories.map((node) => [
+        key(node.root_id, node.path),
+        node,
+      ]),
+    );
+    if (artifactDirectories.size !== bundle.artifact_directories.length)
+      issue('Artifact directories must be unique.');
+    const artifactContentDirectories = new Map(
+      bundle.final_state.nodes
+        .filter(
+          (node) =>
+            node.kind === 'directory' &&
+            roots.get(node.root_id) === 'artifacts',
+        )
+        .map((node) => [key(node.root_id, node.path), node]),
+    );
+    for (const node of bundle.artifact_directories) {
+      if (roots.get(node.root_id) !== 'artifacts')
+        issue('Artifact directories require an artifact root.');
+      if (
+        node.path !== '' &&
+        !artifactDirectories.has(
+          key(node.root_id, node.path.split('/').slice(0, -1).join('/')),
+        )
+      )
+        issue('Artifact inventory must retain every directory ancestor.');
+      const content = artifactContentDirectories.get(
+        key(node.root_id, node.path),
+      );
+      if (
+        content
+          ? content.device !== node.device || content.inode !== node.inode
+          : !node.path
+              .split('/')
+              .some((name) => name === '.git' || name === 'node_modules')
+      )
+        issue(
+          'Artifact directories must match the content inventory outside excluded trees.',
+        );
+    }
+    for (const [nodeKey] of artifactContentDirectories)
+      if (!artifactDirectories.has(nodeKey))
+        issue('Artifact directory inventory is incomplete.');
     const nodes = new Map(
       bundle.final_state.nodes
         .filter((node) => node.kind === 'file')
@@ -333,6 +383,7 @@ export function freezeObserverBundle(
       schema_version: 2,
       binding: validateObserverBinding({ ...binding, phase: 'finalized' }),
       final_state: inventory,
+      artifact_directories: captureArtifactDirectories(binding.roots),
       files: [],
       sources: [],
       terminal_artifacts: [],
@@ -453,6 +504,7 @@ export function freezeObserverBundle(
     );
     const validated = readObserverBundle(join(evidenceDir, '.bundle-stage'));
     verifyFinalState(binding.roots, inventory);
+    verifyArtifactDirectories(binding.roots, bundle.artifact_directories);
     const finalReceiptNames = readdirSync(evidence.viaPath)
       .filter((name) => name.startsWith('capture-') && name.endsWith('.json'))
       .sort();
@@ -521,6 +573,7 @@ export function verifyObserverCandidate(
   )
     throw new Error('Observer candidate differs from runner binding.');
   verifyFinalState(binding.roots, bundle.final_state);
+  verifyArtifactDirectories(binding.roots, bundle.artifact_directories);
 }
 
 /** Consume the recorded strict score only; live paths and reduction are never consulted. */

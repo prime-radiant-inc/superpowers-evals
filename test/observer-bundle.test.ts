@@ -25,7 +25,10 @@ import {
   readObserverScore,
   verifyObserverCandidate,
 } from '../src/experiments/observer/bundle.ts';
-import { captureFinalState } from '../src/experiments/observer/final-state.ts';
+import {
+  captureArtifactDirectories,
+  captureFinalState,
+} from '../src/experiments/observer/final-state.ts';
 import { createRawPrefix } from '../src/experiments/observer/raw.ts';
 import { validateArtifactReceipt } from '../src/experiments/observer/review.ts';
 import * as scoring from '../src/experiments/observer/score.ts';
@@ -107,6 +110,7 @@ function fixture() {
     schema_version: 2,
     binding,
     final_state: captureFinalState(binding.roots),
+    artifact_directories: captureArtifactDirectories(binding.roots),
     files: Object.entries(members).map(([path, bytes]) => ({
       path,
       bytes: bytes.length,
@@ -155,6 +159,7 @@ describe('observer bundle authentication', () => {
       join(f.binding.workdir, 'nested', 'design.bin'),
     );
     f.bundle.final_state = captureFinalState(f.binding.roots);
+    f.bundle.artifact_directories = captureArtifactDirectories(f.binding.roots);
     f.bundle.terminal_artifacts[0]!.relative_path = 'nested/design.bin';
     f.save();
     expect(
@@ -506,4 +511,112 @@ test.each([
   } finally {
     hooked.mockRestore();
   }
+});
+
+describe('authenticated artifact directory inventory', () => {
+  test('includes excluded directories without copying excluded content and remains portable', () => {
+    const f = producerFixture();
+    for (const path of [
+      '.git/branches',
+      '.git/refs/empty',
+      'node_modules/package/empty',
+    ])
+      mkdirSync(join(f.binding.workdir, path), { recursive: true });
+    writeFileSync(join(f.binding.workdir, '.git/config'), 'excluded Git bytes');
+    writeFileSync(
+      join(f.binding.workdir, 'node_modules/package/index.js'),
+      'excluded dependency bytes',
+    );
+    const bundle = freezeObserverBundle(f.binding, f.evidenceDir);
+    const paths = bundle.artifact_directories.map((node) => node.path);
+    expect(paths).toContain('.git/branches');
+    expect(paths).toContain('.git/refs/empty');
+    expect(paths).toContain('node_modules/package/empty');
+    expect(
+      bundle.final_state.nodes.some(
+        (node) =>
+          node.path.startsWith('.git') || node.path.startsWith('node_modules'),
+      ),
+    ).toBe(false);
+    expect(bundle.terminal_artifacts.map((ref) => ref.relative_path)).toEqual([
+      'design.bin',
+    ]);
+    const copy = join(f.dir, 'portable-directories');
+    cpSync(f.candidate, copy, { recursive: true });
+    rmSync(f.binding.workdir, { recursive: true });
+    rmSync(f.binding.home, { recursive: true });
+    expect(readObserverBundle(copy).artifact_directories).toEqual(
+      bundle.artifact_directories,
+    );
+  });
+  test.each([
+    'added',
+    'deleted',
+    'replaced',
+    'symlink',
+  ])('refuses excluded directory %s after freeze without rewriting candidate', (change) => {
+    const f = producerFixture();
+    const path = join(f.binding.workdir, '.git/refs/empty');
+    mkdirSync(path, { recursive: true });
+    freezeObserverBundle(f.binding, f.evidenceDir);
+    const before = readFileSync(join(f.candidate, 'observer-bundle.json'));
+    if (change === 'added') mkdirSync(join(path, 'late'));
+    else {
+      renameSync(path, join(f.dir, 'old-directory'));
+      if (change === 'replaced') mkdirSync(path);
+      if (change === 'symlink') symlinkSync(join(f.dir, 'old-directory'), path);
+    }
+    expect(() => verifyObserverCandidate(f.binding, f.evidenceDir)).toThrow();
+    expect(readFileSync(join(f.candidate, 'observer-bundle.json'))).toEqual(
+      before,
+    );
+  });
+  test.each([
+    'added',
+    'deleted',
+    'replaced',
+  ])('refuses excluded directory %s while freezing', (change) => {
+    const f = producerFixture();
+    const path = join(f.binding.workdir, 'node_modules/package/empty');
+    mkdirSync(path, { recursive: true });
+    const original = scoring.scoreObserverEvidence;
+    const hooked = spyOn(scoring, 'scoreObserverEvidence').mockImplementation(
+      (args) => {
+        const score = original(args);
+        if (change === 'added') mkdirSync(join(path, 'late'));
+        else {
+          renameSync(path, join(f.dir, 'old-directory'));
+          if (change === 'replaced') mkdirSync(path);
+        }
+        return score;
+      },
+    );
+    try {
+      expect(() => freezeObserverBundle(f.binding, f.evidenceDir)).toThrow();
+      expect(existsSync(f.candidate)).toBe(false);
+    } finally {
+      hooked.mockRestore();
+    }
+  });
+  test.each([
+    'missing',
+    'duplicate',
+    'escape',
+    'wrong-root',
+    'wrong-identity',
+    'unlisted-content-directory',
+  ])('portable reader refuses %s directory inventory', (change) => {
+    const f = fixture();
+    const root = f.bundle.artifact_directories[0]!;
+    if (change === 'missing') f.bundle.artifact_directories = [];
+    if (change === 'duplicate') f.bundle.artifact_directories.push(root);
+    if (change === 'escape')
+      f.bundle.artifact_directories.push({ ...root, path: '../outside' });
+    if (change === 'wrong-root') root.root_id = 'foreign';
+    if (change === 'wrong-identity') root.inode = '0';
+    if (change === 'unlisted-content-directory')
+      f.bundle.artifact_directories.push({ ...root, path: 'unlisted' });
+    f.save();
+    expect(() => readObserverBundle(f.bundleDir)).toThrow();
+  });
 });

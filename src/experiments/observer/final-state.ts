@@ -6,6 +6,7 @@ import {
   closePin,
   type PinnedDir,
   pinAbsoluteDir,
+  pinChildDir,
   readPinnedNoFollowBytes,
 } from '../../appliance/credential-scope.ts';
 
@@ -101,6 +102,10 @@ const FinalStateNodeSchema: z.ZodType<FinalStateNode> = z.discriminatedUnion(
       })
       .strict(),
   ],
+);
+
+export const ArtifactDirectorySchema = FinalStateNodeSchema.refine(
+  (node) => node.kind === 'directory',
 );
 
 const FinalStateSchema: z.ZodType<FinalState> = z
@@ -476,6 +481,102 @@ export function verifyFinalState(
   if (!equalRoots(expected.roots, rootDescriptions)) invalidState();
   const actual = captureFinalState(roots);
   if (!equalState(expected, actual)) {
+    throw new FinalStateError('final_state_mismatch');
+  }
+}
+
+/** All artifact directories, including content-excluded trees, are publication evidence. */
+export function captureArtifactDirectories(
+  roots: readonly FinalStateRoot[],
+): FinalStateNode[] {
+  const artifactRoots = validateRoots(roots).filter(
+    (root) => root.kind === 'artifacts',
+  );
+  const observe = (): FinalStateNode[] =>
+    artifactRoots
+      .flatMap((root) => {
+        const { pin, stats: rootIdentity } = pinRoot(root);
+        const nodes: FinalStateNode[] = [];
+        const visit = (
+          directory: PinnedDir,
+          path: string,
+          before: BigIntStats,
+        ): void => {
+          const entries = readEntries(directory.viaPath, false);
+          nodes.push(directoryNode(root.id, path, before));
+          for (const name of entries) {
+            const childPath = path ? `${path}/${name}` : name;
+            if (!isSafeRelativePath(childPath)) sourceUnavailable();
+            const namedPath = join(directory.viaPath, name);
+            const childStats = readStats(namedPath, true);
+            if (childStats.isFile()) continue;
+            if (!childStats.isDirectory()) sourceUnavailable();
+            let child: PinnedDir | null;
+            try {
+              child = pinChildDir(
+                directory,
+                name,
+                'observer artifact directory',
+              );
+            } catch {
+              sourceChanged();
+            }
+            if (!child) sourceChanged();
+            try {
+              if (
+                !sameDirectoryIdentity(
+                  childStats,
+                  fstatSync(child.fd, { bigint: true }),
+                )
+              )
+                sourceChanged();
+              visit(child, childPath, childStats);
+              if (
+                !sameDirectoryIdentity(childStats, readStats(namedPath, true))
+              )
+                sourceChanged();
+            } finally {
+              closePin(child);
+            }
+          }
+          if (
+            !sameDirectory(
+              before,
+              fstatSync(directory.fd, { bigint: true }),
+              entries,
+              readEntries(directory.viaPath, true),
+            )
+          )
+            sourceChanged();
+        };
+        try {
+          assertRootStillBound(root, rootIdentity);
+          visit(pin, '', rootIdentity);
+          assertRootStillBound(root, rootIdentity);
+          return nodes;
+        } finally {
+          closePin(pin);
+        }
+      })
+      .sort(compareNodes);
+  const first = observe();
+  const second = observe();
+  if (JSON.stringify(first) !== JSON.stringify(second)) sourceChanged();
+  return second;
+}
+
+export function verifyArtifactDirectories(
+  roots: readonly FinalStateRoot[],
+  candidate: readonly FinalStateNode[],
+): void {
+  const expected = z
+    .array(ArtifactDirectorySchema)
+    .parse(candidate)
+    .sort(compareNodes);
+  if (
+    JSON.stringify(expected) !==
+    JSON.stringify(captureArtifactDirectories(roots))
+  ) {
     throw new FinalStateError('final_state_mismatch');
   }
 }

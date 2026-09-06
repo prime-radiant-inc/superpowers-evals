@@ -15,7 +15,6 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import * as agents from '../src/agents/index.ts';
 import { publishExecution } from '../src/campaign/attempt-publish.ts';
-import { extractManifest, writeManifest } from '../src/check/manifest.ts';
 import {
   jcsCanonicalize,
   sha256Hex,
@@ -52,22 +51,10 @@ test.each([
     }),
   );
   try {
-    const scenario = join(root, 'brainstorming-todo-shared-intent');
-    mkdirSync(scenario);
-    writeFileSync(
-      join(scenario, 'story.md'),
-      'Run the local contract fixture.',
+    const scenario = resolve(
+      import.meta.dir,
+      '../scenarios/brainstorming-todo-shared-intent',
     );
-    writeFileSync(
-      join(scenario, 'setup.sh'),
-      '#!/usr/bin/env bash\nprintf fixture > README.md\n',
-    );
-    chmodSync(join(scenario, 'setup.sh'), 0o755);
-    writeFileSync(
-      join(scenario, 'checks.sh'),
-      'pre() {\n file-exists README.md\n}\npost() {\n brainstorming-review\n}\n',
-    );
-    writeManifest(scenario, extractManifest(join(scenario, 'checks.sh')));
     const config = join(root, 'agents');
     mkdirSync(join(config, 'codex-context'), { recursive: true });
     for (const file of ['HOWTO.md', 'project-prompt.md'])
@@ -182,6 +169,35 @@ test.each([
           },
           resultsRoot,
         });
+        const bundle = readObserverBundle(
+          join(resultsRoot, published.runId, 'brainstorming-evidence/bundle'),
+        );
+        for (const path of [
+          '.git/branches',
+          '.git/refs/empty/nested',
+          'node_modules/empty/nested',
+        ]) {
+          expect(
+            bundle.artifact_directories.some((node) => node.path === path),
+          ).toBe(true);
+          expect(
+            existsSync(
+              join(resultsRoot, published.runId, 'coding-agent-workdir', path),
+            ),
+          ).toBe(true);
+        }
+        expect(
+          bundle.terminal_artifacts.some(
+            (ref) =>
+              ref.relative_path.startsWith('.git/') ||
+              ref.relative_path.startsWith('node_modules/'),
+          ),
+        ).toBe(false);
+        expect(
+          manifest.files.some(
+            (ref) => ref.path === 'coding-agent-workdir/.git/config',
+          ),
+        ).toBe(true);
         const copy = join(root, 'portable');
         cpSync(join(resultsRoot, published.runId), copy, { recursive: true });
         rmSync(join(attempt, 'home'), { recursive: true });

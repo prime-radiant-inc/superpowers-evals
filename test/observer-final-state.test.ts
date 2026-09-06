@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as credentialScope from '../src/appliance/credential-scope.ts';
 import {
+  captureArtifactDirectories,
   captureFinalState,
   type FinalState,
   FinalStateError,
@@ -896,4 +897,79 @@ describe('observer final-state inventory', () => {
       'final_state_mismatch',
     );
   });
+});
+
+describe('complete artifact directories', () => {
+  test('rejects no-follow escapes inside content-excluded trees', () => {
+    const { roots, base } = fixture();
+    const workdir = roots[1]!.path;
+    mkdirSync(join(workdir, 'node_modules'));
+    const outside = join(base, 'outside');
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'secret'), 'unchanged');
+    symlinkSync(outside, join(workdir, 'node_modules/escape'));
+    expect(() => captureArtifactDirectories(roots)).toThrow();
+    expect(readFileSync(join(outside, 'secret'), 'utf8')).toBe('unchanged');
+  });
+  test.each([
+    'replace-child',
+    'symlink-child',
+    'replace-root',
+  ])('refuses %s between directory observation and pinning', (change) => {
+    const { roots, base } = fixture();
+    const workdir = roots[1]!.path;
+    mkdirSync(join(workdir, '.git/branches'), { recursive: true });
+    const original = credentialScope.pinChildDir;
+    let changed = false;
+    const hooked = spyOn(credentialScope, 'pinChildDir').mockImplementation(
+      (parent, name, label, required) => {
+        if (!changed && name === 'branches') {
+          changed = true;
+          if (change === 'replace-root') {
+            renameSync(workdir, join(base, 'old-root'));
+            mkdirSync(workdir);
+          } else {
+            renameSync(join(workdir, '.git/branches'), join(base, 'old-child'));
+            if (change === 'replace-child')
+              mkdirSync(join(workdir, '.git/branches'));
+            else
+              symlinkSync(
+                join(base, 'old-child'),
+                join(workdir, '.git/branches'),
+              );
+          }
+        }
+        return original(parent, name, label, required);
+      },
+    );
+    try {
+      expect(() => captureArtifactDirectories(roots)).toThrow();
+      expect(changed).toBe(true);
+    } finally {
+      hooked.mockRestore();
+    }
+  });
+});
+
+test('artifact directory capture refuses different complete first and second inventories', () => {
+  const { roots } = fixture();
+  mkdirSync(join(roots[1]!.path, '.git/branches'), { recursive: true });
+  const original = credentialScope.pinAbsoluteDir;
+  let rootPins = 0;
+  const hooked = spyOn(credentialScope, 'pinAbsoluteDir').mockImplementation(
+    (path, label) => {
+      if (path === roots[1]!.path && ++rootPins === 4)
+        mkdirSync(join(path, '.git/branches/late'));
+      return original(path, label);
+    },
+  );
+  try {
+    expectFinalStateError(
+      () => captureArtifactDirectories(roots),
+      'source_changed',
+    );
+    expect(rootPins).toBeGreaterThanOrEqual(4);
+  } finally {
+    hooked.mockRestore();
+  }
 });

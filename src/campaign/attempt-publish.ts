@@ -466,7 +466,7 @@ export function publishExecution(args: {
     const artifactRoot = binding.roots.find(
       (root) => root.kind === 'artifacts',
     );
-    artifactDirectories = bundle.final_state.nodes
+    artifactDirectories = bundle.artifact_directories
       .filter(
         (node) =>
           node.root_id === artifactRoot?.id && node.kind === 'directory',
