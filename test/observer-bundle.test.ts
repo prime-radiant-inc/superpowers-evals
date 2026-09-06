@@ -222,15 +222,36 @@ describe('observer bundle authentication', () => {
       expect(() => readObserverBundle(f.bundleDir)).toThrow();
     }
   });
-  test('rejects absent review without evidence error and behavioral score with evidence errors', () => {
+  test('rejects absent review without an evidence error', () => {
     const f = fixture();
     f.bundle.evidence_errors = [];
     f.save();
     expect(() => readObserverBundle(f.bundleDir)).toThrow();
+  });
+  test('rejects behavioral score with evidence errors in an otherwise valid bundle', () => {
+    const f = fixture();
+    const review = Buffer.from('{"schema_version":2}');
+    writeFileSync(join(f.bundleDir, 'review.json'), review);
+    f.bundle.files.push({
+      path: 'review.json',
+      bytes: review.length,
+      sha256: digest(review),
+    });
+    f.bundle.actor_review = 'review.json';
+    const score = Buffer.from('{"schema_version":2,"outcome":"fail"}');
+    writeFileSync(join(f.bundleDir, 'score.json'), score);
+    f.bundle.files.push({
+      path: 'score.json',
+      bytes: score.length,
+      sha256: digest(score),
+    });
+    f.bundle.score = 'score.json';
+    f.bundle.evidence_errors = [];
+    f.save();
+    expect(() => readObserverBundle(f.bundleDir)).not.toThrow();
     f.bundle.evidence_errors = [
-      { code: 'review_unavailable', message: 'Missing.' },
+      { code: 'invalid_review', message: 'Review evidence is invalid.' },
     ];
-    f.bundle.score = 'receipt.json';
     f.save();
     expect(() => readObserverBundle(f.bundleDir)).toThrow();
   });
