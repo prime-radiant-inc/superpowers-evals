@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   AttemptProjectionError,
   prepareAttemptStage,
@@ -988,4 +989,80 @@ test('genuine V2 preparation routes a distinct Mantle grader through the grader-
   expect(projected['ANTHROPIC_BASE_URL']).toBe(
     'https://bedrock-mantle.us-east-1.api.aws/anthropic',
   );
+});
+
+function mantleFixture(
+  graderSource = 'SUBJECT_KEY',
+  graderRegion = 'us-east-1',
+) {
+  const fx = projectionFixture();
+  addGrader(fx);
+  const file = join(fx.corpus, 'credentials.yaml');
+  const registry = parseYaml(readFileSync(file, 'utf8'));
+  Object.assign(registry.cred_a, {
+    api: 'mantle',
+    auth: 'bedrock-bearer',
+    region: 'us-east-1',
+  });
+  Object.assign(registry.grader, {
+    api: 'mantle',
+    auth: 'bedrock-bearer',
+    region: graderRegion,
+    api_key_env: graderSource,
+  });
+  writeFileSync(file, stringifyYaml(registry));
+  return fx;
+}
+
+function projectedEnv(path: string): Record<string, string> {
+  return Object.fromEntries(
+    readFileSync(path, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const at = line.indexOf('=');
+        return [line.slice(0, at), line.slice(at + 1)];
+      }),
+  );
+}
+
+test('V2 prepares the explicitly shared Mantle source for both consumers', () => {
+  const fx = mantleFixture();
+  const prepared = prepareV2(fx);
+  const mounts = prepared.intent.runtime_spec.mounts;
+  const subject = projectedEnv(
+    mounts.find((m) => m.target === '/run/quorum/subject.env')!.source,
+  );
+  const grader = projectedEnv(
+    mounts.find((m) => m.target === '/run/quorum/grader.env')!.source,
+  );
+  expect(subject).toEqual({ SUBJECT_KEY: SUBJECT });
+  expect(grader).toEqual({
+    QUORUM_GRADER_SOURCE_MODE: 'appliance-scoped',
+    QUORUM_GRADER_ANTHROPIC_API_KEY: SUBJECT,
+    QUORUM_GRADER_ANTHROPIC_BASE_URL:
+      'https://bedrock-mantle.us-east-1.api.aws/anthropic',
+  });
+  expect(gauntletEnvBase(grader)['ANTHROPIC_API_KEY']).toBe(SUBJECT);
+  expect(JSON.stringify(prepared)).not.toContain(SUBJECT);
+  removeAttemptStage(join(fx.campaignDir, 'attempts', 'attempt'));
+  expect(
+    existsSync(join(fx.campaignDir, 'attempts', 'attempt', '.stage')),
+  ).toBe(false);
+});
+
+test('V2 refuses equal Mantle values under different source names', () => {
+  const fx = mantleFixture('SELECTED_GRADER');
+  fs.appendFileSync(
+    join(fx.bundleDir, 'credentials.env'),
+    `SELECTED_GRADER=${shellQuote(SUBJECT)}\n`,
+  );
+  expect(() => prepareV2(fx)).toThrow(/equals a grader auth value/);
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+});
+
+test('V2 refuses a shared source across different Mantle regions', () => {
+  const fx = mantleFixture('SUBJECT_KEY', 'us-west-2');
+  expect(() => prepareV2(fx)).toThrow(/equals a grader auth value/);
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
 });

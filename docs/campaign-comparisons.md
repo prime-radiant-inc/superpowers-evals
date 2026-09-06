@@ -54,17 +54,29 @@ capacity is not a claim about an account's verified provider quota. Claude Mantl
 `AWS_BEARER_TOKEN_BEDROCK`; Codex/Pi OpenAI subjects require `OPENAI_API_KEY`;
 Kimi requires `KIMI_MODEL_API_KEY`. The source cap of two graders (versus six in the Mantle declaration) and
 Kimi's one subject slot intentionally limit throughput. They do not establish
-same-workday readiness or measured quotas. A separately keyed Mantle grader
-remains configuration-only: declare its supported `api: mantle`,
-`auth: bedrock-bearer`, region, model, distinct `api_key_env`, and explicit
-concurrency cap, then select it in the suite. No auth bridge is needed.
+same-workday readiness or measured quotas. Select the existing
+`sonnet5_bedrock` grader to use Mantle. A Mantle subject and grader may share
+provider authority when both declarations select `api: mantle`,
+`auth: bedrock-bearer`, the same region, and the same `api_key_env` name.
+This uses the existing blessed bundle; no additional key or auth bridge is needed.
 These are prerequisite names, not supplied
 credentials. Keep actual values in the configured blessed bundle, never Git.
-The grader key must differ in value from every selected subject secret. Missing
-keys and aliasing the same secret under different names refuse preparation.
+Outside that explicit shared Mantle source, the grader key must differ in value
+from every selected subject secret. Missing keys and aliasing the same secret
+under different names refuse preparation.
 The active suites' direct Anthropic grading route differs from historical Mantle
 grading: do not infer numerical continuity with those historical runs. No auth
 bridge or expanded harness allowlist is implied by an example.
+
+## Optional pricing snapshot
+
+For models whose prices need an explicit table, a suite can declare
+`pricing_snapshot: { path: <Evals-relative current.json>, sha256: <SHA-256> }`.
+Commit the file with the arm declarations. Registration freezes its identity
+with the experiment, and worker preparation verifies those bytes before
+creating credential files. The worker uses that directory through the existing
+read-only Evals mount. Credential delivery cannot override `OBOL_PRICING_DIR`.
+Suites without a snapshot retain normal bundled pricing behavior.
 
 ## One execution
 
@@ -83,6 +95,9 @@ basename. The UUID and directory basename are different. `run` consumes exactly
 one start and launches the fixed private controller through its gate. Repeating
 `run` cannot restart ended or interrupted work. One host admits one spender;
 attempts may run concurrently within the frozen global and credential caps.
+When dispatch priorities tie, the scheduler considers the first repetition
+across comparisons and scenarios before later repetitions. Resource and
+credential limits still determine which blocks can actually start.
 Admission checks live resource floors and the registered CPU/memory/disk fingerprint.
 Stale host telemetry refuses further activation or worker launch, including after
 slow preparation; it does not prevent termination of already owned workers.

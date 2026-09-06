@@ -95,6 +95,24 @@ export const CONVENTIONAL_API_KEY_ENV: Readonly<Record<string, string>> = {
   pi: 'PI_API_KEY',
 };
 
+/** The same declared regional Mantle source deliberately grants both consumers
+ * the same provider authority. Different names or routes do not establish that intent. */
+export function sharesMantleCredentialSource(
+  subject: Credential | undefined,
+  grader: Credential | undefined,
+): boolean {
+  return (
+    subject?.api === 'mantle' &&
+    subject.auth === 'bedrock-bearer' &&
+    grader?.api === 'mantle' &&
+    grader.auth === 'bedrock-bearer' &&
+    subject.region !== undefined &&
+    subject.region === grader.region &&
+    subject.api_key_env !== undefined &&
+    subject.api_key_env === grader.api_key_env
+  );
+}
+
 // Own-property credential lookup: inherited Object.prototype members
 // ('constructor', '__proto__', 'toString', ...) must never be treated as
 // registry entries — `name in registry` and bare `registry[name]` both see
