@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
+  type CodexTracePatchLink,
+  NativePatchApplyEndSchema,
+  validateCodexTraceLinks,
+} from './codex-trace.ts';
+import {
   type JsonValue,
   ObserverEvidenceError,
+  type ObserverSupportingFile,
   type RawAnchor,
   type RawEntry,
   type RawIndex,
@@ -949,9 +955,171 @@ function indexWorldState(
   return { kind: 'non_action', anchor, record_type: 'world_state' };
 }
 
+/** Native trace bytes come from the caller's authenticated, pinned inventory. */
+function tracePatchLinks(
+  source: RawSource,
+  raw: Uint8Array,
+  files: readonly ObserverSupportingFile[],
+): Map<string, CodexTracePatchLink> {
+  if (files.length === 0) return new Map();
+  const members = new Map<string, Uint8Array>();
+  const rootIds = new Set(files.map((file) => file.root_id));
+  for (const file of files) {
+    if (
+      file.relative_path
+        .split('/')
+        .some((part) => !part || part === '.' || part === '..') ||
+      file.relative_path.includes('\\') ||
+      file.relative_path.includes('\0') ||
+      members.has(file.relative_path)
+    )
+      throw new ObserverEvidenceError(
+        'invalid_source',
+        'Native trace member inventory is invalid.',
+      );
+    members.set(file.relative_path, file.bytes);
+  }
+  const manifests = [...members.keys()].filter((path) =>
+    path.endsWith('/manifest.json'),
+  );
+  if (rootIds.size !== 1 || manifests.length !== 1)
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Exactly one bound native trace bundle is required.',
+    );
+  const manifestPath = manifests[0];
+  if (!manifestPath)
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Native trace manifest is missing.',
+    );
+  const manifest = members.get(manifestPath);
+  if (!manifest)
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Native trace manifest bytes are missing.',
+    );
+  const prefix = manifestPath.slice(0, -'manifest.json'.length);
+  if ([...members.keys()].some((path) => !path.startsWith(prefix)))
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Native trace inventory contains an unrelated bundle.',
+    );
+  const trace = members.get(`${prefix}trace.jsonl`);
+  if (!trace)
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Native trace event log is missing.',
+    );
+  const links = validateCodexTraceLinks(source, raw, {
+    manifest,
+    trace,
+    payloads: new Map(
+      [...members]
+        .filter(([path]) => path.startsWith(`${prefix}payloads/`))
+        .map(([path, bytes]) => [path.slice(prefix.length), bytes]),
+    ),
+  });
+  const byId = new Map<string, CodexTracePatchLink>();
+  for (const link of links) {
+    const previous = byId.get(link.inner_call_id);
+    if (
+      previous &&
+      (previous.outer_call_id !== link.outer_call_id ||
+        canonicalJson({ ...previous.call_anchor }) !==
+          canonicalJson({ ...link.call_anchor }))
+    )
+      throw new ObserverEvidenceError(
+        'identity_conflict',
+        'Native patch ID has conflicting parent links.',
+      );
+    if (!previous) byId.set(link.inner_call_id, link);
+  }
+  return byId;
+}
+
+function indexPatchResult(
+  payload: JsonObject,
+  anchor: RawAnchor,
+  calls: Map<string, CallRecord>,
+  results: Map<string, ReplayRecord>,
+  links: Map<string, CodexTracePatchLink>,
+): RawEntry {
+  const parsed = NativePatchApplyEndSchema.safeParse(payload);
+  if (!parsed.success)
+    fail(
+      'unknown_record',
+      'Patch result shape is outside the inspected dialect.',
+      anchor,
+    );
+  const nativeId = parsed.data.call_id;
+  const serialized = canonicalJson(payload);
+  const previous = results.get(nativeId);
+  if (previous) {
+    if (previous.payload !== serialized)
+      fail(
+        'replay_conflict',
+        'Native patch result ID was reused with different evidence.',
+        anchor,
+      );
+    const canonical = previous.anchors[0];
+    if (!canonical)
+      fail(
+        'invalid_record',
+        'Native patch replay lacks a canonical result.',
+        anchor,
+      );
+    return { kind: 'replay', anchor, canonical_anchor: canonical };
+  }
+  const direct = calls.get(nativeId);
+  const link = links.get(nativeId);
+  const call = direct ?? (link ? calls.get(link.outer_call_id) : undefined);
+  if (!call)
+    fail(
+      'orphan_result',
+      'Native patch result lacks an explicit parent call link.',
+      anchor,
+    );
+  const callPayload = JSON.parse(call.payload) as JsonObject;
+  const metadata = callPayload['internal_chat_message_metadata_passthrough'];
+  if (
+    !metadata ||
+    !isJsonObject(metadata) ||
+    metadata['turn_id'] !== parsed.data.turn_id
+  )
+    fail(
+      'identity_conflict',
+      'Native patch result conflicts with its parent turn.',
+      anchor,
+    );
+  if (
+    direct
+      ? callPayload['name'] !== 'apply_patch'
+      : callPayload['name'] !== 'exec' ||
+        !link ||
+        canonicalJson({ ...call.anchor }) !==
+          canonicalJson({ ...link.call_anchor }) ||
+        canonicalJson({ ...anchor }) !== canonicalJson({ ...link.patch_anchor })
+  )
+    fail(
+      'orphan_result',
+      'Native patch result conflicts with its parent call.',
+      anchor,
+    );
+  results.set(nativeId, { payload: serialized, anchors: [anchor] });
+  return {
+    kind: 'result',
+    anchor,
+    call_id: call.callId,
+    call_anchor: call.anchor,
+    payload,
+  };
+}
+
 export function indexCodexTranscript(
   source: RawSource,
   raw: Uint8Array,
+  supportingFiles: readonly ObserverSupportingFile[] = [],
 ): RawIndex {
   if (source.runtime !== 'codex') {
     throw new ObserverEvidenceError(
@@ -970,6 +1138,8 @@ export function indexCodexTranscript(
   const calls = new Map<string, CallRecord>();
   const results = new Map<string, ReplayRecord>();
   const messages = new Map<string, ReplayRecord>();
+  const patchResults = new Map<string, ReplayRecord>();
+  let patchLinks: Map<string, CodexTracePatchLink> | null = null;
   const entries: RawEntry[] = [];
 
   for (const row of rows) {
@@ -993,6 +1163,24 @@ export function indexCodexTranscript(
     }
     if (type === 'event_msg') {
       const payload = row.value['payload'];
+      if (
+        source.expected_cli_version === '0.146.0' &&
+        payload !== undefined &&
+        isJsonObject(payload) &&
+        payload['type'] === 'patch_apply_end'
+      ) {
+        patchLinks ??= tracePatchLinks(source, raw, supportingFiles);
+        entries.push(
+          indexPatchResult(
+            payload,
+            row.anchor,
+            calls,
+            patchResults,
+            patchLinks,
+          ),
+        );
+        continue;
+      }
       if (
         source.expected_cli_version === '0.146.0' &&
         payload !== undefined &&

@@ -26,7 +26,9 @@ observation after presentation of the current revision and before your approval.
 separate IDs. A deletion has no invented receipt.
 
 After stopping the subject and allowing its output to finish, index the bound
-source through observer-index. Copy its prefix into source_prefixes. Classify
+source through observer-index. Copy its prefix into source_prefixes and copy
+the complete supporting_prefixes array unchanged (use [] only when the index
+contains []). A changed supporting snapshot requires restarting pagination. Classify
 all canonical calls and their canonical result anchors exactly once; aliases do
 not create additional physical calls or results. Unknown records, unsupported
 parent authority, or unresolved descendants are evidence gaps. Never invent
@@ -35,6 +37,8 @@ eligibility or put a child's completion at its spawn acknowledgment.
 Write this shape once through observer-write-review. The anchors and IDs below
 are illustrations; copy actual indexed positions and receipt observation IDs.
 The actor review lives outside the final bundle and cannot be overwritten.
+The empty supporting_prefixes array below is illustrative; a Codex trace usually
+provides nonempty member prefixes that must be copied from the index.
 
 ```json
 {
@@ -42,6 +46,7 @@ The actor review lives outside the final bundle and cannot be overwritten.
   "source_prefixes": [
     {"source_id":"COPY_SOURCE_ID","bytes":1234,"sha256":"COPY_PREFIX_SHA256","after_line":16}
   ],
+  "supporting_prefixes": [],
   "reviewer": "Gauntlet-Agent",
   "stop_reason": "endpoint",
   "events": [

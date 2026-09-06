@@ -150,6 +150,7 @@ function publishFixture(
     schema_version: 2,
     reviewer: 'actor',
     stop_reason: 'endpoint',
+    supporting_prefixes: [],
     source_prefixes: [createRawPrefix(source, raw)],
     events: [],
     actions: [
@@ -167,6 +168,7 @@ function publishFixture(
   };
   const score = scoreObserverEvidence({
     binding,
+    supporting_files: [],
     raw_sources: [{ source_id: 'parent', bytes: raw }],
     receipts: [],
     review: actorReview,
@@ -187,6 +189,7 @@ function publishFixture(
       sha256: digest(bytes),
     })),
     sources: [{ source_id: 'parent', path: 'parent.jsonl' }],
+    supporting_files: [],
     terminal_artifacts: [],
     receipts: [],
     actor_review: 'actor-review.json',
@@ -235,6 +238,7 @@ function publishFixture(
     bundle_digest: digest(envelopeBytes),
     reviewer: 'independent',
     reviewed_at: fixtureTime(15),
+    supporting_prefixes: [],
     source_prefixes: actorReview.source_prefixes,
     calls: actorReview.actions.map((action) => ({
       anchor: action.anchor,
@@ -283,6 +287,7 @@ function rewritePublication(
   if (damage === 'score' || damage === 'dialect') {
     const score = scoreObserverEvidence({
       binding: bundle.binding,
+      supporting_files: [],
       raw_sources: [
         {
           source_id: 'parent',

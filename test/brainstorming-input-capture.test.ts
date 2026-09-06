@@ -294,6 +294,7 @@ test('private observer commands read/index and write review bytes without home a
     schema_version: 2,
     reviewer: 'fixture',
     stop_reason: 'endpoint',
+    supporting_prefixes: [],
     source_prefixes: [],
     events: [],
     actions: [],

@@ -130,6 +130,7 @@ function fixture() {
     schema_version: 2,
     reviewer: 'synthetic contract review',
     stop_reason: 'endpoint',
+    supporting_prefixes: [],
     source_prefixes: [createRawPrefix(source, bytes(rows))],
     events: [
       {
@@ -210,6 +211,7 @@ function fixture() {
       return {
         schema_version: 2,
         observation_id: stage,
+        supporting_prefixes: [],
         source_prefix: createRawPrefix(
           source,
           bytes(rows.slice(0, stage === 'spec' ? 9 : 13)),
@@ -222,6 +224,7 @@ function fixture() {
     },
   );
   const input = () => ({
+    supporting_files: [],
     raw_sources: [{ source_id: 'parent', bytes: bytes(rows) }],
     binding,
     receipts,
@@ -682,6 +685,7 @@ function descendantFixture() {
   parentAction.delegation = 'implementation';
   const input = () => ({
     ...f.input(),
+    supporting_files: [],
     raw_sources: [...f.input().raw_sources, { source_id: 'child', bytes: raw }],
   });
   return { ...f, input };
@@ -828,6 +832,7 @@ test('an equivalent Claude semantic chain cannot pass on unresolved native prove
   );
   const score = scoreObserverEvidence({
     ...f.input(),
+    supporting_files: [],
     raw_sources: [{ source_id: 'parent', bytes: raw }],
   });
   expect(score).toMatchObject({
@@ -1011,6 +1016,7 @@ describe('completion belongs to the currently approved artifact revisions', () =
     f.receipts.push({
       schema_version: 2,
       observation_id: 'plan-revised',
+      supporting_prefixes: [],
       source_prefix: createRawPrefix(f.source, bytes(f.rows.slice(0, 19))),
       artifact_path: 'docs/plan.md',
       bytes: content.length,

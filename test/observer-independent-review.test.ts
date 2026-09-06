@@ -120,12 +120,14 @@ function fixture() {
         },
       ],
     },
+    supporting_files: [],
     raw_sources: [{ source_id: 'parent', bytes: raw }],
     receipts: [],
     actor_review: {
       schema_version: 2,
       reviewer: 'actor',
       stop_reason: 'endpoint',
+      supporting_prefixes: [],
       source_prefixes: [createRawPrefix(source, raw)],
       events: [],
       actions: [
@@ -150,6 +152,7 @@ function fixture() {
     bundle_digest: evidence.bundle_digest,
     reviewer: 'independent-a',
     reviewed_at: '2026-09-05T00:00:00Z',
+    supporting_prefixes: [],
     source_prefixes: evidence.actor_review.source_prefixes,
     calls: [{ anchor: at(3), call_id: 'native:edit', result_anchors: [at(4)] }],
     judgments: [
@@ -358,6 +361,7 @@ function cosmeticFixture() {
     return {
       schema_version: 2,
       observation_id: id,
+      supporting_prefixes: [],
       source_prefix: createRawPrefix(f.source, raw),
       artifact_path: 'spec.md',
       bytes: content.length,

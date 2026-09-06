@@ -116,6 +116,7 @@ export function runObserverFixture(mode: string) {
       schema_version: 2,
       reviewer: 'local contract fixture',
       stop_reason: 'endpoint',
+      supporting_prefixes: [],
       source_prefixes: [createRawPrefix(source, readFileSync(rawPath))],
       events: [
         {
