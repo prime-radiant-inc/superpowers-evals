@@ -749,3 +749,89 @@ the web item ID. This identifies a possible existing capture mechanism rather
 than a reason to guess parentage or weaken scoring. Availability, enablement,
 retention and authentication of that separate trace in the actual attempt path
 remain to be verified before implementation or another diagnostic.
+
+## September 6: offline native trace qualification
+
+Drew approved the bounded native capture, replay and instrument integration after
+the second diagnostic. All native probes used the selected appliance through
+Tailscale SSH, the unchanged pinned image, a network-disabled container and a
+deterministic local Responses endpoint. No provider calls, credential changes or
+additional campaign attempts were made. The failed campaigns remain unchanged.
+
+Codex 0.146.0 produced the required explicit chain when its optional native trace
+root was enabled. The final probe used an exact archive of source
+`b697c879a2ce5324cad4923229aec8301c630f4a`; all 1,365 transferred source-file
+hashes matched. The native ELF digest remained
+`2e863156ed35ecc5253b1e2f907a9143077b9f7cb51942070c61996471ff6e04` and image
+`sha256:500e28caf737a820c3f30f21f757b089b8d548081e714e1a20dff1a82de37691`.
+The successful nested patch capture has 27 contiguous native trace rows and 19
+payloads. Its archive digest is
+`7a540ef255f540f4ec8ce47dd8a9d760f98e630955d21242947636bde0572242`.
+The file written by the native patch matched the expected bytes. Process exit,
+container removal and release of owned appliance locks were verified.
+
+An earlier probe retained a real failed patch and its explicit parent chain.
+Another deliberately invalid trace-root path demonstrated that the native writer
+fails open: ordinary turns completed without a trace bundle. Successful CLI exit
+or setting the environment variable therefore does not qualify observer evidence.
+Earlier exploratory driver overlays are recorded separately from the final
+committed-byte capture.
+
+Source commits `e8071d52` and `b697c879` provide the reusable nested capture;
+`a1808653` binds and authenticates the private trace root, supporting files and
+historical byte prefixes through the existing observer pipeline; `b8b90f8f`
+validates the explicit native joins; `25ed32c5` retains the complete patch result
+on its existing parent action. The production env-i launcher test executes the
+real launcher with a fake CLI and verifies the private trace-root injection and
+removal of an inherited host value. Portable bundle tests consume retained bytes
+after removal of the original home. These are source integration checks, distinct
+from the native serializer capture and installed execution evidence.
+
+Local replay of the complete failed, initial successful and final successful raw
+captures gives one canonical outer action at line 11, the unchanged native patch
+result at line 12 and the separate wrapper result at line 13. Failed versus
+successful payloads are preserved. Removing the trace refuses the nested result;
+no parent ID is inferred from adjacency. Supplementary trace validation covers
+required joins and consistency, not every possible native event kind. Unknown
+ordinary action-bearing records remain errors.
+
+Commit `d3bbcce0` separately preserves the native web completion records and
+interruption metadata. Exact-byte replays of the historical Astra base/head
+captures parse all 81/83 rows. Head web anchors are 64→65, 70→71 and 77→78,
+retaining both payloads. The end-event descriptor is not an inferred initiation
+time. Historical Sol base/head bytes still refuse at their first patch results,
+lines 95/135, because those runs never captured the required native trace. These
+replays did not invoke the scorer or repair either campaign.
+
+Independent review initially returned REVISE for ordinary replay handling,
+contradictory native lifecycle/input evidence and a historical receipt that could
+omit required supporting prefixes. Those negative findings and their original
+passing-test counts are retained in the private review reports; final fix and
+verification evidence is recorded below. No source-test result alone establishes
+three valid diagnostic pairs or authorizes the measured campaign.
+
+Private receipts are under `diagnostic-r3-offline/` in the plan workspace:
+`codex-trace-report.md`, `codex-trace-final/verification.json`,
+`native-patch-replay.json`, `codex-web-replay.json`,
+`codex-missing-trace-replay.json`, `trace-link-review.md` and
+`trace-auth-review.md`. Raw native captures and appliance run homes remain private.
+
+The review findings were fixed in `b91d433d` and `435f073f`. Historical receipt
+replay now reconstructs only the recorded main and supporting byte prefixes;
+the original omitted-support/recomputed-envelope reproduction is refused.
+Canonical ordinary replays retain their first anchors. Present cell/turn
+lifecycle records and invocation previews must agree with required native
+dispatch evidence. Normal turn completion does not terminate a yielded cell.
+Independent bounded re-reviews found no remaining actionable findings in those
+fixes: 229 authentication/receipt tests and 82 native parser/dispatcher tests
+passed. The negative reports are retained beside `trace-auth-fix-review.md` and
+`trace-link-fix-review.md`. Root also reran all three complete native captures
+and both unchanged historical Astra captures successfully after the fixes.
+
+Final combined source verification after `435f073f`: `bun run check` passed
+Biome, TypeScript, **4,189 core tests, 17 explicit skips, zero failures**, and
+**144 dashboard tests, zero failures**. Scenario validation and `git diff --check`
+passed. Logs are `final-integration-check.log` and `final-scenario-check.log`.
+The skips remain explicit; they are not qualification receipts. A fresh
+diagnostic still needs a new frozen instrument and registered identity, and its
+three valid pairs and full evidence review remain prerequisites for measurement.
