@@ -24,6 +24,8 @@ import {
   RelativeArtifactPathSchema,
 } from '../../contracts/campaign/execution.ts';
 import {
+  indexBoundObserverSource,
+  indexObserverSource,
   type ObserverBinding,
   ObserverBindingSchema,
   readObserverNode,
@@ -377,7 +379,9 @@ export function freezeObserverBundle(
       .sort();
     for (const [index, name] of receiptNames.entries()) {
       const bytes = readMember(evidenceDir, name);
-      validateArtifactReceipt(parseJson(bytes));
+      const receipt = validateArtifactReceipt(parseJson(bytes));
+      if (name !== `capture-${receipt.observation_id}.json`)
+        throw new Error('Receipt name conflicts with observation identity.');
       const path = `receipt-${index}.json`;
       save(path, bytes);
       bundle.receipts.push(path);
@@ -449,6 +453,34 @@ export function freezeObserverBundle(
     );
     const validated = readObserverBundle(join(evidenceDir, '.bundle-stage'));
     verifyFinalState(binding.roots, inventory);
+    const finalReceiptNames = readdirSync(evidence.viaPath)
+      .filter((name) => name.startsWith('capture-') && name.endsWith('.json'))
+      .sort();
+    if (jcsCanonicalize(receiptNames) !== jcsCanonicalize(finalReceiptNames))
+      throw new Error('Observer receipt inventory changed during freeze.');
+    for (const [index, name] of receiptNames.entries()) {
+      if (
+        !readMember(evidenceDir, name).equals(
+          readMember(
+            join(evidenceDir, '.bundle-stage'),
+            `receipt-${index}.json`,
+          ),
+        )
+      )
+        throw new Error('Observer receipt changed during freeze.');
+    }
+    const finalReview = readPinnedNoFollowBytes(
+      evidenceDir,
+      ['review.json'],
+      'observer review',
+      false,
+    );
+    if (
+      reviewBytes === null
+        ? finalReview !== null
+        : finalReview === null || !reviewBytes.equals(finalReview)
+    )
+      throw new Error('Observer review changed during freeze.');
     // Persist all copied evidence before the single directory publication.
     for (const name of [
       ...bundle.files.map((file) => file.path),
@@ -497,6 +529,40 @@ export function readObserverScore(bundleDir: string): StrictScore {
   if (bundle.score === null)
     throw new Error('Observer strict score is unavailable.');
   return StrictScoreSchema.parse(
-    parseJson(readMember(bundleDir, bundle.score)),
+    parseJson(authenticatedMember(bundleDir, bundle, bundle.score)),
   );
+}
+
+function authenticatedMember(
+  bundleDir: string,
+  bundle: ObserverBundle,
+  path: string,
+): Buffer {
+  const file = bundle.files.find((file) => file.path === path);
+  const bytes = readMember(bundleDir, path);
+  if (
+    !file ||
+    bytes.length !== file.bytes ||
+    createHash('sha256').update(bytes).digest('hex') !== file.sha256
+  )
+    throw new Error('Observer member changed during consumption.');
+  return bytes;
+}
+
+/** Index portable frozen sources. The original runtime paths remain provenance only. */
+export function indexObserverBundle(bundleDir: string) {
+  const bundle = readObserverBundle(bundleDir);
+  return {
+    schema_version: 2,
+    sources: bundle.sources.map((ref) => {
+      const bound = bundle.binding.sources.find(
+        (source) => source.source.source_id === ref.source_id,
+      );
+      if (!bound) throw new Error('Bundle source is not bound.');
+      const bytes = authenticatedMember(bundleDir, bundle, ref.path);
+      return bound.parent_link === null
+        ? indexBoundObserverSource(bundle.binding, bound.source, bytes)
+        : indexObserverSource(bound.source, bytes);
+    }),
+  };
 }

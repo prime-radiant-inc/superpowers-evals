@@ -59,6 +59,7 @@ import {
   superpowersPluginArgs,
 } from '../agents/superpowers.ts';
 import { WindowsHost } from '../agents/windows-host.ts';
+import { readPinnedNoFollowFile } from '../appliance/credential-scope.ts';
 import type { AtifTrajectory } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
 import {
@@ -105,12 +106,17 @@ import {
 import { isSerfOpenRouterCampaignCredentialV1 } from '../credentials/serf-openrouter-profile.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
-import { installInputCapture } from '../experiments/brainstorming-input-capture.ts';
 import {
+  installInputCapture,
+  observerBindingPath,
+} from '../experiments/brainstorming-input-capture.ts';
+import {
+  discoverObserverSources,
   OBSERVER_DIALECTS,
   observerRequiredForScenario,
   validateObserverBinding,
 } from '../experiments/observer/binding.ts';
+import { freezeObserverBundle } from '../experiments/observer/bundle.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
 import {
   captureOpenRouterGenerations,
@@ -1149,6 +1155,48 @@ export async function runScenario(
   // (early guards); it is never read late.
   const expectedChecksCache: ExpectedChecksCache = { manifest: null };
   const runAgentCache: RunAgentConfigCache = { config: null };
+  let observerAttempted = false;
+  let observerFailure: unknown;
+  const finalizeObserver = (): void => {
+    if (!observerRequiredForScenario(scenario)) return;
+    if (observerAttempted) {
+      if (observerFailure) throw observerFailure;
+      return;
+    }
+    observerAttempted = true;
+    try {
+      const workdir = join(runDir, 'coding-agent-workdir');
+      const path = observerBindingPath(workdir);
+      const raw = readPinnedNoFollowFile(
+        dirname(path),
+        [basename(path)],
+        'observer runner binding',
+        true,
+      );
+      if (raw === null) throw new Error('observer binding missing');
+      const binding = discoverObserverSources(
+        validateObserverBinding(JSON.parse(raw)),
+      );
+      if (binding.workdir !== workdir || binding.run_id !== basename(runDir))
+        throw new Error('observer binding conflicts with runner');
+      const bundle = freezeObserverBundle(
+        binding,
+        join(runDir, 'brainstorming-evidence'),
+      );
+      const stage = `${path}.finalized`;
+      writeFileSync(stage, JSON.stringify(bundle.binding), {
+        flag: 'wx',
+        mode: 0o600,
+      });
+      renameSync(stage, path);
+    } catch (error) {
+      observerFailure = new RunnerError(
+        `observer finalization: ${error instanceof Error ? error.message : String(error)}`,
+        'capture',
+      );
+      throw observerFailure;
+    }
+  };
   try {
     // Freeze the parsed credentials before selecting the named credential. This
     // makes direct runs reproducible and ensures later runner code never
@@ -1171,6 +1219,7 @@ export async function runScenario(
       credentials,
       expectedChecksCache,
       runAgentCache,
+      finalizeObserver,
     );
   } catch (err: unknown) {
     if (err instanceof RunStoppedError) {
@@ -1201,6 +1250,19 @@ export async function runScenario(
         expected: expectedChecksCache.manifest,
       });
     }
+  }
+  try {
+    finalizeObserver();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    verdict = {
+      ...verdict,
+      final: 'indeterminate',
+      final_reason: `${verdict.final_reason}; ${message}`,
+      error: verdict.error
+        ? { ...verdict.error, message: `${verdict.error.message}; ${message}` }
+        : { stage: 'capture', message },
+    };
   }
   // Best-effort provenance stamp (PRI-2494). F13 micro corrective round 2:
   // compute the runnability decision FIRST, and NEVER reload the agent
@@ -1439,6 +1501,24 @@ export function prepareObserverAfterSetup(args: {
     sources: [],
   });
   installInputCapture(binding);
+  const annotations = readPinnedNoFollowFile(
+    join(repoRoot(), 'scenarios', args.scenario),
+    ['observer.md'],
+    'observer annotation guide',
+    true,
+  );
+  if (annotations === null)
+    throw new RunnerError('Observer annotation guide is missing.', 'setup');
+  writeFileSync(
+    join(
+      args.runDir,
+      'gauntlet-agent',
+      'context',
+      'BRAINSTORMING-ANNOTATIONS.md',
+    ),
+    annotations,
+    { flag: 'wx', mode: 0o600 },
+  );
   return binding.launch_cwd;
 }
 
@@ -1465,6 +1545,7 @@ async function runInner(
   credentials: Record<string, Credential>,
   expectedChecksCache: ExpectedChecksCache,
   runAgentCache: RunAgentConfigCache,
+  finalizeObserver: () => void,
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
@@ -1477,6 +1558,7 @@ async function runInner(
       credentials,
       expectedChecksCache,
       runAgentCache,
+      finalizeObserver,
     );
   } finally {
     cleanupAgentRuntime(cleanupDirs);
@@ -1505,6 +1587,7 @@ async function runInnerBody(
   credentials: Record<string, Credential>,
   expectedChecksCache: ExpectedChecksCache,
   runAgentCache: RunAgentConfigCache,
+  finalizeObserver: () => void,
 ): Promise<FinalVerdict> {
   writePhase(runDir, 'setup', identity);
   const os = a.os ?? 'linux';
@@ -2360,6 +2443,7 @@ async function runInnerBody(
   // Graceful stop, post-checks boundary: the spend completed, but a stop
   // recorded during capture stops the run before checks compose.
   if (await stopRequested(a)) throw new RunStoppedError();
+  finalizeObserver();
   writePhase(runDir, 'checks', identity);
   const post = await runPhase({
     checksSh,

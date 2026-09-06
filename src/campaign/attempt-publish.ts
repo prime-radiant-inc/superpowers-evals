@@ -428,6 +428,14 @@ export function publishExecution(args: {
     );
     if (body === null) throw refusal('observer runner binding missing');
     const binding = validateObserverBinding(JSON.parse(body));
+    const slot = args.experiment.planned_slots.find(
+      (slot) => slot.sample_id === intent.identity.sample_id,
+    );
+    const arm = args.experiment.execution_surface.find(
+      (arm) => arm.name === slot?.arm,
+    );
+    if (arm?.agent !== binding.runtime)
+      throw refusal('observer runtime differs from frozen arm selection');
     const workdir = join(staging, runId, 'coding-agent-workdir');
     const transcriptPath = join(
       spec.public_env.HOME,

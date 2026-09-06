@@ -40,6 +40,7 @@ import {
   evidenceRef,
   observation,
   transition,
+  twoArmExperiment,
 } from './fixtures/core-comparison/factory.ts';
 import { lifecycleFixture } from './fixtures/core-comparison/lifecycle.ts';
 
@@ -830,3 +831,68 @@ for (const claimed of [false, true]) {
     });
   });
 }
+
+test('cancellation cannot publish a required observer attempt with no candidate despite a valid manifest', async () => {
+  const experiment = twoArmExperiment();
+  const scenario = 'brainstorming-todo-shared-intent';
+  experiment.suite.comparisons[0]!.scenarios = [scenario];
+  experiment.cells[0]!.scenario = scenario;
+  experiment.suite.reserve = 0;
+  experiment.reserve_slots = [];
+  experiment.suite.attempt_bounds.max_attempts = 1;
+  for (const slot of experiment.planned_slots) slot.scenario = scenario;
+  const f = lifecycleFixture(experiment);
+  cleanup.push(f.root);
+  started(f, true);
+  const w = f.elect();
+  const activation = blockActivation(f.experiment);
+  mkdirSync(f.loaded.config.container.results_root, { recursive: true });
+  for (const a of activation.attempts) {
+    const before = a.output_root;
+    const root = join(f.root, a.identity.sample_id);
+    Object.assign(a, JSON.parse(JSON.stringify(a).replaceAll(before, root)));
+    a.identity.execution_attempt_id = `${a.identity.sample_id}:a1`;
+    a.runtime_spec.labels['quorum.attempt_id'] =
+      a.identity.execution_attempt_id;
+    a.runtime_spec_digest = sha256Hex(jcsCanonicalize(a.runtime_spec));
+    const dir = join(root, 'staging', 'run');
+    mkdirSync(dir, { recursive: true });
+    const body = '{}';
+    writeFileSync(join(dir, 'usage.json'), body);
+    writeFileSync(
+      join(dir, 'manifest.json'),
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'run',
+        campaign: a.identity,
+        files: [{ path: 'usage.json', size: 2, sha256: sha256Hex(body) }],
+      }),
+    );
+  }
+  w.commitTransition(transition('block_activated', activation, 3));
+  w.release();
+  const result = await cancelCampaign(f, {
+    processes: dead,
+    runtime: () => ({
+      ...noRuntime(),
+      inspectOwned: async ({ intent }) => ({
+        kind: 'matching-stopped',
+        container_id: sha256Hex(intent.identity.sample_id),
+        runtime_spec_digest: intent.runtime_spec_digest,
+      }),
+      stop: async (bound) => ({
+        kind: 'dead',
+        stopped: {
+          execution_attempt_id: bound.intent.identity.execution_attempt_id,
+          container_id: bound.container_id,
+          proof: 'inspected_stopped',
+          observed_at: new Date().toISOString(),
+        },
+      }),
+    }),
+  });
+  expect(result.kind).toBe('terminated');
+  expect(readdirSync(f.loaded.config.container.results_root)).toEqual([]);
+  for (const attempt of readProjection(f.campaignDir).attempts.values())
+    expect(attempt.accounting?.artifacts).toEqual([]);
+});

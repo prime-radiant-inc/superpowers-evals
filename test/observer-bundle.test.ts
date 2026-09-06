@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
@@ -28,6 +28,7 @@ import {
 import { captureFinalState } from '../src/experiments/observer/final-state.ts';
 import { createRawPrefix } from '../src/experiments/observer/raw.ts';
 import { validateArtifactReceipt } from '../src/experiments/observer/review.ts';
+import * as scoring from '../src/experiments/observer/score.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -313,7 +314,7 @@ function producerFixture() {
   const source = f.binding.sources[0]!.source;
   source.expected_cli_version = '0.144.3';
   const raw = Buffer.from(
-    [
+    `${[
       {
         type: 'session_meta',
         payload: {
@@ -335,7 +336,7 @@ function producerFixture() {
       },
     ]
       .map((row) => JSON.stringify(row))
-      .join('\n') + '\n',
+      .join('\n')}\n`,
   );
   writeFileSync(join(f.binding.roots[0]!.path, 'parent.jsonl'), raw);
   f.receipt.source_prefix = createRawPrefix(source, raw);
@@ -475,4 +476,34 @@ test('saved score reads authenticate frozen bytes without reading changed origin
   expect(readObserverScore(f.candidate).status).toBe('fail');
   writeFileSync(join(f.candidate, 'score.json'), '{"status":"pass"}');
   expect(() => readObserverScore(f.candidate)).toThrow();
+});
+
+test.each([
+  'receipt-added',
+  'review-changed',
+  'raw-appended',
+])('freeze refuses concurrent %s without exposing a candidate', (change) => {
+  const f = producerFixture();
+  const original = scoring.scoreObserverEvidence;
+  const hooked = spyOn(scoring, 'scoreObserverEvidence').mockImplementation(
+    (args) => {
+      const score = original(args);
+      if (change === 'receipt-added')
+        writeFileSync(
+          join(f.evidenceDir, 'capture-late.json'),
+          JSON.stringify({ ...f.receipt, observation_id: 'late' }),
+        );
+      if (change === 'review-changed')
+        writeFileSync(join(f.evidenceDir, 'review.json'), '{}');
+      if (change === 'raw-appended')
+        appendFileSync(join(f.binding.roots[0]!.path, 'parent.jsonl'), '{}\n');
+      return score;
+    },
+  );
+  try {
+    expect(() => freezeObserverBundle(f.binding, f.evidenceDir)).toThrow();
+    expect(existsSync(f.candidate)).toBe(false);
+  } finally {
+    hooked.mockRestore();
+  }
 });

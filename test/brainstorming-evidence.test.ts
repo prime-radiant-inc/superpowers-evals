@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -20,10 +21,11 @@ import {
 } from '../src/experiments/brainstorming-evidence.ts';
 import { repoRoot } from '../src/paths.ts';
 import { populateContextDir } from '../src/runner/context.ts';
+import { prepareObserverAfterSetup } from '../src/runner/index.ts';
 import { runSetup } from '../src/setup-step.ts';
 
 const dirs: string[] = [];
-test('real scenario setup and post checks preserve pass, fail, and missing-evidence outcomes', async () => {
+test('active scenario setup preserves its fixture and refuses historical V1 evidence', async () => {
   const f = fixture();
   const scenarioDir = join(
     repoRoot(),
@@ -43,6 +45,18 @@ test('real scenario setup and post checks preserve pass, fail, and missing-evide
       encoding: 'utf8',
     }).stdout,
   ).toBe('');
+  const binary = join(f.dir, 'subject');
+  writeFileSync(binary, '#!/usr/bin/env bash\nprintf "codex-cli 0.144.3\\n"\n');
+  chmodSync(binary, 0o755);
+  prepareObserverAfterSetup({
+    scenario: 'brainstorming-todo-shared-intent',
+    runDir: f.dir,
+    workdir,
+    home: codingAgentHome,
+    runtime: 'codex',
+    binary,
+    campaign: null,
+  });
   populateContextDir({
     codingAgentsDir: join(repoRoot(), 'coding-agents'),
     codingAgent: 'codex',
@@ -82,30 +96,9 @@ test('real scenario setup and post checks preserve pass, fail, and missing-evide
       JSON.stringify({ raw_log: rawLog, review: f.review }),
     );
   saveReview();
-  const passed = await runPhase({ ...phaseArgs, phase: 'post' });
-  expect(passed.exitCode).toBe(0);
-  expect(passed.records).toEqual([
-    expect.objectContaining({ check: 'brainstorming-review', passed: true }),
-  ]);
-  expect(
-    JSON.parse(readFileSync(join(evidence, 'score.json'), 'utf8')).status,
-  ).toBe('pass');
-  f.review.events = f.review.events.filter(
-    (event) => event.kind !== 'execution_choice',
-  );
-  saveReview();
-  const failed = await runPhase({ ...phaseArgs, phase: 'post' });
-  // Ordinary assertion failures are records; the phase itself exits cleanly.
-  expect(failed.exitCode).toBe(0);
-  expect(failed.records[0]?.passed).toBe(false);
-  expect(failed.records[0]?.negated).toBe(false);
-  f.review.actions.pop();
-  saveReview();
-  const incomplete = await runPhase({ ...phaseArgs, phase: 'post' });
-  expect(incomplete.exitCode).toBe(127);
-  expect(
-    JSON.parse(readFileSync(join(evidence, 'score.json'), 'utf8')).status,
-  ).toBe('indeterminate');
+  const historical = await runPhase({ ...phaseArgs, phase: 'post' });
+  expect(historical.exitCode).toBe(127);
+  expect(readdirSync(evidence)).not.toContain('score.json');
 }, 60_000);
 
 afterEach(() => {

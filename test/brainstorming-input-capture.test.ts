@@ -278,7 +278,21 @@ test('private observer commands read/index and write review bytes without home a
   expect(() =>
     runObserverCommand('observer-write-review', wd, encode('{')),
   ).toThrow();
-  const review = '{"schema_version":2}';
+  expect(() =>
+    runObserverCommand(
+      'observer-write-review',
+      wd,
+      encode('{"schema_version":2}'),
+    ),
+  ).toThrow();
+  const review = JSON.stringify({
+    schema_version: 2,
+    reviewer: 'fixture',
+    stop_reason: 'endpoint',
+    source_prefixes: [],
+    events: [],
+    actions: [],
+  });
   runObserverCommand('observer-write-review', wd, encode(review));
   expect(readFileSync(join(f.evidence, 'review.json'), 'utf8')).toBe(review);
   expect(() =>

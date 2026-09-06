@@ -536,6 +536,7 @@ test('V2 publication refuses a foreign campaign with a matching attempt id', () 
 
 function observerPublication(empty = false) {
   const experiment = twoArmExperiment();
+  for (const arm of experiment.execution_surface) arm.agent = 'codex';
   const scenario = 'brainstorming-todo-shared-intent';
   experiment.suite.comparisons[0]!.scenarios = [scenario];
   experiment.cells[0]!.scenario = scenario;
@@ -569,7 +570,7 @@ function observerPublication(empty = false) {
   const sourcePath = join(transcripts, 'parent.jsonl');
   writeFileSync(
     sourcePath,
-    JSON.stringify({
+    `${JSON.stringify({
       type: 'session_meta',
       payload: {
         id: 'session',
@@ -579,7 +580,7 @@ function observerPublication(empty = false) {
         originator: 'codex-tui',
         thread_source: 'user',
       },
-    }) + '\n',
+    })}\n`,
   );
   const stats = statSync(sourcePath, { bigint: true });
   const binding: ObserverBinding = {
@@ -747,5 +748,16 @@ test('direct directory inventory cannot authorize paths outside artifact workdir
     } finally {
       clean(f);
     }
+  }
+});
+
+test('observer runtime must match the frozen arm selection', () => {
+  const f = observerPublication();
+  try {
+    f.args.experiment.execution_surface[0]!.agent = 'claude';
+    expect(() => publishExecution(f.args)).toThrow();
+    expect(existsSync(f.runDir)).toBe(true);
+  } finally {
+    clean(f);
   }
 });

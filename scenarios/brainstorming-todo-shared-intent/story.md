@@ -115,7 +115,8 @@ and understandable implementation design.
 Use stop_reason timeout when the subject cutoff ends an incomplete interaction.
 After stopping and letting the rollout flush, use the reserved observer window to write
 the run's review.json. Classify EVERY tool call and annotate observed stages
-using raw line numbers. Include notes citing the purpose, actual artifact
+using physical V2 source/line/block anchors and complete source prefixes. Reference
+receipt observation IDs and classify each canonical result through result_anchors. Include notes citing the purpose, actual artifact
 contents, user responses, and successful or failed tool results. A timeout is
 retained as incomplete behavior; an observer or capture failure is indeterminate.
 Use unknown for ambiguous calls. Do not invent a classification to pass validation.

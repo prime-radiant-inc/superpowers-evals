@@ -29,6 +29,7 @@ import {
 import { verifyRawPrefix } from './observer/raw.ts';
 import {
   type ArtifactReceipt,
+  validateActorReview,
   validateArtifactReceipt,
 } from './observer/review.ts';
 
@@ -131,7 +132,7 @@ The shared shell accepts only these exact observer commands. Substitute canonica
 - Save the complete V2 actor review once to private evidence/review.json: ${observerCommand(workdir, 'observer-write-review', 'CONTENT_BASE64')}
 
 Receipts live in ${join(dirname(workdir), 'brainstorming-evidence')}. Each V2 receipt records observation_id, artifact_path, content_base64, bytes, sha256 and source_prefix. Select observations after presentation and before your reply. Equal document bytes at different observations have distinct IDs. A deleted file has no invented receipt.
-A capture failure blocks input. Wait for a complete stable write, retry, or stop using Escape/Ctrl+C. Never bypass the guard or edit subject artifacts through another process. Classify every canonical call and retain explicit uncertainty; a spawn acknowledgment does not prove a child has finished. Child user messages cannot approve parent work. Do not invent parent authority or native qualification.
+A capture failure blocks input. Wait for a complete stable write, retry, or stop using Escape/Ctrl+C. Never bypass the guard or edit subject artifacts through another process. Read BRAINSTORMING-ANNOTATIONS.md for the complete V2 actor-review schema. Copy source_prefixes from the final complete indexes; use physical {source_id,line,block} anchors, observation_id receipts, and result_anchors for every canonical call result. Classify every canonical call and retain explicit uncertainty; a spawn acknowledgment does not prove a child has finished. Child user messages cannot approve parent work. Do not invent parent authority or native qualification.
 `,
     { flag: 'wx', mode: 0o600 },
   );
@@ -468,8 +469,9 @@ export function runObserverCommand(
     throw new Error('Observer argument must be canonical base64.');
   const bytes = Buffer.from(argument, 'base64');
   if (operation === 'observer-write-review') {
-    // Publication validates review semantics; this operation records actor bytes.
-    JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    validateActorReview(
+      JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)),
+    );
     writeFileSync(join(evidence, 'review.json'), bytes, {
       flag: 'wx',
       mode: 0o600,

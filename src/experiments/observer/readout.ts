@@ -14,7 +14,11 @@ import type { PlannedSlot } from '../../contracts/campaign/experiment.ts';
 import type { Report } from '../../contracts/campaign/report.ts';
 import type { GauntletStatus } from '../../contracts/verdict.ts';
 import { parseAttemptManifest } from '../../runner/manifest.ts';
-import { OBSERVER_BUNDLE_FILENAME, readObserverBundle } from './bundle.ts';
+import {
+  OBSERVER_BUNDLE_FILENAME,
+  OBSERVER_BUNDLE_RELATIVE_DIR,
+  readObserverBundle,
+} from './bundle.ts';
 import {
   assessIndependentReviews,
   type IndependentReviewAssessment,
@@ -24,7 +28,6 @@ import {
 import { validateActorReview, validateArtifactReceipt } from './review.ts';
 import { type StrictScore, scoreObserverEvidence } from './score.ts';
 
-const OBSERVER_BUNDLE_RELATIVE_DIR = 'brainstorming-evidence/bundle';
 const same = (a: unknown, b: unknown) =>
   jcsCanonicalize(a) === jcsCanonicalize(b);
 const parseJson = (bytes: Buffer): unknown =>

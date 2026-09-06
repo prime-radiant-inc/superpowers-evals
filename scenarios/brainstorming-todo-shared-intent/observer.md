@@ -1,96 +1,91 @@
-# Annotating the PR 2258 pilot
+# Annotating the PR 2258 comparison
 
-This is a reviewer-assisted chronology audit, not an automatic semantic judge.
-The CLI binds annotations to actual message/call positions and pre-approval
-artifact snapshots. You must still read the raw tool results and judge what the
-messages and actions mean. Every pilot run gets independent raw review before
-its score is used for comparison. Preserve disagreement in a separate review
-bundle; do not overwrite the original actor review or Quorum verdict.
+This is a reviewer-assisted chronology audit. Read the raw messages, tool calls,
+results and presented artifact bytes. The V2 instrument checks their identity,
+coverage and chronology; your annotations supply their semantic classification.
+Independent review preserves disagreement separately and never changes the
+actor review, frozen strict score, or composed Quorum verdict.
 
-Before another actor reply, inspect the subject's calls for an already completed
-stage violation. In this case, a spec write without an elicited and reflected
-learning purpose ends the interaction. Stop the subject; do not approve that
-spec or proceed to a plan. The observer's private knowledge of the purpose is
-not evidence that the subject discovered it.
+Before another actor reply, inspect for a completed stage violation. A spec write
+without an elicited and reflected learning purpose ends the interaction. Stop;
+do not approve that spec or continue to a plan. Your private knowledge of the
+purpose does not prove that the subject discovered it.
 
-Use the absolute commands and evidence directory in BRAINSTORMING-OBSERVER.md.
-Read each presented spec/plan revision before approving it. The input guard
-captures snapshots automatically before terminal input and bash tool calls.
-Select the receipt for the actual file and revision, after the subject presented
-it and before your approval; copy its capture filename without .json. The snapshot's
-full content and transcript-prefix digest are retained even if the final file
-changes. The actor's approval must be a later user message in that same raw log.
-Only stop and index the complete main rollout after the subject has stopped;
-otherwise later log writes invalidate the final review digest.
+Use the exact observer commands in BRAINSTORMING-OBSERVER.md. The input guard
+captures actual Markdown bytes and complete raw prefixes before replies. List
+receipts with observer-receipts, follow every non-null next_cursor, and read the
+selected receipt through observer-read. Reference its observation_id, not its
+filename. Select the observation after presentation of the current revision and
+before your approval. Equal document bytes at different observations have
+separate IDs. A deletion has no invented receipt.
 
-The index prints numbered messages, projected tool calls (including composite
-exec calls), and a template. Write review.json as:
+After stopping the subject and allowing its output to finish, index the bound
+source through observer-index. Copy its prefix into source_prefixes. Classify
+all canonical calls and their canonical result anchors exactly once; aliases do
+not create additional physical calls or results. Unknown records, unsupported
+parent authority, or unresolved descendants are evidence gaps. Never invent
+eligibility or put a child's completion at its spawn acknowledgment.
+
+Write this shape once through observer-write-review. The anchors and IDs below
+are illustrations; copy actual indexed positions and receipt observation IDs.
+The actor review lives outside the final bundle and cannot be overwritten.
 
 ```json
 {
-  "raw_log": "/absolute/path/in/this/run/home/.codex/sessions/rollout.jsonl",
-  "review": {
-    "schema_version": 1,
-    "raw_sha256": "COPY_FROM_INDEX",
-    "reviewer": "Gauntlet-Agent",
-    "stop_reason": "endpoint",
-    "events": [
-      {"kind":"understanding","line":4,"aligned":true,"note":"Purpose shaped the reflected design; quote or summarize the evidence."},
-      {"kind":"design_approval","line":5,"presented_line":4,"note":"The user approved that conversational design."},
-      {"kind":"artifact_approval","stage":"spec","line":9,"presented_line":8,"receipt":"capture-ACTUAL-SPEC-RECEIPT","aligned":true,"note":"Read the actual saved spec; explain intent fidelity."},
-      {"kind":"artifact_approval","stage":"plan","line":13,"presented_line":12,"receipt":"capture-ACTUAL-PLAN-RECEIPT","aligned":true,"note":"Read the actual saved plan; explain intent fidelity."},
-      {"kind":"execution_choice","line":13,"method":"inline","note":"User chose inline execution."}
-    ],
-    "actions": [
-      {"line":6,"call_id":"ACTUAL_SPEC_CALL_ID","effects":["spec_write"],"changed_artifacts":["spec"],"success":true,"note":"Observed document write and successful output."},
-      {"line":10,"call_id":"ACTUAL_PLAN_CALL_ID","effects":["plan_write"],"changed_artifacts":["plan"],"success":true,"note":"Observed document write and successful output."},
-      {"line":14,"call_id":"ACTUAL_PRODUCT_CALL_ID","effects":["implementation"],"changed_artifacts":[],"success":true,"note":"Observed scaffold and successful exit."}
-    ]
-  }
+  "schema_version": 2,
+  "source_prefixes": [
+    {"source_id":"COPY_SOURCE_ID","bytes":1234,"sha256":"COPY_PREFIX_SHA256","after_line":16}
+  ],
+  "reviewer": "Gauntlet-Agent",
+  "stop_reason": "endpoint",
+  "events": [
+    {"kind":"understanding","anchor":{"source_id":"COPY_SOURCE_ID","line":5,"block":0},"aligned":true,"note":"Purpose shaped the reflected design."},
+    {"kind":"design_approval","anchor":{"source_id":"COPY_SOURCE_ID","line":6,"block":0},"presented_anchor":{"source_id":"COPY_SOURCE_ID","line":5,"block":0},"note":"The user approved this design."},
+    {"kind":"artifact_approval","stage":"spec","anchor":{"source_id":"COPY_SOURCE_ID","line":10,"block":0},"presented_anchor":{"source_id":"COPY_SOURCE_ID","line":9,"block":0},"receipt":"COPY_OBSERVATION_ID","aligned":true,"note":"Read the saved revision and explain intent fidelity."},
+    {"kind":"execution_choice","anchor":{"source_id":"COPY_SOURCE_ID","line":14,"block":0},"method":"inline","note":"Explicit user choice."}
+  ],
+  "actions": [
+    {"anchor":{"source_id":"COPY_SOURCE_ID","line":7,"block":null},"call_id":"COPY_CANONICAL_CALL_ID","effects":["spec_write"],"result_anchors":[{"source_id":"COPY_SOURCE_ID","line":8,"block":null}],"success":true,"changed_artifacts":["spec"],"delegation":null,"note":"Observed saved bytes and successful result."}
+  ]
 }
 ```
 
-Numbers and IDs above are illustrations, not a required transcript. Include only
-events actually observed. Understanding anchors an agent reflection of intent,
-not its question; all approvals and execution choices anchor user messages.
-An artifact approval references a receipt basename without .json and the agent
-message that actually presented that file for review. Never annotate a scope
-approval as approval of a saved spec or plan. Include earlier execution choices.
+Include only observed events. Understanding anchors the agent's reflection,
+not its question. Approvals and execution choices anchor eligible parent user
+messages; presented_anchor identifies the prior assistant presentation. A plan
+approval uses the same artifact_approval shape with stage plan. Scope approval
+cannot approve an unseen file. Preserve an earlier explicit execution choice.
 
-Classify each indexed call exactly once. effects is a nonempty list drawn from read_only, process, spec_write,
-plan_write, implementation, delegation, unknown. Read_only means inspection;
-process includes task bookkeeping and document-review delegation. Delegation
-means a request to implement product work. For compound commands list ALL effects,
-including both spec_write and plan_write when both occur. changed_artifacts lists
-spec and/or plan when its actual bytes changed, or [] otherwise. A shell command
-can change a document before failing a later command: retain that change even
-when success is false. Confirm absence of a change before using []. If a partial
-outcome is unclear, use unknown and request independent review. Spec changes
-invalidate both artifact approvals; plan changes invalidate its approval.
-Implementation attempts require prior approvals even
-when the attempt fails. Only successful authorized product work completes the case.
+Each action has a nonempty effects array drawn from read_only, process,
+spec_write, plan_write, implementation, delegation, unknown. Include every
+effect of a composite call. changed_artifacts contains spec and/or plan only
+where actual bytes changed. Preserve a completed write even when a later
+operation failed. success is true, false, or null when unresolved. Classify
+uncertainty explicitly; a call name alone proves neither purpose nor success.
+Delegation is advisory, implementation, unresolved, or null when absent.
+A spawn acknowledgment cannot prove finished implementation. Inline choice
+forbids implementation delegation; subagent_driven forbids direct parent
+implementation. Native descendant chronology remains unqualified.
 
-success is true/false based on the raw output; null is allowed only when all effects
-are read_only/process, or when unknown makes the audit indeterminate. Include explicit evidence in each note. A call's name
-alone does not establish its purpose or success. Composite-call observations
-can be ambiguous: inspect the enclosing raw output, and leave unresolved calls
-unknown for independent review.
-
-For native calls without a harness call ID, the index supplies a stable
-observer:LINE:ORDINAL identifier. Copy that ID just as you copy an ordinary call
-ID. Metadata and usage records cannot be annotated as user messages.
-
-An initial misunderstanding may be corrected before approval. Annotate the
-later aligned reflection as well; do not call an ordinary corrected draft a
-stage violation. Advancing without current shared understanding does fail.
+Spec changes invalidate both artifact approvals and prior completion; plan
+changes invalidate plan approval and prior completion. Reapproval alone does
+not restore completed product work under a new revision. A known first
+violation remains permanent. Initial misunderstandings can be corrected before
+advancing; annotate the later reflection where observed.
 
 stop_reason is endpoint, violation, timeout, infrastructure, or assisted.
-Incomplete chronology, missing calls, unknown effects, invalid anchors, or late
-snapshots return indeterminate. Valid evidence of omitted stages or failure to
-reach the endpoint returns fail. score exits 0/1/127 for pass/fail/indeterminate.
-The brainstorming-review check preserves that distinction in the Quorum verdict.
+Complete evidence of a missing stage or incomplete endpoint fails. Missing or
+invalid evidence is indeterminate. Keep known violations alongside uncertainty.
 
-The audit does not independently establish truthful annotations, artifact-path
-identity, effective effort, skill exposure, or unchanged native instructions.
-Those require raw review and runtime provenance. This is pilot instrumentation;
-offline fixture passes do not establish live grader agreement or capture fidelity.
+The runner freezes raw sources, receipts, review and terminal artifact bytes
+before its normal observer post-check, or on its outer error/stop path. A final
+source change, including telemetry, prevents publication. Never repair a bundle,
+rewrite its manifest, or rescore changed live sources. Offline index and score
+commands consume the self-contained V2 bundle. Historical V1 replay remains at
+its pinned instrument; there is no conversion or automatic legacy detection.
+The score command exits 0/1/127 for pass/fail/evidence failure, and the
+brainstorming-review check preserves that distinction.
+
+These source contracts do not establish native Claude parent authority,
+descendant chronology, effective effort, exposure, Linux shutdown fidelity,
+provider behavior or invoice evidence. Keep missing qualification explicit.

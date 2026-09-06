@@ -74,6 +74,7 @@ async function settle(f: ReturnType<typeof fixture>, run: Promise<unknown>) {
 }
 function fixture(
   options: {
+    observerRequired?: boolean;
     reserve?: number;
     maxAttempts?: number;
     price?: number | null;
@@ -277,6 +278,12 @@ function fixture(
     registry['subject']!.max_concurrency = 6;
     registry['grader']!.max_concurrency = 6;
   }
+  if (options.observerRequired) {
+    const scenario = 'brainstorming-todo-shared-intent';
+    experiment.suite.comparisons[0]!.scenarios = [scenario];
+    experiment.cells[0]!.scenario = scenario;
+    for (const slot of experiment.planned_slots) slot.scenario = scenario;
+  }
   const activeNames = [
     ...experiment.execution_surface.map((a) => a.credential),
     'grader',
@@ -320,11 +327,16 @@ function fixture(
         experiment,
         args.attemptNumber > 1,
       ).attempts.find((a) => a.identity.sample_id === args.slot.sample_id)!;
+      if (options.observerRequired)
+        template.identity.execution_attempt_id = `${args.slot.sample_id}:a1`;
       template.identity.block_id = args.blockId;
       template.attempt_number = args.attemptNumber;
       template.output_root = join(root, template.identity.execution_attempt_id);
       template.runtime_spec.public_env.QUORUM_ATTEMPT_DIR =
         template.output_root;
+      if (options.observerRequired)
+        template.runtime_spec.labels['quorum.attempt_id'] =
+          template.identity.execution_attempt_id;
       template.runtime_spec_digest = sha256Hex(
         jcsCanonicalize(template.runtime_spec),
       );
@@ -1683,4 +1695,26 @@ test('stale producer after asynchronous create refuses start and still stops own
     [...f.writer.readProjection().attempts.values()].every((a) => a.stopped),
   ).toBe(true);
   expect(f.finished).toBe(true);
+});
+
+test('controller completion refuses required observer missingness without publishing or replacement', async () => {
+  const f = fixture({ observerRequired: true, reserve: 0, maxAttempts: 1 });
+  publishRunnerLayer(f, {
+    status: 'pass',
+    summary: 'fixture',
+    reasoning: 'fixture',
+    run_id: 'g',
+    process_exit: { code: 0, signal: null },
+  });
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.complete(0);
+  f.complete(1);
+  await settle(f, run);
+  const attempts = [...f.writer.readProjection().attempts.values()];
+  expect(attempts).toHaveLength(2);
+  for (const attempt of attempts) {
+    expect(attempt.observation?.artifacts).toEqual([]);
+    expect(attempt.observation?.outcome).toBe('indeterminate');
+  }
 });

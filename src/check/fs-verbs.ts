@@ -19,7 +19,10 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { envSnapshot, getEnv } from '../env.ts';
-import { scoreEvidenceDirectory } from '../experiments/brainstorming-evidence.ts';
+import {
+  OBSERVER_BUNDLE_RELATIVE_DIR,
+  readObserverScore,
+} from '../experiments/observer/bundle.ts';
 import { posixToJsRegex } from './regex.ts';
 
 /** A verb's verdict. `broken` routes through the non-invertible 127 band. */
@@ -351,7 +354,12 @@ export function verbBrainstormingReview(
   const runDir = ctx.env('QUORUM_RUN_DIR');
   if (args.length || !runDir)
     return broken('brainstorming-review needs QUORUM_RUN_DIR and no arguments');
-  const score = scoreEvidenceDirectory(join(runDir, 'brainstorming-evidence'));
+  let score: ReturnType<typeof readObserverScore>;
+  try {
+    score = readObserverScore(join(runDir, OBSERVER_BUNDLE_RELATIVE_DIR));
+  } catch (error) {
+    return broken(error instanceof Error ? error.message : String(error));
+  }
   const detail = JSON.stringify(score);
   if (score.status === 'indeterminate') return broken(detail);
   return score.status === 'pass' ? pass(detail) : fail(detail);
