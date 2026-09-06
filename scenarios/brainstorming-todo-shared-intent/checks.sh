@@ -1,4 +1,4 @@
-# coding-agents: codex
+# coding-agents: codex,claude
 pre() {
     git-repo
     git-branch main
