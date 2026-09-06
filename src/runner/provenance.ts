@@ -120,7 +120,7 @@ function gitDirty(cwd: string): boolean | null {
 
 // First line of `<binary> --version`; null when the binary is missing,
 // exits nonzero, or prints nothing.
-function versionLine(binary: string, runHomeDir: string): string | null {
+export function versionLine(binary: string, runHomeDir: string): string | null {
   const out = run(binary, ['--version'], versionProbeEnv(runHomeDir));
   if (out === null) return null;
   const line = out.split('\n')[0]?.trim() ?? '';

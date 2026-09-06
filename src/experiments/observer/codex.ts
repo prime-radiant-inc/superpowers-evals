@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import {
   type JsonValue,
   ObserverEvidenceError,
@@ -607,6 +608,96 @@ function indexResponseItem(
   fail('unknown_record', 'Response item type is not recognized.', anchor);
 }
 
+// Closed metadata shapes inspected in codex-56-exec.slice.jsonl (0.144.3).
+// Unknown fields are evidence gaps, never an implicit non-action escape hatch.
+const TurnContextSchema = z
+  .object({
+    turn_id: z.string().min(1),
+    cwd: z.string().min(1),
+    workspace_roots: z.array(z.string()),
+    current_date: z.string(),
+    timezone: z.string(),
+    approval_policy: z.literal('never'),
+    approvals_reviewer: z.literal('user'),
+    sandbox_policy: z
+      .object({ type: z.literal('danger-full-access') })
+      .strict(),
+    permission_profile: z.object({ type: z.literal('disabled') }).strict(),
+    model: z.string(),
+    comp_hash: z.string(),
+    personality: z.string(),
+    collaboration_mode: z
+      .object({
+        mode: z.literal('default'),
+        settings: z
+          .object({
+            model: z.string(),
+            reasoning_effort: z.string().nullable(),
+            developer_instructions: z.string(),
+          })
+          .strict(),
+      })
+      .strict(),
+    multi_agent_version: z.literal('v2'),
+    multi_agent_mode: z.literal('explicitRequestOnly'),
+    realtime_active: z.boolean(),
+    summary: z.string(),
+  })
+  .strict();
+const UsageSchema = z
+  .object({
+    input_tokens: z.number().int().nonnegative(),
+    cached_input_tokens: z.number().int().nonnegative(),
+    output_tokens: z.number().int().nonnegative(),
+    reasoning_output_tokens: z.number().int().nonnegative(),
+    total_tokens: z.number().int().nonnegative(),
+  })
+  .strict();
+const TokenCountSchema = z
+  .object({
+    type: z.literal('token_count'),
+    info: z
+      .object({
+        total_token_usage: UsageSchema,
+        last_token_usage: UsageSchema,
+        model_context_window: z.number().int().positive(),
+      })
+      .strict(),
+    rate_limits: z
+      .object({
+        limit_id: z.string(),
+        limit_name: z.null(),
+        primary: z.null(),
+        secondary: z.null(),
+        credits: z.null(),
+        individual_limit: z.null(),
+        plan_type: z.null(),
+        rate_limit_reached_type: z.null(),
+      })
+      .strict(),
+  })
+  .strict();
+function indexContext(
+  value: JsonValue | undefined,
+  source: RawSource,
+  anchor: RawAnchor,
+): RawEntry {
+  const parsed = TurnContextSchema.safeParse(value);
+  if (!parsed.success)
+    fail(
+      'unknown_record',
+      'Turn context shape is outside the inspected dialect.',
+      anchor,
+    );
+  if (parsed.data.cwd !== source.expected_cwd)
+    fail(
+      'identity_conflict',
+      'Turn context cwd conflicts with the bound launch cwd.',
+      anchor,
+    );
+  return { kind: 'non_action', anchor, record_type: 'turn_context' };
+}
+
 export function indexCodexTranscript(
   source: RawSource,
   raw: Uint8Array,
@@ -639,6 +730,24 @@ export function indexCodexTranscript(
       entries.push(
         indexMetadata(row.value['payload'], identity, source, row.anchor),
       );
+      continue;
+    }
+    if (type === 'turn_context') {
+      entries.push(indexContext(row.value['payload'], source, row.anchor));
+      continue;
+    }
+    if (type === 'event_msg') {
+      if (!TokenCountSchema.safeParse(row.value['payload']).success)
+        fail(
+          'unknown_record',
+          'Event shape is outside the inspected dialect.',
+          row.anchor,
+        );
+      entries.push({
+        kind: 'non_action',
+        anchor: row.anchor,
+        record_type: 'event_msg.token_count',
+      });
       continue;
     }
     if (type === 'response_item') {

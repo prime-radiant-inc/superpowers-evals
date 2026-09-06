@@ -334,6 +334,23 @@ export function indexBoundObserverSource(
       'invalid_source',
       'Source lacks inspected parent or descendant-link provenance.',
     );
+  for (const row of parseCompleteJsonl(source, raw).slice(1)) {
+    if (row.value['type'] !== 'session_meta') continue;
+    const metadata = row.value['payload'];
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata))
+      continue;
+    if (
+      (metadata['originator'] !== undefined &&
+        metadata['originator'] !== 'codex-tui') ||
+      (metadata['thread_source'] !== undefined &&
+        metadata['thread_source'] !== 'user')
+    )
+      throw new ObserverEvidenceError(
+        'identity_conflict',
+        'Session metadata changes inspected parent authority.',
+        row.anchor,
+      );
+  }
   return index;
 }
 

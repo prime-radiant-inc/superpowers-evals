@@ -258,18 +258,17 @@ function acquisitionFixture() {
     parent_source_id: null,
     sources: [],
   };
-  const raw =
-    JSON.stringify({
-      type: 'session_meta',
-      payload: {
-        id: 'main',
-        cwd: launch,
-        cli_version: '0.144.3',
-        originator: 'codex-tui',
-        source: 'cli',
-        thread_source: 'user',
-      },
-    }) + '\n';
+  const raw = `${JSON.stringify({
+    type: 'session_meta',
+    payload: {
+      id: 'main',
+      cwd: launch,
+      cli_version: '0.144.3',
+      originator: 'codex-tui',
+      source: 'cli',
+      thread_source: 'user',
+    },
+  })}\n`;
   const path = join(transcripts, 'main.jsonl');
   return { candidate, path, raw, transcripts };
 }
@@ -303,7 +302,7 @@ test('refuses unresolved parent authority, partial JSONL and source symlinks', (
   const f = acquisitionFixture();
   writeFileSync(f.path, f.raw.replace('"source":"cli"', '"source":"exec"'));
   expect(() => acquisition.discoverObserverSources(f.candidate)).toThrow();
-  writeFileSync(f.path, f.raw + '{');
+  writeFileSync(f.path, `${f.raw}{`);
   expect(() => acquisition.discoverObserverSources(f.candidate)).toThrow();
   rmSync(f.path);
   symlinkSync(join(f.candidate.workdir, 'missing'), f.path);
@@ -325,6 +324,22 @@ test('bound reindexing independently requires inspected parent header authority'
       source,
       Buffer.from(
         f.raw.replace('"thread_source":"user"', '"thread_source":"internal"'),
+      ),
+    ),
+  ).toThrow();
+});
+
+test('bound replay rejects later metadata that changes parent authority', () => {
+  const f = acquisitionFixture();
+  writeFileSync(f.path, f.raw);
+  const bound = acquisition.discoverObserverSources(f.candidate);
+  expect(() =>
+    acquisition.indexBoundObserverSource(
+      bound,
+      bound.sources[0]!.source,
+      Buffer.from(
+        f.raw +
+          f.raw.replace('"thread_source":"user"', '"thread_source":"internal"'),
       ),
     ),
   ).toThrow();

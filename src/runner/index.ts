@@ -3,8 +3,10 @@ import { spawn } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -103,6 +105,12 @@ import {
 import { isSerfOpenRouterCampaignCredentialV1 } from '../credentials/serf-openrouter-profile.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import { installInputCapture } from '../experiments/brainstorming-input-capture.ts';
+import {
+  OBSERVER_DIALECTS,
+  observerRequiredForScenario,
+  validateObserverBinding,
+} from '../experiments/observer/binding.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
 import {
   captureOpenRouterGenerations,
@@ -118,7 +126,7 @@ import { RunnerError, RunStoppedError } from './errors.ts';
 import { gauntletEnvBase } from './gauntlet-env.ts';
 import { writeAttemptManifest } from './manifest.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
-import { collectProvenance } from './provenance.ts';
+import { collectProvenance, versionLine } from './provenance.ts';
 import { buildStoppedVerdict } from './stopped.ts';
 
 // RunnerError lives in ./errors.ts so context.ts can throw it without a
@@ -1371,6 +1379,69 @@ function resolveLaunchCwd(workdir: string): string {
   return resolved;
 }
 
+/** Setup owns the sentinel; the runner binds and installs before any interaction. */
+export function prepareObserverAfterSetup(args: {
+  scenario: string;
+  runDir: string;
+  workdir: string;
+  home: string;
+  runtime: string;
+  binary: string;
+  cliPin?: string | undefined;
+  campaign: CampaignIdentity | null;
+}): string {
+  const launchCwd = resolveLaunchCwd(args.workdir);
+  if (!observerRequiredForScenario(args.scenario)) return launchCwd;
+  const runtime = args.runtime;
+  if (runtime !== 'codex' && runtime !== 'claude')
+    throw new RunnerError('Required observer runtime is unsupported.', 'setup');
+  const supported = OBSERVER_DIALECTS[runtime];
+  const probeHome = mkdtempSync(join(args.runDir, '.observer-version-home-'));
+  let version: string | null;
+  try {
+    version = versionLine(args.binary, probeHome);
+  } finally {
+    rmSync(probeHome, { recursive: true, force: true });
+  }
+  if (
+    !supported ||
+    version !== `codex-cli ${supported.cli_version}` ||
+    (args.cliPin !== undefined && args.cliPin !== supported.cli_version)
+  )
+    throw new RunnerError(
+      'Required observer dialect/build lacks exact inspected provenance.',
+      'setup',
+    );
+  mkdirSync(args.home, { recursive: true, mode: 0o700 });
+  const home = realpathSync(args.home);
+  const workdir = realpathSync(args.workdir);
+  const transcripts = join(
+    home,
+    runtime === 'codex' ? '.codex/sessions' : '.claude/projects',
+  );
+  mkdirSync(transcripts, { recursive: true, mode: 0o700 });
+  const binding = validateObserverBinding({
+    schema_version: 2,
+    run_id: basename(args.runDir),
+    campaign: args.campaign,
+    runtime,
+    dialect: supported.dialect,
+    cli_version: supported.cli_version,
+    home,
+    workdir,
+    launch_cwd: realpathSync(launchCwd),
+    roots: [
+      { id: 'transcripts', kind: 'transcripts', path: transcripts },
+      { id: 'artifacts', kind: 'artifacts', path: workdir },
+    ],
+    phase: 'unbound',
+    parent_source_id: null,
+    sources: [],
+  });
+  installInputCapture(binding);
+  return binding.launch_cwd;
+}
+
 // Thin wrapper guaranteeing agent-runtime teardown on EVERY exit path of the
 // run body — normal return, early indeterminate return, or throw. cleanupDirs
 // starts empty and is populated by the body right after provisioning, so a crash
@@ -1694,7 +1765,16 @@ async function runInnerBody(
   // setup.sh, else the workdir. A sentinel naming a path that does not exist is a
   // runner error, not a silent launch from a nonexistent cwd. Resolved before the
   // opencode snapshot, which is keyed on the launch cwd.
-  let launchCwd = resolveLaunchCwd(workdir);
+  let launchCwd = prepareObserverAfterSetup({
+    scenario: basename(a.scenarioDir),
+    runDir,
+    workdir,
+    home: runHomeDir,
+    runtime: cfg.runtime_family ?? cfg.name,
+    binary: cfg.binary,
+    cliPin: cfg.pin_cli_version,
+    campaign: a.campaign ?? null,
+  });
 
   // antigravity launch-cwd preparation: (1) git-exclude the per-run project
   // marker so it never dirties the launch repo; (2) when the launch cwd has a

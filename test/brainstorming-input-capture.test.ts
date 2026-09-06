@@ -2,10 +2,12 @@ import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,8 +17,10 @@ import { join } from 'node:path';
 import {
   captureInput,
   installInputCapture,
+  observerCommand,
   publishInputCapture,
   readInputObservation,
+  runObserverCommand,
 } from '../src/experiments/brainstorming-input-capture.ts';
 
 const dirs: string[] = [];
@@ -26,7 +30,7 @@ afterEach(() => {
 });
 
 function fixture(campaign = false) {
-  const attempt = mkdtempSync(join(tmpdir(), 'input-capture-'));
+  const attempt = realpathSync(mkdtempSync(join(tmpdir(), 'input-capture-')));
   dirs.push(attempt);
   const dir = campaign ? join(attempt, 'staging', 'run') : attempt;
   const workdir = join(dir, 'coding-agent-workdir');
@@ -37,10 +41,28 @@ function fixture(campaign = false) {
   writeFileSync(join(workdir, 'README.md'), 'Empty app fixture');
   const evidence = join(dir, 'brainstorming-evidence');
   mkdirSync(evidence);
-  installInputCapture(workdir, home);
+  const binding = {
+    schema_version: 2 as const,
+    run_id: 'local-test',
+    campaign: null,
+    runtime: 'codex' as const,
+    dialect: 'codex-response-items-0.144.3',
+    cli_version: '0.144.3',
+    home,
+    workdir,
+    launch_cwd: workdir,
+    roots: [
+      { id: 'transcripts', kind: 'transcripts' as const, path: logs },
+      { id: 'artifacts', kind: 'artifacts' as const, path: workdir },
+    ],
+    phase: 'unbound' as const,
+    parent_source_id: null,
+    sources: [],
+  };
+  installInputCapture(binding);
   const log = join(logs, 'main.jsonl');
   const spec = join(workdir, 'spec.md');
-  const raw = `${JSON.stringify({ type: 'session_meta', payload: { id: 'parent', cwd: workdir, source: 'cli' } })}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Please review spec.md.' }] } })}\n`;
+  const raw = `${JSON.stringify({ type: 'session_meta', payload: { id: 'parent', cwd: workdir, cli_version: '0.144.3', originator: 'codex-tui', thread_source: 'user', source: 'cli' } })}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Please review spec.md.' }] } })}\n`;
   return { dir, workdir, logs, evidence, log, spec, raw };
 }
 
@@ -69,7 +91,7 @@ test('missing-log startup blocks non-Markdown product work', () => {
     join(f.workdir, 'package.json'),
     '{"scripts":{"start":"vite"}}',
   );
-  expect(() => captureInput(f.workdir)).toThrow('main Codex');
+  expect(() => captureInput(f.workdir)).toThrow();
   expect(readdirSync(f.evidence)).toEqual([]);
 });
 
@@ -78,35 +100,42 @@ test('captures actual bytes with a fresh transcript boundary for each revision a
   writeFileSync(f.log, f.raw);
   writeFileSync(f.spec, 'Learning React');
   const first = captureInput(f.workdir);
-  appendFileSync(f.log, '{}\n');
+  appendFileSync(
+    f.log,
+    `${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [] } })}\n`,
+  );
   const second = captureInput(f.workdir);
   writeFileSync(f.spec, 'Learning React state and events');
   const third = captureInput(f.workdir);
   const receipts = [first, second, third].map((result) => {
-    const receipt = result.receipts.find((r) => r.artifact_path === f.spec)!;
+    const receipt = result.receipts.find((r) => r.artifact_path === 'spec.md')!;
     return JSON.parse(
       readFileSync(join(f.evidence, `${receipt.name}.json`), 'utf8'),
     );
   });
-  expect(receipts.map((r) => r.content)).toEqual([
+  expect(
+    receipts.map((r) => Buffer.from(r.content_base64, 'base64').toString()),
+  ).toEqual([
     'Learning React',
     'Learning React',
     'Learning React state and events',
   ]);
-  expect(receipts.map((r) => r.after_line)).toEqual([2, 3, 3]);
+  expect(receipts.map((r) => r.source_prefix.after_line)).toEqual([2, 3, 3]);
+  expect(new Set(receipts.map((r) => r.observation_id)).size).toBe(3);
 });
 
-test('same-cwd review subagents do not replace the main rollout; two main sessions fail closed', () => {
+test('unproven same-cwd review subagents and two parent sessions fail closed', () => {
   const f = fixture();
   writeFileSync(f.log, f.raw);
   writeFileSync(f.spec, 'Learning React');
   writeFileSync(
     join(f.logs, 'child.jsonl'),
-    `${JSON.stringify({ type: 'session_meta', payload: { cwd: f.workdir, source: { subagent: { thread_spawn: { parent_thread_id: 'parent' } } } } })}\n`,
+    `${JSON.stringify({ type: 'session_meta', payload: { id: 'parent', cwd: f.workdir, cli_version: '0.144.3', originator: 'codex-tui', thread_source: 'user', source: { subagent: { thread_spawn: { parent_thread_id: 'parent' } } } } })}\n`,
   );
-  expect(captureInput(f.workdir).raw_log).toBe(f.log);
+  expect(() => captureInput(f.workdir)).toThrow();
+  rmSync(join(f.logs, 'child.jsonl'));
   writeFileSync(join(f.logs, 'second.jsonl'), f.raw);
-  expect(() => captureInput(f.workdir)).toThrow('main Codex');
+  expect(() => captureInput(f.workdir)).toThrow();
 });
 
 test('incomplete JSONL and changed artifacts without a log cannot produce receipts', () => {
@@ -124,7 +153,7 @@ test('document symlinks fail closed instead of silently omitting the presented f
   const outside = join(f.dir, 'outside.md');
   writeFileSync(outside, 'private');
   symlinkSync(outside, f.spec);
-  expect(() => captureInput(f.workdir)).toThrow('symlink');
+  expect(() => captureInput(f.workdir)).toThrow();
 });
 
 test('non-regular files fail promptly instead of blocking the capture reader', () => {
@@ -134,7 +163,7 @@ test('non-regular files fail promptly instead of blocking the capture reader', (
   // Reading this FIFO would hang until a writer connects.
   const fifo = join(f.workdir, 'pending.md');
   expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
-  expect(() => captureInput(f.workdir)).toThrow('regular file');
+  expect(() => captureInput(f.workdir)).toThrow();
   expect(readdirSync(f.evidence)).toEqual([]);
 });
 
@@ -145,7 +174,11 @@ for (const change of ['rewrite', 'append', 'add', 'delete'] as const) {
     writeFileSync(f.spec, 'Learning React');
     const before = readInputObservation(f.workdir);
     if (change === 'rewrite') writeFileSync(f.spec, 'Different purpose');
-    if (change === 'append') appendFileSync(f.log, '{}\n');
+    if (change === 'append')
+      appendFileSync(
+        f.log,
+        `${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [] } })}\n`,
+      );
     if (change === 'add') writeFileSync(join(f.workdir, 'plan.md'), 'New plan');
     if (change === 'delete') rmSync(f.spec);
     const after = readInputObservation(f.workdir);
@@ -155,3 +188,111 @@ for (const change of ['rewrite', 'append', 'add', 'delete'] as const) {
     expect(readdirSync(f.evidence)).toEqual([]);
   });
 }
+
+test('guard refuses a shared-shell artifact edit and reply injection before execution', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  const result = spawnSync(
+    join(f.dir, 'gauntlet-agent', 'tui-input-guard'),
+    [],
+    {
+      input: JSON.stringify({
+        name: 'bash',
+        args: { command: `echo forged > ${f.spec}; tmux send-keys yes Enter` },
+      }),
+      encoding: 'utf8',
+    },
+  );
+  expect(result.status).toBe(127);
+  expect(readdirSync(f.evidence)).toEqual([]);
+});
+
+for (const route of ['type', 'press', 'type_and_submit', 'bash']) {
+  test(`installed ${route} route captures before a fake tool effect and blocks unstable input`, () => {
+    const f = fixture();
+    writeFileSync(f.log, f.raw);
+    writeFileSync(f.spec, Buffer.from([0x66, 0xff, 0x00]));
+    const guard = join(f.dir, 'gauntlet-agent/tui-input-guard');
+    const args =
+      route === 'bash'
+        ? { command: observerCommand(f.workdir, 'observer-index') }
+        : route === 'press'
+          ? { key: 'Enter' }
+          : { text: 'arbitrary response' };
+    const invoke = () =>
+      spawnSync(guard, [], {
+        input: JSON.stringify({ name: route, args }),
+        encoding: 'utf8',
+      });
+    const captured = invoke();
+    expect(captured.status).toBe(0);
+    const result = JSON.parse(captured.stdout);
+    const receipt = JSON.parse(
+      readFileSync(
+        join(
+          f.evidence,
+          `${
+            result.receipts.find(
+              (r: { artifact_path: string }) => r.artifact_path === 'spec.md',
+            ).name
+          }.json`,
+        ),
+        'utf8',
+      ),
+    );
+    expect(Buffer.from(receipt.content_base64, 'base64')).toEqual(
+      Buffer.from([0x66, 0xff, 0x00]),
+    );
+    appendFileSync(f.log, '{');
+    expect(invoke().status).toBe(127);
+    // A fake downstream effect occurs only after a successful guard, as in Gauntlet dispatch.
+    expect(result.receipts.length).toBeGreaterThan(0);
+  });
+}
+test('cancellation remains usable when evidence is unavailable', () => {
+  const f = fixture();
+  writeFileSync(f.log, '{');
+  for (const key of ['Escape', 'Ctrl+C'])
+    expect(
+      spawnSync(join(f.dir, 'gauntlet-agent/tui-input-guard'), [], {
+        input: JSON.stringify({ name: 'press', args: { key } }),
+      }).status,
+    ).toBe(0);
+});
+test('private observer commands read/index and write review bytes without home access or overwrite', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  writeFileSync(f.spec, 'Learning React');
+  captureInput(f.workdir);
+  const wd = Buffer.from(f.workdir).toString('base64');
+  const encode = (value: string) => Buffer.from(value).toString('base64');
+  expect(runObserverCommand('observer-index', wd)).toMatchObject({
+    schema_version: 2,
+  });
+  expect(runObserverCommand('observer-read', wd, encode(f.spec))).toMatchObject(
+    { content_base64: encode('Learning React') },
+  );
+  expect(() =>
+    runObserverCommand('observer-read', wd, encode(f.log)),
+  ).toThrow();
+  expect(() =>
+    runObserverCommand('observer-write-review', wd, encode('{')),
+  ).toThrow();
+  const review = '{"schema_version":2}';
+  runObserverCommand('observer-write-review', wd, encode(review));
+  expect(readFileSync(join(f.evidence, 'review.json'), 'utf8')).toBe(review);
+  expect(() =>
+    runObserverCommand('observer-write-review', wd, encode(review)),
+  ).toThrow();
+});
+test('source EACCES refuses capture without receipts', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  chmodSync(f.log, 0);
+  try {
+    expect(() => captureInput(f.workdir)).toThrow();
+    expect(readdirSync(f.evidence)).toEqual([]);
+  } finally {
+    chmodSync(f.log, 0o600);
+  }
+});

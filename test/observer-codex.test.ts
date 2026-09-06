@@ -969,7 +969,7 @@ test('selected Codex slice rows retain original shape and script, not qualificat
   );
 });
 
-test('full existing Codex slice rejects its first unsupported physical row', () => {
+test('full inspected Codex slice indexes context and token telemetry without inventing actions', () => {
   const fixture = readFileSync(
     new URL('./fixtures/codex-56-exec.slice.jsonl', import.meta.url),
   );
@@ -986,9 +986,52 @@ test('full existing Codex slice rejects its first unsupported physical row', () 
     expected_cli_version: metadata.payload.cli_version,
   };
 
-  const error = evidenceError(() =>
-    indexCodexTranscript(selectedSource, fixture),
-  );
-  expect(error.code).toBe('unknown_record');
-  expect(error.anchor).toEqual(anchor(2));
+  const index = indexCodexTranscript(selectedSource, fixture);
+  expect(
+    index.entries
+      .filter((entry) => entry.kind === 'call')
+      .map((entry) => entry.anchor.line),
+  ).toEqual([3, 5]);
+  expect(index.entries[1]).toMatchObject({
+    kind: 'non_action',
+    record_type: 'turn_context',
+  });
+  expect(index.entries[5]).toMatchObject({
+    kind: 'non_action',
+    record_type: 'event_msg.token_count',
+  });
+  const rows = fixture
+    .toString()
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  rows[1].payload.cwd = '/foreign';
+  expect(
+    evidenceError(() =>
+      indexCodexTranscript(
+        selectedSource,
+        encode(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`),
+      ),
+    ).code,
+  ).toBe('identity_conflict');
+  rows[1].payload.cwd = selectedSource.expected_cwd;
+  rows[1].payload.tool_call = { name: 'exec', command: 'write' };
+  expect(
+    evidenceError(() =>
+      indexCodexTranscript(
+        selectedSource,
+        encode(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`),
+      ),
+    ).code,
+  ).toBe('unknown_record');
+  delete rows[1].payload.tool_call;
+  rows[5].payload.type = 'unknown_action';
+  expect(
+    evidenceError(() =>
+      indexCodexTranscript(
+        selectedSource,
+        encode(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`),
+      ),
+    ).code,
+  ).toBe('unknown_record');
 });

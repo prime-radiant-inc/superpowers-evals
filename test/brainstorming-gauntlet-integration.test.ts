@@ -2,17 +2,21 @@
 // pointing at the candidate Gauntlet checkout; no providers or keys are used.
 import { expect, test } from 'bun:test';
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getEnv } from '../src/env.ts';
+import { deleteProcessEnv, getEnv, setProcessEnv } from '../src/env.ts';
+import { observerCommand } from '../src/experiments/brainstorming-input-capture.ts';
 import { repoRoot } from '../src/paths.ts';
+import * as runner from '../src/runner/index.ts';
 import { buildGauntletArgv } from '../src/runner/index.ts';
 import { runSetup } from '../src/setup-step.ts';
 
@@ -20,7 +24,9 @@ const gauntletRoot = getEnv('GAUNTLET_ROOT');
 test.skipIf(!gauntletRoot)(
   'Quorum setup and argv activate capture through Gauntlet run and real TUI dispatch',
   async () => {
-    const runDir = mkdtempSync(join(tmpdir(), 'brainstorming-gauntlet-'));
+    const runDir = realpathSync(
+      mkdtempSync(join(tmpdir(), 'brainstorming-gauntlet-')),
+    );
     try {
       const workdir = join(runDir, 'coding-agent-workdir');
       mkdirSync(workdir);
@@ -35,12 +41,21 @@ test.skipIf(!gauntletRoot)(
       });
       const logDir = join(codingAgentHome, '.codex', 'sessions');
       mkdirSync(logDir, { recursive: true });
+      runner.prepareObserverAfterSetup({
+        scenario: 'brainstorming-todo-shared-intent',
+        runDir,
+        workdir,
+        home: codingAgentHome,
+        runtime: 'codex',
+        binary: fakeBinary(runDir),
+        campaign: null,
+      });
       const rawLog = join(logDir, 'main.jsonl');
       const spec = join(workdir, 'spec.md');
       writeFileSync(spec, 'Learn React state and event handling');
       writeFileSync(
         rawLog,
-        `${JSON.stringify({ type: 'session_meta', payload: { id: 'main', cwd: workdir, source: 'cli' } })}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Please review spec.md.' }] } })}\n`,
+        `${JSON.stringify({ type: 'session_meta', payload: { id: 'main', cwd: workdir, cli_version: '0.144.3', originator: 'codex-tui', thread_source: 'user', source: 'cli' } })}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Please review spec.md.' }] } })}\n`,
       );
       const story = join(runDir, 'story.md');
       writeFileSync(
@@ -72,7 +87,7 @@ test.skipIf(!gauntletRoot)(
         `import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 const dir = ${JSON.stringify(join(runDir, 'brainstorming-evidence'))};
 const receipts = readdirSync(dir).filter(n => n.endsWith('.json')).map(n => JSON.parse(readFileSync(dir + '/' + n, 'utf8')));
-const receipt = receipts.find(r => r.artifact_path === ${JSON.stringify(spec)} && r.content === 'Learn React state and event handling' && r.after_line === 2);
+const receipt = receipts.find(r => r.artifact_path === 'spec.md' && Buffer.from(r.content_base64,'base64').toString() === 'Learn React state and event handling' && r.source_prefix.after_line === 2);
 if (!receipt) process.exit(8);
 writeFileSync(${JSON.stringify(delivered)}, JSON.stringify({ reply: Bun.argv[2], receipt }));
 `,
@@ -86,6 +101,16 @@ writeFileSync(${JSON.stringify(delivered)}, JSON.stringify({ reply: Bun.argv[2],
         clientFactory: () =>
           makeScriptedClient(
             [
+              step('inspect', 'bash', {
+                command: observerCommand(
+                  workdir,
+                  'observer-read',
+                  Buffer.from(spec).toString('base64'),
+                ),
+              }),
+              step('index', 'bash', {
+                command: observerCommand(workdir, 'observer-index'),
+              }),
               step('reply', 'type_and_submit', {
                 text: `bun ${quote(subject)} ${quote(reply)}`,
               }),
@@ -108,3 +133,89 @@ writeFileSync(${JSON.stringify(delivered)}, JSON.stringify({ reply: Bun.argv[2],
   },
   30_000,
 );
+
+test('runner installs observer after setup selects a nested launch cwd', () => {
+  const runDir = realpathSync(
+    mkdtempSync(join(tmpdir(), 'observer-sentinel-')),
+  );
+  try {
+    const workdir = join(runDir, 'coding-agent-workdir');
+    const home = join(runDir, 'home');
+    const nested = join(workdir, 'nested');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(workdir, '.quorum-launch-cwd'), nested);
+    const launch = runner.prepareObserverAfterSetup({
+      scenario: 'brainstorming-todo-shared-intent',
+      runDir,
+      workdir,
+      home,
+      runtime: 'codex',
+      binary: fakeBinary(runDir),
+      campaign: null,
+    });
+    expect(launch).toBe(nested);
+    const binding = JSON.parse(
+      readFileSync(
+        join(runDir, 'gauntlet-agent/observer-binding.json'),
+        'utf8',
+      ),
+    );
+    expect(binding.launch_cwd).toBe(nested);
+    expect(binding.workdir).toBe(workdir);
+    expect(binding.home).toBe(home);
+    expect(
+      readFileSync(
+        join(runDir, 'gauntlet-agent/context/BRAINSTORMING-OBSERVER.md'),
+        'utf8',
+      ).length,
+    ).toBeGreaterThan(0);
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+function fakeBinary(runDir: string, line = 'codex-cli 0.144.3') {
+  const binary = join(runDir, 'version-probe');
+  writeFileSync(
+    binary,
+    `#!/usr/bin/env bun\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(join(runDir, 'probe-env.json'))},JSON.stringify({home:process.env.HOME,key:process.env['ANTHROPIC_API_KEY']??null}));\nconsole.log(${JSON.stringify(line)});\n`,
+  );
+  chmodSync(binary, 0o700);
+  return binary;
+}
+test('observer version probe rejects wrong builds and substring lookalikes under private HOME', () => {
+  const runDir = realpathSync(mkdtempSync(join(tmpdir(), 'observer-version-')));
+  const saved = getEnv('ANTHROPIC_API_KEY');
+  try {
+    const workdir = join(runDir, 'coding-agent-workdir');
+    const home = join(runDir, 'home');
+    mkdirSync(workdir, { recursive: true });
+    setProcessEnv('ANTHROPIC_API_KEY', 'sentinel-secret');
+    for (const version of [
+      'codex-cli 0.144.4',
+      'codex-cli 0.144.3-malicious',
+    ]) {
+      expect(() =>
+        runner.prepareObserverAfterSetup({
+          scenario: 'brainstorming-todo-shared-intent',
+          runDir,
+          workdir,
+          home,
+          runtime: 'codex',
+          binary: fakeBinary(runDir, version),
+          campaign: null,
+        }),
+      ).toThrow();
+      const probe = JSON.parse(
+        readFileSync(join(runDir, 'probe-env.json'), 'utf8'),
+      );
+      expect(probe.home.startsWith(runDir)).toBe(true);
+      expect(probe.home).not.toBe(home);
+      expect(probe.key).toBeNull();
+    }
+  } finally {
+    if (saved === undefined) deleteProcessEnv('ANTHROPIC_API_KEY');
+    else setProcessEnv('ANTHROPIC_API_KEY', saved);
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});

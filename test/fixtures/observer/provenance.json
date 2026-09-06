@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "purpose": "Inspected source grammar coverage, never native qualification authority",
+  "sources": [
+    {
+      "path": "../codex-56-exec.slice.jsonl",
+      "sha256": "6915dc015b4e6ae3357d98bf7ed9f2f8b194fa2edb23387976ff8523dbbf7a4b",
+      "provenance": "existing committed project fixture; upstream capture identity not independently qualified"
+    },
+    {
+      "path": "../claude-2.1.177-real.jsonl",
+      "sha256": "e70e32e7886d0f40641b7c159478341a8276be87d1f34819a294df2829983722",
+      "provenance": "existing committed project fixture; upstream capture identity not independently qualified"
+    },
+    {
+      "path": "../claude-2.1.177-with-tooluse.jsonl",
+      "sha256": "a1c2afd028a28df95d9e5bdc427fdd5d3c6b1eab58f74dcec869704eec769acb",
+      "provenance": "existing committed project fixture; upstream capture identity not independently qualified"
+    }
+  ],
+  "extractions": [
+    {
+      "path": "codex-0.144.3-context-token-count.jsonl",
+      "sha256": "74a8a04764ea124e1d935332535fcb0d8334ef7ea3c1dd9cb89f49b9179f26b1",
+      "source": "../codex-56-exec.slice.jsonl",
+      "physical_lines": [2, 6],
+      "transformation": "none; exact bytes copied",
+      "privacy_review": "Only existing committed generic eval cwd, instructions, model metadata and token aggregates; no credentials or personal-session scan"
+    }
+  ],
+  "coverage": {
+    "codex_0.144.3": {
+      "parent": "canonical session_meta id/cwd/cli_version + originator codex-tui + source cli + thread_source user",
+      "grammar": "existing complete six-row slice parses; closed turn_context and event_msg.token_count shapes; physical response calls/results preserved",
+      "tests": "test/observer-codex.test.ts covers native calls, multiple message blocks, identical/conflicting replay, orphan results and unknown variants",
+      "gaps": [
+        "exact deployed binary hash and capture provenance",
+        "task_started/task_complete and other event families",
+        "other turn_context modes and non-null rate-limit shapes",
+        "native descendant spawn, parent linkage and completion join",
+        "full unmodified start-to-stop native trace with external approval"
+      ]
+    },
+    "claude_2.1.177": {
+      "grammar": "SDK/project fixture queue-operation, external claim, attachments, UUID replay and tool blocks inspected",
+      "parent": "unresolved; no observed native-layout authority grants parent eligibility",
+      "tests": "test/observer-claude.test.ts covers queue prefixes, UUID replay, compact summary, split message IDs, multiple blocks, result-only rows and duplicate/conflicting calls",
+      "gaps": [
+        "exact native build/capture provenance",
+        "parent/external-message eligibility",
+        "native descendant async spawn and join"
+      ]
+    },
+    "codex_0.144.4_claude_2.1.209": "Project seats are shape references only until exact build/capture provenance and native lifecycle qualification are established."
+  },
+  "qualification": "pending authorized Linux no-provider capture, then installed/provider gates separately"
+}
