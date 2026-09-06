@@ -1,9 +1,21 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
+  digestPr2258InstrumentFiles,
+  loadPr2258ReceiptSet,
+  PR2258_INSTRUMENT_FILES,
+  type Pr2258DiagnosticGo,
   type Pr2258QualificationReceipts,
   validatePr2258Preflight,
 } from '../scripts/pr2258-preflight.ts';
@@ -25,6 +37,7 @@ const ROOT = repoRoot();
 const BASE = 'fd02874aa5c55ba3c2bca431253b48e0e4c8be5a';
 const HEAD = '069edf3ffc2ffdce80a84d3344a4064acec7e10c';
 const SCENARIO = 'brainstorming-todo-shared-intent';
+const INSTRUMENT_SHA = '7'.repeat(64);
 const EXPECTED_PAIRS = [
   ['codex_astra_pr2258_base', 'codex_astra_pr2258_head'],
   ['codex_sol_pr2258_base', 'codex_sol_pr2258_head'],
@@ -33,6 +46,46 @@ const EXPECTED_PAIRS = [
 
 function parsedYaml(path: string): unknown {
   return parseYaml(readFileSync(join(ROOT, path), 'utf8'));
+}
+
+function completeDiagnosticGo(
+  suite: Suite,
+  receipts: Pr2258QualificationReceipts,
+): Pr2258DiagnosticGo {
+  return {
+    review_receipt_authenticated: true,
+    campaign_id: 'pr2258-parallel-diagnostic-qualified',
+    input_digest: '8'.repeat(64),
+    evals_sha: receipts.frozen_pins.evals_sha!,
+    gauntlet_sha: receipts.frozen_pins.gauntlet_sha!,
+    image_digest: receipts.frozen_pins.image_digest!,
+    pricing_sha256: suite.pricing_snapshot!.sha256,
+    instrument_sha256: INSTRUMENT_SHA,
+    valid_pairs: 3,
+    subject_exposures: 6,
+    served_model_ids: {
+      astra_subject: 'gpt-6-astra',
+      sol_subject: 'gpt-5.6-sol',
+      opus_subject: 'anthropic.claude-opus-5',
+      sonnet_grader: 'anthropic.claude-sonnet-5',
+    },
+    delegate_model_ids: [],
+    delegate_capture_complete: true,
+    priced_models: [
+      'gpt-6-astra',
+      'gpt-5.6-sol',
+      'anthropic.claude-opus-5',
+      'anthropic.claude-sonnet-5',
+    ],
+    unpriced_models: [],
+    service_tiers_verified: true,
+    cache_buckets_verified: true,
+    separately_billed_tools: 'none-observed',
+    six_way_overlap_verified: true,
+    maximum_start_skew_s: 60,
+    grader_429_observed: false,
+    independent_review: 'GO',
+  };
 }
 
 function loadSuite(name: 'diagnostic' | 'measured'): {
@@ -124,27 +177,17 @@ function completeReceipts(
     },
     pricing: {
       installed_sha256: suite.pricing_snapshot?.sha256 ?? null,
-      complete: true,
-      observed_models: [
+      offline_accounting_probe_complete: true,
+      primary_models_priced: [
         'gpt-6-astra',
         'gpt-5.6-sol',
         'anthropic.claude-opus-5',
         'anthropic.claude-sonnet-5',
       ],
-      priced_models: [
-        'gpt-6-astra',
-        'gpt-5.6-sol',
-        'anthropic.claude-opus-5',
-        'anthropic.claude-sonnet-5',
-      ],
-      unpriced_models: [],
-      service_tiers_verified: true,
-      cache_buckets_verified: true,
-      separately_billed_tools: 'none-observed',
       receipt_sha256: '4'.repeat(64),
     },
     capacity: {
-      simultaneous_mix_verified: true,
+      fake_provider_six_way_verified: true,
       accounts: [
         {
           account: 'openai-subject-account',
@@ -182,7 +225,7 @@ function completeReceipts(
       receipt_sha256: '5'.repeat(64),
     },
     exposure: {
-      six_way_overlap_verified: true,
+      fake_provider_six_way_overlap_verified: true,
       maximum_start_skew_s: 60,
       receipt_sha256: '6'.repeat(64),
     },
@@ -197,12 +240,18 @@ function preflight(
     credentials: Record<string, Credential>;
     receipts: Pr2258QualificationReceipts;
   }) => void,
+  includeDiagnosticGo = suiteName === 'measured',
+  mutateDiagnosticGo?: (diagnosticGo: Pr2258DiagnosticGo) => void,
 ) {
   const { suite, grader } = loadSuite(suiteName);
   const arms = loadArms();
   const credentials = loadCredentials();
   const receipts = completeReceipts(suite, arms);
   mutate?.({ suite, arms, credentials, receipts });
+  const diagnosticGo = includeDiagnosticGo
+    ? completeDiagnosticGo(suite, receipts)
+    : undefined;
+  if (diagnosticGo) mutateDiagnosticGo?.(diagnosticGo);
   return validatePr2258Preflight({
     suite,
     grader,
@@ -210,7 +259,117 @@ function preflight(
     credentials,
     globalCap: 6,
     qualification: receipts,
+    instrumentSha256: INSTRUMENT_SHA,
+    ...(diagnosticGo ? { diagnosticGo } : {}),
   });
+}
+
+function sha256(value: string | Buffer): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function writeReceiptSet(root: string): {
+  manifestPath: string;
+  capabilityPath: string;
+  diagnosticPath: string;
+} {
+  mkdirSync(root, { recursive: true });
+  const { suite } = loadSuite('measured');
+  const arms = loadArms();
+  const qualification = completeReceipts(suite, arms);
+  const evidenceReceipts = [
+    'codex-chronology',
+    'claude-chronology',
+    'linux',
+    'installed',
+    'projection',
+    'grader-separation',
+    'pricing-probe',
+    'capacity',
+    'fake-exposure',
+  ].map((name) => {
+    const bytes = JSON.stringify({ schema_version: 1, kind: name });
+    const path = `evidence/${name}.json`;
+    mkdirSync(join(root, 'evidence'), { recursive: true });
+    writeFileSync(join(root, path), bytes);
+    return { path, sha256: sha256(bytes) };
+  });
+  const evidenceDigest = (name: string) =>
+    evidenceReceipts.find(
+      (receipt) => receipt.path === `evidence/${name}.json`,
+    )!.sha256;
+  qualification.chronology.codex.receipt_sha256 =
+    evidenceDigest('codex-chronology');
+  qualification.chronology.claude.receipt_sha256 =
+    evidenceDigest('claude-chronology');
+  qualification.linux.receipt_sha256 = evidenceDigest('linux');
+  qualification.installed.receipt_sha256 = evidenceDigest('installed');
+  qualification.projections.receipt_sha256 = evidenceDigest('projection');
+  qualification.grader_bearer.receipt_sha256 =
+    evidenceDigest('grader-separation');
+  qualification.pricing.receipt_sha256 = evidenceDigest('pricing-probe');
+  qualification.capacity.receipt_sha256 = evidenceDigest('capacity');
+  qualification.exposure.receipt_sha256 = evidenceDigest('fake-exposure');
+  const diagnosticGo = completeDiagnosticGo(suite, qualification);
+  const instrumentFiles = PR2258_INSTRUMENT_FILES.map((path) => ({
+    path,
+    sha256: sha256(readFileSync(join(ROOT, path))),
+  }));
+  const instrumentSha256 = digestPr2258InstrumentFiles(instrumentFiles);
+  diagnosticGo.instrument_sha256 = instrumentSha256;
+  const binding = {
+    evals_sha: qualification.frozen_pins.evals_sha,
+    gauntlet_sha: qualification.frozen_pins.gauntlet_sha,
+    image_digest: qualification.frozen_pins.image_digest,
+    pricing_sha256: suite.pricing_snapshot!.sha256,
+    instrument_sha256: instrumentSha256,
+  };
+  const capability = {
+    schema_version: 1,
+    kind: 'pr2258-capability-review',
+    reviewed_by: 'qualification-reviewer',
+    reviewed_at: '2026-09-05T12:00:00.000Z',
+    binding,
+    qualification,
+  };
+  const {
+    review_receipt_authenticated: _reviewReceiptAuthenticated,
+    ...diagnosticClaims
+  } = diagnosticGo;
+  const diagnostic = {
+    schema_version: 1,
+    kind: 'pr2258-diagnostic-go-review',
+    reviewed_by: 'independent-diagnostic-reviewer',
+    reviewed_at: '2026-09-05T13:00:00.000Z',
+    binding,
+    diagnostic_go: diagnosticClaims,
+  };
+  const capabilityBytes = JSON.stringify(capability);
+  const diagnosticBytes = JSON.stringify(diagnostic);
+  const capabilityPath = join(root, 'capability-review.json');
+  const diagnosticPath = join(root, 'diagnostic-go-review.json');
+  writeFileSync(capabilityPath, capabilityBytes);
+  writeFileSync(diagnosticPath, diagnosticBytes);
+  const manifest = {
+    schema_version: 1,
+    kind: 'pr2258-preflight-receipt-set',
+    binding: {
+      ...binding,
+      instrument_files: instrumentFiles,
+    },
+    evidence_receipts: evidenceReceipts,
+    capability_review: {
+      path: 'capability-review.json',
+      sha256: sha256(capabilityBytes),
+    },
+    diagnostic_go_review: {
+      path: 'diagnostic-go-review.json',
+      sha256: sha256(diagnosticBytes),
+    },
+  };
+  const manifestPath = join(root, 'receipt-set.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  return { manifestPath, capabilityPath, diagnosticPath };
 }
 
 test.each([
@@ -304,13 +463,15 @@ test('parsed public policy supports the exact six-subject and six-grader wave', 
   expect(byModel['anthropic.claude-sonnet-5']?.max_concurrency).toBe(6);
 });
 
-test('complete receipts make the exact finite experiment ready', () => {
-  const result = preflight('measured');
+test('capability receipts make the diagnostic experiment ready before provider observations', () => {
+  const result = preflight('diagnostic', ({ receipts }) => {
+    receipts.exposure.maximum_start_skew_s = null;
+  });
   expect(result).toEqual({
     ready: true,
     blockers: [],
     evidence: expect.objectContaining({
-      planned_slots: 12,
+      planned_slots: 6,
       global_cap: 6,
       concurrent_subjects: 6,
       concurrent_graders: 6,
@@ -324,17 +485,65 @@ test('complete receipts make the exact finite experiment ready', () => {
   });
 });
 
+test('measured experiment blocks without a diagnostic GO receipt', () => {
+  const result = preflight('measured', undefined, false);
+
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    'measured campaign requires an authenticated diagnostic GO receipt',
+  );
+});
+
+test('authenticated diagnostic GO makes the exact measured experiment ready', () => {
+  const result = preflight('measured');
+
+  expect(result.ready).toBe(true);
+  expect(result.blockers).toEqual([]);
+  expect(result.evidence.planned_slots).toBe(12);
+});
+
+test('measured experiment rejects a diagnostic NO-GO bound to wrong artifacts', () => {
+  const result = preflight('measured', undefined, true, (diagnostic) => {
+    diagnostic.evals_sha = '9'.repeat(40);
+    diagnostic.instrument_sha256 = '0'.repeat(64);
+    diagnostic.valid_pairs = 2;
+    diagnostic.subject_exposures = 5;
+    diagnostic.delegate_capture_complete = false;
+    diagnostic.unpriced_models = ['observed.delegate'];
+    diagnostic.six_way_overlap_verified = false;
+    diagnostic.maximum_start_skew_s = 61;
+    diagnostic.grader_429_observed = true;
+    diagnostic.independent_review = 'NO-GO';
+  });
+
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(/diagnostic GO Evals pin differs/i),
+      expect.stringMatching(/instrument bytes differ/i),
+      expect.stringMatching(/requires 3 valid pairs/i),
+      expect.stringMatching(/requires 6 subject exposures/i),
+      expect.stringMatching(/unpriced models.*observed.delegate/i),
+      expect.stringMatching(/delegate model capture is incomplete/i),
+      expect.stringMatching(/diagnostic six-way overlap/i),
+      expect.stringMatching(/diagnostic six-way start skew/i),
+      expect.stringMatching(/grader 429/i),
+      expect.stringMatching(/independent review is not GO/i),
+    ]),
+  );
+});
+
 test('missing qualification evidence stays an explicit no-go', () => {
   const result = preflight('diagnostic', ({ receipts }) => {
     receipts.grader_bearer.values_verified_distinct = false;
     receipts.runtime.claude.supported = false;
     receipts.chronology.claude.complete = false;
-    receipts.pricing.complete = false;
+    receipts.pricing.offline_accounting_probe_complete = false;
     receipts.linux.complete = false;
     receipts.installed.complete = false;
     receipts.projections.complete = false;
-    receipts.capacity.simultaneous_mix_verified = false;
-    receipts.exposure.six_way_overlap_verified = false;
+    receipts.capacity.fake_provider_six_way_verified = false;
+    receipts.exposure.fake_provider_six_way_overlap_verified = false;
   });
 
   expect(result.ready).toBe(false);
@@ -343,12 +552,12 @@ test('missing qualification evidence stays an explicit no-go', () => {
       expect.stringMatching(/grader bearer.*distinct/i),
       expect.stringMatching(/Claude runtime.*unsupported/i),
       expect.stringMatching(/Claude native chronology/i),
-      expect.stringMatching(/pricing coverage.*incomplete/i),
+      expect.stringMatching(/pricing accounting probe.*incomplete/i),
       expect.stringMatching(/Linux qualification/i),
       expect.stringMatching(/installed qualification/i),
       expect.stringMatching(/projection rehearsal/i),
       expect.stringMatching(/six-way capacity/i),
-      expect.stringMatching(/six-way overlap/i),
+      expect.stringMatching(/fake-provider six-way overlap/i),
     ]),
   );
 });
@@ -398,6 +607,21 @@ test('account and per-model capacity evidence are independent blockers', () => {
   );
 });
 
+test('duplicate model-capacity receipts are rejected instead of using the last row', () => {
+  const result = preflight('diagnostic', ({ receipts }) => {
+    receipts.capacity.models.unshift({
+      model: 'gpt-6-astra',
+      max_concurrency: 0,
+      verified: false,
+    });
+  });
+
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    'model gpt-6-astra has duplicate capacity receipts',
+  );
+});
+
 test('different pins, unclean projections and incompatible spacing block readiness', () => {
   const result = preflight('diagnostic', ({ credentials, receipts }) => {
     receipts.installed.evals_sha = '9'.repeat(40);
@@ -429,4 +653,155 @@ test('equal-priority suite blocks visit all comparisons before repetition two', 
     { block_id: `c2:${SCENARIO}:b1` },
     { block_id: `c3:${SCENARIO}:b1` },
   ]);
+});
+
+test('no-follow receipt-set loader accepts exact reviewed artifacts and source bytes', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    writeReceiptSet(root);
+    const input = loadPr2258ReceiptSet(ROOT, root, 'measured');
+
+    expect(validatePr2258Preflight(input).ready).toBe(true);
+    expect(input.diagnosticGo?.review_receipt_authenticated).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader rejects altered and missing reviewed artifacts', () => {
+  const alteredRoot = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  const missingRoot = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const altered = writeReceiptSet(alteredRoot);
+    writeFileSync(altered.capabilityPath, '{}');
+    expect(() => loadPr2258ReceiptSet(ROOT, alteredRoot, 'diagnostic')).toThrow(
+      /capability review digest/i,
+    );
+
+    const missing = writeReceiptSet(missingRoot);
+    unlinkSync(missing.diagnosticPath);
+    expect(() => loadPr2258ReceiptSet(ROOT, missingRoot, 'measured')).toThrow(
+      /diagnostic GO review/i,
+    );
+  } finally {
+    rmSync(alteredRoot, { recursive: true, force: true });
+    rmSync(missingRoot, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader rejects a missing referenced qualification receipt', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    const manifest = JSON.parse(
+      readFileSync(paths.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const receipts = manifest['evidence_receipts'] as Array<
+      Record<string, unknown>
+    >;
+    unlinkSync(join(root, receipts[0]!['path'] as string));
+
+    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
+      /qualification evidence receipt/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader refuses a symlinked reviewed artifact', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    const targetPath = join(root, 'capability-target.json');
+    writeFileSync(targetPath, readFileSync(paths.capabilityPath));
+    unlinkSync(paths.capabilityPath);
+    symlinkSync('capability-target.json', paths.capabilityPath);
+
+    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
+      /capability review/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader hashes each exact observer instrument source file', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    const manifest = JSON.parse(
+      readFileSync(paths.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const binding = manifest['binding'] as Record<string, unknown>;
+    const files = binding['instrument_files'] as Array<Record<string, unknown>>;
+    files[0]!['sha256'] = '0'.repeat(64);
+    writeFileSync(paths.manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
+      /observer instrument.*digest/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader rejects a reviewed receipt bound to a different pin', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    const capability = JSON.parse(
+      readFileSync(paths.capabilityPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const binding = capability['binding'] as Record<string, unknown>;
+    binding['evals_sha'] = '9'.repeat(40);
+    const bytes = JSON.stringify(capability);
+    writeFileSync(paths.capabilityPath, bytes);
+    const manifest = JSON.parse(
+      readFileSync(paths.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const capabilityRef = manifest['capability_review'] as Record<
+      string,
+      unknown
+    >;
+    capabilityRef['sha256'] = sha256(bytes);
+    writeFileSync(paths.manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
+      /capability review binding/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader hashes current pricing bytes instead of trusting its manifest', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    const manifest = JSON.parse(
+      readFileSync(paths.manifestPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const binding = manifest['binding'] as Record<string, unknown>;
+    binding['pricing_sha256'] = '0'.repeat(64);
+    const capability = JSON.parse(
+      readFileSync(paths.capabilityPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const capabilityBinding = capability['binding'] as Record<string, unknown>;
+    capabilityBinding['pricing_sha256'] = '0'.repeat(64);
+    const capabilityBytes = JSON.stringify(capability);
+    writeFileSync(paths.capabilityPath, capabilityBytes);
+    const capabilityRef = manifest['capability_review'] as Record<
+      string,
+      unknown
+    >;
+    capabilityRef['sha256'] = sha256(capabilityBytes);
+    writeFileSync(paths.manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
+      /source pricing snapshot digest/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

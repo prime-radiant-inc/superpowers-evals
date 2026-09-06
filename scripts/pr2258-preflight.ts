@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { compileResourcePolicy } from '../src/campaign/resource-policy.ts';
+import { readPinnedNoFollowBytes } from '../src/appliance/credential-scope.ts';
 import { ArmSchema, type Arm } from '../src/contracts/campaign/arm.ts';
 import {
   GraderSchema,
@@ -11,6 +13,8 @@ import {
   type PoolPolicy,
 } from '../src/contracts/campaign/experiment.ts';
 import { poolKey } from '../src/contracts/campaign/pool.ts';
+import { jcsCanonicalize } from '../src/contracts/campaign/digest.ts';
+import { RelativeArtifactPathSchema } from '../src/contracts/campaign/execution.ts';
 import { SuiteSchema, type Suite } from '../src/contracts/campaign/suite.ts';
 import {
   parseCredentialsFile,
@@ -33,6 +37,17 @@ const EXPECTED_REFS = {
 const EXPECTED_SCENARIO = 'brainstorming-todo-shared-intent';
 const EXPECTED_GRADER = 'sonnet5_bedrock_pr2258_grader';
 const EXPECTED_GRADER_MODEL = 'anthropic.claude-sonnet-5';
+
+export const PR2258_INSTRUMENT_FILES = [
+  'src/experiments/observer/binding.ts',
+  'src/experiments/observer/bundle.ts',
+  'src/experiments/observer/claude.ts',
+  'src/experiments/observer/codex.ts',
+  'src/experiments/observer/contracts.ts',
+  'src/experiments/observer/final-state.ts',
+  'src/experiments/observer/raw.ts',
+  'src/experiments/observer/review.ts',
+] as const;
 
 const RuntimeReceiptSchema = z
   .object({
@@ -100,23 +115,14 @@ export const Pr2258QualificationReceiptsSchema = z
     pricing: z
       .object({
         installed_sha256: z.string().nullable(),
-        complete: z.boolean(),
-        observed_models: z.array(z.string()),
-        priced_models: z.array(z.string()),
-        unpriced_models: z.array(z.string()),
-        service_tiers_verified: z.boolean(),
-        cache_buckets_verified: z.boolean(),
-        separately_billed_tools: z.enum([
-          'none-observed',
-          'priced',
-          'unverified',
-        ]),
+        offline_accounting_probe_complete: z.boolean(),
+        primary_models_priced: z.array(z.string()),
         receipt_sha256: z.string().nullable(),
       })
       .strict(),
     capacity: z
       .object({
-        simultaneous_mix_verified: z.boolean(),
+        fake_provider_six_way_verified: z.boolean(),
         accounts: z.array(
           z
             .object({
@@ -141,17 +147,140 @@ export const Pr2258QualificationReceiptsSchema = z
       .strict(),
     exposure: z
       .object({
-        six_way_overlap_verified: z.boolean(),
+        fake_provider_six_way_overlap_verified: z.boolean(),
         maximum_start_skew_s: z.number().nonnegative().nullable(),
         receipt_sha256: z.string().nullable(),
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const seen = new Set<string>();
+    value.capacity.models.forEach((receipt, index) => {
+      if (seen.has(receipt.model))
+        context.addIssue({
+          code: 'custom',
+          message: `duplicate model capacity receipt for ${receipt.model}`,
+          path: ['capacity', 'models', index, 'model'],
+        });
+      seen.add(receipt.model);
+    });
+  });
 
 export type Pr2258QualificationReceipts = z.infer<
   typeof Pr2258QualificationReceiptsSchema
 >;
+
+export const Pr2258DiagnosticGoSchema = z
+  .object({
+    review_receipt_authenticated: z.literal(true),
+    campaign_id: z.string().min(1),
+    input_digest: z.string().regex(SHA256_RE),
+    evals_sha: z.string().regex(GIT_SHA_RE),
+    gauntlet_sha: z.string().regex(GIT_SHA_RE),
+    image_digest: z.string().regex(IMAGE_DIGEST_RE),
+    pricing_sha256: z.string().regex(SHA256_RE),
+    instrument_sha256: z.string().regex(SHA256_RE),
+    valid_pairs: z.number().int().nonnegative(),
+    subject_exposures: z.number().int().nonnegative(),
+    served_model_ids: z
+      .object({
+        astra_subject: z.string().min(1),
+        sol_subject: z.string().min(1),
+        opus_subject: z.string().min(1),
+        sonnet_grader: z.string().min(1),
+      })
+      .strict(),
+    delegate_model_ids: z.array(z.string().min(1)),
+    delegate_capture_complete: z.boolean(),
+    priced_models: z.array(z.string().min(1)),
+    unpriced_models: z.array(z.string().min(1)),
+    service_tiers_verified: z.boolean(),
+    cache_buckets_verified: z.boolean(),
+    separately_billed_tools: z.enum([
+      'none-observed',
+      'priced',
+      'unverified',
+    ]),
+    six_way_overlap_verified: z.boolean(),
+    maximum_start_skew_s: z.number().nonnegative().nullable(),
+    grader_429_observed: z.boolean(),
+    independent_review: z.enum(['GO', 'NO-GO']),
+  })
+  .strict();
+
+export type Pr2258DiagnosticGo = z.infer<typeof Pr2258DiagnosticGoSchema>;
+
+const ReceiptSetBindingSchema = z
+  .object({
+    evals_sha: z.string().regex(GIT_SHA_RE),
+    gauntlet_sha: z.string().regex(GIT_SHA_RE),
+    image_digest: z.string().regex(IMAGE_DIGEST_RE),
+    pricing_sha256: z.string().regex(SHA256_RE),
+    instrument_sha256: z.string().regex(SHA256_RE),
+  })
+  .strict();
+const ReceiptReferenceSchema = z
+  .object({
+    path: RelativeArtifactPathSchema,
+    sha256: z.string().regex(SHA256_RE),
+  })
+  .strict();
+const InstrumentFileSchema = z
+  .object({
+    path: RelativeArtifactPathSchema,
+    sha256: z.string().regex(SHA256_RE),
+  })
+  .strict();
+const ReceiptSetManifestSchema = z
+  .object({
+    schema_version: z.literal(1),
+    kind: z.literal('pr2258-preflight-receipt-set'),
+    binding: ReceiptSetBindingSchema.extend({
+      instrument_files: z.array(InstrumentFileSchema),
+    }).strict(),
+    evidence_receipts: z.array(ReceiptReferenceSchema),
+    capability_review: ReceiptReferenceSchema,
+    diagnostic_go_review: ReceiptReferenceSchema.optional(),
+  })
+  .strict();
+const CapabilityReviewSchema = z
+  .object({
+    schema_version: z.literal(1),
+    kind: z.literal('pr2258-capability-review'),
+    reviewed_by: z.string().min(1),
+    reviewed_at: z.string().datetime({ offset: true }),
+    binding: ReceiptSetBindingSchema,
+    qualification: Pr2258QualificationReceiptsSchema,
+  })
+  .strict();
+const DiagnosticGoReviewSchema = z
+  .object({
+    schema_version: z.literal(1),
+    kind: z.literal('pr2258-diagnostic-go-review'),
+    reviewed_by: z.string().min(1),
+    reviewed_at: z.string().datetime({ offset: true }),
+    binding: ReceiptSetBindingSchema,
+    diagnostic_go: Pr2258DiagnosticGoSchema.omit({
+      review_receipt_authenticated: true,
+    }),
+  })
+  .strict();
+
+type InstrumentFile = z.infer<typeof InstrumentFileSchema>;
+
+function sha256Bytes(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+export function digestPr2258InstrumentFiles(
+  files: readonly InstrumentFile[],
+): string {
+  const canonical = [...files].sort((a, b) => a.path.localeCompare(b.path));
+  return createHash('sha256')
+    .update(jcsCanonicalize(canonical))
+    .digest('hex');
+}
 
 export interface Pr2258PreflightInput {
   suite: Suite;
@@ -160,6 +289,8 @@ export interface Pr2258PreflightInput {
   credentials: Readonly<Record<string, Credential>>;
   globalCap: number;
   qualification: Pr2258QualificationReceipts;
+  instrumentSha256?: string;
+  diagnosticGo?: Pr2258DiagnosticGo;
 }
 
 export interface Pr2258PreflightResult {
@@ -210,6 +341,7 @@ export function validatePr2258Preflight(
       : suite.name === 'pr2258_parallel_measured'
         ? 2
         : null;
+  const measured = suite.name === 'pr2258_parallel_measured';
   if (expectedRepetitions === null)
     blockers.push(`unsupported PR 2258 suite name ${suite.name}`);
   if (input.globalCap !== 6)
@@ -385,7 +517,8 @@ export function validatePr2258Preflight(
     blockers.push('suite pricing snapshot must name a canonical current.json');
   if (pricing.installed_sha256 !== suite.pricing_snapshot?.sha256)
     blockers.push('installed worker pricing digest differs from the suite snapshot');
-  if (!pricing.complete) blockers.push('pricing coverage is incomplete');
+  if (!pricing.offline_accounting_probe_complete)
+    blockers.push('offline pricing accounting probe is incomplete');
   const primaryModels = [
     'gpt-6-astra',
     'gpt-5.6-sol',
@@ -393,19 +526,8 @@ export function validatePr2258Preflight(
     EXPECTED_GRADER_MODEL,
   ];
   for (const model of primaryModels)
-    if (!pricing.priced_models.includes(model))
+    if (!pricing.primary_models_priced.includes(model))
       blockers.push(`pricing does not cover primary model ${model}`);
-  for (const model of pricing.observed_models)
-    if (!pricing.priced_models.includes(model))
-      blockers.push(`observed model ${model} is not priced for its endpoint`);
-  if (pricing.unpriced_models.length > 0)
-    blockers.push(`pricing has unpriced models: ${[...pricing.unpriced_models].sort().join(', ')}`);
-  if (!pricing.service_tiers_verified)
-    blockers.push('pricing service tiers are not verified in the worker');
-  if (!pricing.cache_buckets_verified)
-    blockers.push('pricing cache buckets are not verified in the worker');
-  if (pricing.separately_billed_tools === 'unverified')
-    blockers.push('separately billed tool usage is not verified or priced');
   if (!hasReceiptDigest(pricing.receipt_sha256))
     blockers.push('worker pricing qualification receipt is missing');
 
@@ -467,9 +589,15 @@ export function validatePr2258Preflight(
 
   const modelDemand: Record<string, number> = { ...subjectDemandByModel };
   addCount(modelDemand, EXPECTED_GRADER_MODEL, 6);
-  const modelReceipts = new Map(
-    qualification.capacity.models.map((receipt) => [receipt.model, receipt]),
-  );
+  const modelReceipts = new Map<
+    string,
+    Pr2258QualificationReceipts['capacity']['models'][number]
+  >();
+  for (const receipt of qualification.capacity.models) {
+    if (modelReceipts.has(receipt.model))
+      blockers.push(`model ${receipt.model} has duplicate capacity receipts`);
+    else modelReceipts.set(receipt.model, receipt);
+  }
   for (const [model, needed] of Object.entries(modelDemand)) {
     const receipt = modelReceipts.get(model);
     if (receipt === undefined || !receipt.verified)
@@ -477,8 +605,8 @@ export function validatePr2258Preflight(
     else if (receipt.max_concurrency < needed)
       blockers.push(`model ${model} needs ${needed} concurrent calls but verified capacity is ${receipt.max_concurrency}`);
   }
-  if (!qualification.capacity.simultaneous_mix_verified)
-    blockers.push('six-way capacity is not verified for the simultaneous subject/grader mix');
+  if (!qualification.capacity.fake_provider_six_way_verified)
+    blockers.push('fake-provider six-way capacity is not verified for the simultaneous subject/grader mix');
   if (!hasReceiptDigest(qualification.capacity.receipt_sha256))
     blockers.push('six-way capacity receipt is missing');
 
@@ -517,15 +645,76 @@ export function validatePr2258Preflight(
       blockers.push(`${role} pool ${compiled?.pool_id ?? poolId} spacing requires ${span} seconds, beyond the 60-second exposure bound`);
     }
   }
-  if (!qualification.exposure.six_way_overlap_verified)
-    blockers.push('six-way overlap is not verified');
+  if (!qualification.exposure.fake_provider_six_way_overlap_verified)
+    blockers.push('fake-provider six-way overlap is not verified');
   if (
-    qualification.exposure.maximum_start_skew_s === null ||
+    qualification.exposure.maximum_start_skew_s !== null &&
     qualification.exposure.maximum_start_skew_s > suite.max_exposure_skew
   )
-    blockers.push('observed six-way start skew does not satisfy the 60-second exposure bound');
+    blockers.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
   if (!hasReceiptDigest(qualification.exposure.receipt_sha256))
     blockers.push('six-way exposure receipt is missing');
+
+  if (measured) {
+    const diagnostic = input.diagnosticGo;
+    if (diagnostic === undefined) {
+      blockers.push(
+        'measured campaign requires an authenticated diagnostic GO receipt',
+      );
+    } else {
+      if (diagnostic.review_receipt_authenticated !== true)
+        blockers.push('diagnostic GO review receipt is not authenticated');
+      if (diagnostic.evals_sha !== pins.evals_sha)
+        blockers.push('diagnostic GO Evals pin differs from the frozen preflight pin');
+      if (diagnostic.gauntlet_sha !== pins.gauntlet_sha)
+        blockers.push('diagnostic GO Gauntlet pin differs from the frozen preflight pin');
+      if (diagnostic.image_digest !== pins.image_digest)
+        blockers.push('diagnostic GO image digest differs from the frozen preflight pin');
+      if (diagnostic.pricing_sha256 !== suite.pricing_snapshot?.sha256)
+        blockers.push('diagnostic GO pricing bytes differ from the measured suite');
+      if (
+        input.instrumentSha256 === undefined ||
+        diagnostic.instrument_sha256 !== input.instrumentSha256
+      )
+        blockers.push('diagnostic GO instrument bytes differ from measured preflight');
+      if (diagnostic.valid_pairs !== 3)
+        blockers.push(`diagnostic GO requires 3 valid pairs, got ${diagnostic.valid_pairs}`);
+      if (diagnostic.subject_exposures !== 6)
+        blockers.push(
+          `diagnostic GO requires 6 subject exposures, got ${diagnostic.subject_exposures}`,
+        );
+      const observedModels = [
+        ...Object.values(diagnostic.served_model_ids),
+        ...diagnostic.delegate_model_ids,
+      ];
+      for (const model of observedModels)
+        if (!diagnostic.priced_models.includes(model))
+          blockers.push(`diagnostic observed model ${model} is not priced for its endpoint`);
+      if (!diagnostic.delegate_capture_complete)
+        blockers.push('diagnostic delegate model capture is incomplete');
+      if (diagnostic.unpriced_models.length > 0)
+        blockers.push(
+          `diagnostic has unpriced models: ${[...diagnostic.unpriced_models].sort().join(', ')}`,
+        );
+      if (!diagnostic.service_tiers_verified)
+        blockers.push('diagnostic pricing service tiers are not verified');
+      if (!diagnostic.cache_buckets_verified)
+        blockers.push('diagnostic pricing cache buckets are not verified');
+      if (diagnostic.separately_billed_tools === 'unverified')
+        blockers.push('diagnostic separately billed tool usage is not verified or priced');
+      if (!diagnostic.six_way_overlap_verified)
+        blockers.push('diagnostic six-way overlap is not verified');
+      if (
+        diagnostic.maximum_start_skew_s === null ||
+        diagnostic.maximum_start_skew_s > suite.max_exposure_skew
+      )
+        blockers.push('diagnostic six-way start skew does not satisfy the 60-second bound');
+      if (diagnostic.grader_429_observed)
+        blockers.push('diagnostic observed a grader 429');
+      if (diagnostic.independent_review !== 'GO')
+        blockers.push('diagnostic independent review is not GO');
+    }
+  }
 
   const plannedSlots = suite.comparisons.reduce((sum, comparison) => {
     const armsPerComparison = 'arm' in comparison ? 1 : 2;
@@ -570,31 +759,198 @@ function loadInput(
   return { suite, grader, arms, credentials, globalCap: 6, qualification };
 }
 
+function readReviewedJson<T>(
+  qualificationRoot: string,
+  reference: z.infer<typeof ReceiptReferenceSchema>,
+  label: string,
+  schema: z.ZodType<T>,
+): T {
+  const bytes = readPinnedNoFollowBytes(
+    qualificationRoot,
+    reference.path.split('/'),
+    label,
+    true,
+  );
+  if (bytes === null) throw new Error(`${label} is missing`);
+  if (sha256Bytes(bytes) !== reference.sha256)
+    throw new Error(`${label} digest does not match the receipt-set manifest`);
+  try {
+    return schema.parse(JSON.parse(bytes.toString('utf8')));
+  } catch {
+    throw new Error(`${label} is not a valid reviewed receipt`);
+  }
+}
+
+function sameReceiptBinding(
+  left: z.infer<typeof ReceiptSetBindingSchema>,
+  right: z.infer<typeof ReceiptSetBindingSchema>,
+): boolean {
+  return jcsCanonicalize(left) === jcsCanonicalize(right);
+}
+
+export function loadPr2258ReceiptSet(
+  sourceRoot: string,
+  qualificationRoot: string,
+  suiteKind: 'diagnostic' | 'measured',
+): Pr2258PreflightInput {
+  // The approved private root supplies reviewer authority. No-follow reads and
+  // hashes bind the exact reviewed bytes; they do not prove the claims' truth.
+  const manifestBytes = readPinnedNoFollowBytes(
+    qualificationRoot,
+    ['receipt-set.json'],
+    'PR 2258 receipt-set manifest',
+    true,
+  );
+  if (manifestBytes === null) throw new Error('PR 2258 receipt-set manifest is missing');
+  let manifest: z.infer<typeof ReceiptSetManifestSchema>;
+  try {
+    manifest = ReceiptSetManifestSchema.parse(
+      JSON.parse(manifestBytes.toString('utf8')),
+    );
+  } catch {
+    throw new Error('PR 2258 receipt-set manifest is invalid');
+  }
+
+  const capability = readReviewedJson(
+    qualificationRoot,
+    manifest.capability_review,
+    'capability review',
+    CapabilityReviewSchema,
+  );
+  const binding = {
+    evals_sha: manifest.binding.evals_sha,
+    gauntlet_sha: manifest.binding.gauntlet_sha,
+    image_digest: manifest.binding.image_digest,
+    pricing_sha256: manifest.binding.pricing_sha256,
+    instrument_sha256: manifest.binding.instrument_sha256,
+  };
+  if (!sameReceiptBinding(capability.binding, binding))
+    throw new Error('capability review binding differs from the receipt-set manifest');
+  if (
+    capability.qualification.frozen_pins.evals_sha !== binding.evals_sha ||
+    capability.qualification.frozen_pins.gauntlet_sha !== binding.gauntlet_sha ||
+    capability.qualification.frozen_pins.image_digest !== binding.image_digest
+  )
+    throw new Error('capability review claims differ from its exact source/image binding');
+
+  const evidencePaths = new Set<string>();
+  const evidenceDigests = new Set<string>();
+  for (const reference of manifest.evidence_receipts) {
+    if (evidencePaths.has(reference.path))
+      throw new Error(`evidence receipt path is duplicated: ${reference.path}`);
+    evidencePaths.add(reference.path);
+    const bytes = readPinnedNoFollowBytes(
+      qualificationRoot,
+      reference.path.split('/'),
+      `qualification evidence receipt ${reference.path}`,
+      true,
+    );
+    if (bytes === null || sha256Bytes(bytes) !== reference.sha256)
+      throw new Error(`qualification evidence receipt ${reference.path} digest differs from the manifest`);
+    evidenceDigests.add(reference.sha256);
+  }
+  const qualificationDigests = [
+    capability.qualification.chronology.codex.receipt_sha256,
+    capability.qualification.chronology.claude.receipt_sha256,
+    capability.qualification.linux.receipt_sha256,
+    capability.qualification.installed.receipt_sha256,
+    capability.qualification.projections.receipt_sha256,
+    capability.qualification.grader_bearer.receipt_sha256,
+    capability.qualification.pricing.receipt_sha256,
+    capability.qualification.capacity.receipt_sha256,
+    capability.qualification.exposure.receipt_sha256,
+  ].filter((digest): digest is string => digest !== null);
+  for (const digest of qualificationDigests)
+    if (!evidenceDigests.has(digest))
+      throw new Error(`qualification claim references an unbound evidence receipt ${digest}`);
+
+  const input = loadInput(sourceRoot, suiteKind, capability.qualification);
+  const pricingPath = input.suite.pricing_snapshot?.path;
+  if (pricingPath === undefined)
+    throw new Error('source suite has no pricing snapshot');
+  const pricingBytes = readPinnedNoFollowBytes(
+    sourceRoot,
+    pricingPath.split('/'),
+    'source pricing snapshot',
+    true,
+  );
+  if (
+    pricingBytes === null ||
+    sha256Bytes(pricingBytes) !== input.suite.pricing_snapshot?.sha256 ||
+    sha256Bytes(pricingBytes) !== binding.pricing_sha256
+  )
+    throw new Error('source pricing snapshot digest differs from the reviewed binding');
+
+  const expectedInstrumentPaths = [...PR2258_INSTRUMENT_FILES].sort();
+  const declaredInstrumentPaths = manifest.binding.instrument_files
+    .map((file) => file.path)
+    .sort();
+  if (!exactStringSet(declaredInstrumentPaths, expectedInstrumentPaths))
+    throw new Error('instrument file manifest does not name the exact observer source set');
+  const actualInstrumentFiles = manifest.binding.instrument_files.map((file) => {
+    const bytes = readPinnedNoFollowBytes(
+      sourceRoot,
+      file.path.split('/'),
+      `observer instrument ${file.path}`,
+      true,
+    );
+    if (bytes === null || sha256Bytes(bytes) !== file.sha256)
+      throw new Error(`observer instrument ${file.path} digest differs from the reviewed manifest`);
+    return file;
+  });
+  if (digestPr2258InstrumentFiles(actualInstrumentFiles) !== binding.instrument_sha256)
+    throw new Error('observer instrument aggregate digest differs from the reviewed binding');
+
+  let diagnosticGo: Pr2258DiagnosticGo | undefined;
+  if (suiteKind === 'measured') {
+    if (manifest.diagnostic_go_review === undefined)
+      throw new Error('diagnostic GO review is missing from the measured receipt set');
+    const review = readReviewedJson(
+      qualificationRoot,
+      manifest.diagnostic_go_review,
+      'diagnostic GO review',
+      DiagnosticGoReviewSchema,
+    );
+    if (!sameReceiptBinding(review.binding, binding))
+      throw new Error('diagnostic GO review binding differs from the receipt-set manifest');
+    if (
+      review.diagnostic_go.evals_sha !== binding.evals_sha ||
+      review.diagnostic_go.gauntlet_sha !== binding.gauntlet_sha ||
+      review.diagnostic_go.image_digest !== binding.image_digest ||
+      review.diagnostic_go.pricing_sha256 !== binding.pricing_sha256 ||
+      review.diagnostic_go.instrument_sha256 !== binding.instrument_sha256
+    )
+      throw new Error('diagnostic GO claims differ from its exact artifact binding');
+    diagnosticGo = {
+      ...review.diagnostic_go,
+      review_receipt_authenticated: true,
+    };
+  }
+
+  return {
+    ...input,
+    instrumentSha256: binding.instrument_sha256,
+    ...(diagnosticGo ? { diagnosticGo } : {}),
+  };
+}
+
 export function main(args: string[]): number {
-  const [suiteKind, receiptPath] = args;
+  const [suiteKind, qualificationRoot] = args;
   if (
     (suiteKind !== 'diagnostic' && suiteKind !== 'measured') ||
-    receiptPath === undefined
+    qualificationRoot === undefined
   ) {
-    console.error('usage: bun scripts/pr2258-preflight.ts <diagnostic|measured> <qualification-receipt.json>');
-    return 2;
-  }
-  let qualification: Pr2258QualificationReceipts;
-  try {
-    const parsed = JSON.parse(readFileSync(receiptPath, 'utf8'));
-    qualification = Pr2258QualificationReceiptsSchema.parse(parsed);
-  } catch {
-    console.error(JSON.stringify({ ready: false, blockers: ['qualification receipt is missing or invalid'] }));
+    console.error('usage: bun scripts/pr2258-preflight.ts <diagnostic|measured> <approved-qualification-root>');
     return 2;
   }
   try {
     const result = validatePr2258Preflight(
-      loadInput(repoRoot(), suiteKind, qualification),
+      loadPr2258ReceiptSet(repoRoot(), qualificationRoot, suiteKind),
     );
     console.log(JSON.stringify(result, null, 2));
     return result.ready ? 0 : 1;
   } catch {
-    console.error(JSON.stringify({ ready: false, blockers: ['public preflight declarations are invalid'] }));
+    console.error(JSON.stringify({ ready: false, blockers: ['reviewed qualification receipt set or public declarations are invalid'] }));
     return 2;
   }
 }
