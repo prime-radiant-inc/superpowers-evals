@@ -14,6 +14,7 @@ import {
   readlinkSync,
   readSync,
   realpathSync,
+  statfsSync,
   writeFileSync,
 } from 'node:fs';
 import { networkInterfaces } from 'node:os';
@@ -284,6 +285,11 @@ export async function captureNativeParent(
   dependencies: {
     // Tests supply an explicit fake-native boundary; the executable CLI has no bypass.
     verifyBoundary?: (config: NativeCaptureConfig) => unknown;
+    inspectStorage?: (path: string) => {
+      type: number;
+      bsize: number;
+      blocks: number;
+    };
     providerPort?: number;
     runner?: CommandRunner;
     writeReceipt?: (path: string, body: string) => void;
@@ -431,6 +437,18 @@ export async function captureNativeParent(
     write('requests.json', provider?.records ?? []);
     write('inputs.json', inputLedger);
   };
+  const checkStorage = () => {
+    const storage = (dependencies.inspectStorage ?? statfsSync)(config.output);
+    const capacity = storage.bsize * storage.blocks;
+    requireCondition(
+      storage.type === 0x01021994 &&
+        Number.isSafeInteger(capacity) &&
+        capacity > 0 &&
+        capacity <= MAX_BYTES,
+      'capture storage must be tmpfs bounded to 256 MiB',
+    );
+    return { type: storage.type, capacityBytes: capacity };
+  };
   const guard = () => {
     persist();
     requireCondition(Date.now() < deadline, 'capture deadline exceeded');
@@ -439,7 +457,9 @@ export async function captureNativeParent(
         record.decision !== 'accepted' && record.decision !== 'health-check',
     );
     requireCondition(!refusal, `provider refusal: ${refusal?.decision}`);
-    inventoryNativeCapture(config.output, false);
+    // The native CLI is actively writing. Its enforced tmpfs capacity bounds
+    // live storage; stable nofollow evidence is inventoried only after teardown.
+    checkStorage();
   };
   const pause = async (ms: number) => {
     guard();
@@ -458,6 +478,7 @@ export async function captureNativeParent(
   try {
     write('config.json', config);
     write('boundary.json', boundary);
+    write('storage.json', checkStorage());
     requireCondition(
       config.expectedBunVersion === Bun.version,
       'Bun version mismatch',
@@ -555,6 +576,11 @@ export async function captureNativeParent(
     if (config.runtime === 'codex') {
       env['CODEX_HOME'] = join(home, '.codex');
       env['CODEX_PROVIDER_API_KEY'] = 'native-capture-fake';
+      writeFileSync(
+        join(home, '.codex/config.toml'),
+        `[projects.${JSON.stringify(workdir)}]\ntrust_level = "trusted"\n`,
+        { mode: 0o600, flag: 'wx' },
+      );
       argv = [
         '-C',
         workdir,

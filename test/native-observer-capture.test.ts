@@ -40,14 +40,16 @@ function fixture(mode = 'normal', runtime: 'codex' | 'claude' = 'codex') {
   writeFileSync(
     `${binary}.ts`,
     `#!${process.execPath}
-import { mkdirSync, writeFileSync, appendFileSync, truncateSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, truncateSync, existsSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 if (process.argv.includes('--version')) { console.log('fixture-native 1'); process.exit(0); }
 if (process.argv.includes('--help')) { console.log('--no-alt-screen --sandbox --ask-for-approval --model --permission-mode --strict-mcp-config --setting-sources'); process.exit(0); }
 const home = process.env.HOME;
 if (${JSON.stringify(mode)} === 'health-probe') await fetch(process.env.ANTHROPIC_BASE_URL, { method: 'HEAD' });
 mkdirSync(home + '/raw', { recursive: true });
-writeFileSync(home + '/observed.json', JSON.stringify({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), pid: process.pid }));
+const configPath = home + (${JSON.stringify(runtime)} === 'codex' ? '/.codex/config.toml' : '/.claude.json');
+const seededConfig = existsSync(configPath) ? (${JSON.stringify(runtime)} === 'codex' ? Bun.TOML.parse(readFileSync(configPath, 'utf8')) : JSON.parse(readFileSync(configPath, 'utf8'))) : undefined;
+writeFileSync(home + '/observed.json', JSON.stringify({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), pid: process.pid, seededConfig }));
 if (${JSON.stringify(mode)} === 'oversize') { writeFileSync(home + '/oversize', ''); truncateSync(home + '/oversize', 257 * 1024 * 1024); }
 console.log('fixture ready');
 const messages = [];
@@ -98,8 +100,51 @@ exec '${process.execPath}' '${binary}.ts' "$@"
 }
 const testBoundary = {
   verifyBoundary: () => ({ kind: 'explicit-fake-native-test' }),
+  inspectStorage: () => ({ type: 0x01021994, bsize: 4096, blocks: 65536 }),
   providerPort: 0,
 };
+
+localTest(
+  'checks the live storage bound while accepting changing native output',
+  async () => {
+    const config = fixture();
+    let inspections = 0;
+    const result = await captureNativeParent(config, {
+      ...testBoundary,
+      inspectStorage() {
+        inspections++;
+        if (existsSync(join(config.output, 'home/raw/session.jsonl')))
+          appendFileSync(
+            join(config.output, 'home/raw/session.jsonl'),
+            'live append\n',
+          );
+        return testBoundary.inspectStorage();
+      },
+    });
+    expect(result.reason).toBeUndefined();
+    expect(result.outcome).toBe('captured');
+    expect(result.cleanup).toBe('stopped');
+    expect(inspections).toBeGreaterThan(2);
+    expect(
+      readFileSync(join(config.output, 'home/raw/session.jsonl'), 'utf8'),
+    ).toContain('live append');
+  },
+);
+
+localTest(
+  'refuses a capture mount whose capacity exceeds the output bound',
+  async () => {
+    const config = fixture();
+    const result = await captureNativeParent(config, {
+      ...testBoundary,
+      inspectStorage: () => ({ type: 0x01021994, bsize: 4096, blocks: 65537 }),
+    });
+    expect(result.outcome).toBe('refused');
+    expect(result.reason).toContain(
+      'capture storage must be tmpfs bounded to 256 MiB',
+    );
+  },
+);
 
 localTest(
   'a startup health probe does not consume either native capture turn',
@@ -138,6 +183,11 @@ localTest(
         expect(observed.env.CAPTURE_TEST_FORBIDDEN).toBeUndefined();
         expect(observed.env.HOME).toBe(join(config.output, 'home'));
         expect(observed.cwd).toBe(join(config.output, 'workdir'));
+        if (runtime === 'codex') {
+          expect(observed.seededConfig.projects).toEqual({
+            [observed.cwd]: { trust_level: 'trusted' },
+          });
+        }
         expect(observed.argv).not.toContain('exec');
         expect(observed.argv).not.toContain('-p');
         expect(
