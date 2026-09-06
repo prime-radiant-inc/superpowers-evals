@@ -8,7 +8,8 @@ export interface NativeObserverStep {
   protocol: 'messages' | 'responses';
   // Predicates are supplied by the inspected capture script, receive a copy,
   // and must explicitly return true. They can bind observed dynamic IDs across
-  // requests; they cannot change response blocks or bypass tool validation.
+  // requests; they cannot mutate fixed blocks or bypass tool validation.
+  // A separately validated response factory may use the bound state.
   request:
     | Record<string, unknown>
     | ((request: Readonly<Record<string, unknown>>) => boolean);

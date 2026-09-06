@@ -36,7 +36,12 @@ const bodies = {
   },
 };
 
-async function post(url: URL, route: string, body: unknown) {
+async function post(
+  url: URL,
+  route: string,
+  body: unknown,
+  signal?: AbortSignal,
+) {
   return fetch(new URL(`/v1/${route}`, url), {
     method: 'POST',
     proxy: '',
@@ -46,6 +51,7 @@ async function post(url: URL, route: string, body: unknown) {
       authorization: 'Bearer native-capture-fake',
     },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
 }
 
@@ -164,6 +170,65 @@ test('stops an active stream when a later request violates the script', async ()
     // event, even if its HTTP headers have already been sent.
     await active.text().catch(() => 'closed transport');
     expect(server.records[0]?.decision).toBe('stream stopped after refusal');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('aborting a real HTTP stream latches refusal and stops further chunks', async () => {
+  const server = startNativeObserverProvider({
+    port: 0,
+    steps: [
+      {
+        protocol: 'messages',
+        request: bodies.messages,
+        blocks: Array.from({ length: 8 }, () => ({
+          type: 'text' as const,
+          text: 'unfinished response',
+        })),
+      },
+      {
+        protocol: 'messages',
+        request: bodies.messages,
+        blocks: [{ type: 'text', text: 'must not be served' }],
+      },
+    ],
+  });
+  try {
+    const controller = new AbortController();
+    const response = await post(
+      server.url,
+      'messages',
+      bodies.messages,
+      controller.signal,
+    );
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value!.byteLength).toBeGreaterThan(0);
+    await reader.cancel();
+    // Bun's reader cancellation discards the body without disconnecting HTTP.
+    // Abort the request explicitly so the server observes the abandoned stream.
+    controller.abort();
+    // HTTP cancellation reaches the server asynchronously; bound the wait for
+    // its receipt instead of treating the client-side promise as server proof.
+    for (
+      let attempt = 0;
+      attempt < 100 && server.records[0]?.decision !== 'stream cancelled';
+      attempt++
+    ) {
+      await Bun.sleep(2);
+    }
+    expect(server.records[0]?.decision).toBe('stream cancelled');
+    const chunksAfterCancellation = server.records[0]!.chunks.length;
+    const refused = await post(server.url, 'messages', bodies.messages);
+    expect(refused.status).toBe(409);
+    await refused.text();
+    await Bun.sleep(5);
+    expect(server.records[0]!.chunks).toHaveLength(chunksAfterCancellation);
+    expect(server.records[1]?.chunks).toEqual([]);
+    expect((await reader.read()).done).toBe(true);
   } finally {
     await server.stop();
   }
