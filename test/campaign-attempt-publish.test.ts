@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   AttemptPublicationStorageError,
   AttemptPublishError,
@@ -459,7 +459,10 @@ import {
   sha256Hex,
 } from '../src/contracts/campaign/digest.ts';
 import type { ObserverBinding } from '../src/experiments/observer/binding.ts';
-import { freezeObserverBundle } from '../src/experiments/observer/bundle.ts';
+import {
+  freezeObserverBundle,
+  readObserverBundle,
+} from '../src/experiments/observer/bundle.ts';
 import { writeAttemptManifest } from '../src/runner/manifest.ts';
 import {
   blockActivation,
@@ -534,7 +537,14 @@ test('V2 publication refuses a foreign campaign with a matching attempt id', () 
   clean(paths);
 });
 
-function observerPublication(empty = false) {
+function observerPublication(
+  empty = false,
+  options: {
+    nativeTrace?: boolean;
+    configureBinding?: (binding: ObserverBinding) => void;
+  } = {},
+) {
+  const cliVersion = options.nativeTrace ? '0.146.0' : '0.144.3';
   const experiment = twoArmExperiment();
   for (const arm of experiment.execution_surface) arm.agent = 'codex';
   const scenario = 'brainstorming-todo-shared-intent';
@@ -581,7 +591,7 @@ function observerPublication(empty = false) {
       payload: {
         id: 'session',
         cwd: workdir,
-        cli_version: '0.144.3',
+        cli_version: cliVersion,
         source: 'cli',
         originator: 'codex-tui',
         thread_source: 'user',
@@ -594,8 +604,8 @@ function observerPublication(empty = false) {
     run_id: 'observed',
     campaign: intent.identity,
     runtime: 'codex',
-    dialect: 'codex-response-items-0.144.3',
-    cli_version: '0.144.3',
+    dialect: `codex-response-items-${cliVersion}`,
+    cli_version: cliVersion,
     home,
     workdir,
     launch_cwd: workdir,
@@ -612,7 +622,7 @@ function observerPublication(empty = false) {
           runtime: 'codex',
           expected_session_id: 'session',
           expected_cwd: workdir,
-          expected_cli_version: '0.144.3',
+          expected_cli_version: cliVersion,
         },
         root_id: 'transcripts',
         relative_path: 'parent.jsonl',
@@ -622,6 +632,43 @@ function observerPublication(empty = false) {
       },
     ],
   };
+  if (options.nativeTrace) {
+    const traceRoot = join(home, '.codex', 'rollout-traces');
+    binding.roots.push({
+      id: 'tool-trace',
+      kind: 'tool_trace',
+      path: traceRoot,
+    });
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          './fixtures/observer/codex-0.146.0-trace-text.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as {
+      manifest: string;
+      trace: string;
+      payloads: Record<string, string>;
+    };
+    const nativeSession: string = JSON.parse(fixture.manifest).root_thread_id;
+    for (const [path, content] of Object.entries({
+      'manifest.json': fixture.manifest,
+      'trace.jsonl': fixture.trace,
+      ...fixture.payloads,
+    })) {
+      const member = join(traceRoot, 'bundle', path);
+      mkdirSync(dirname(member), { recursive: true });
+      writeFileSync(
+        member,
+        content
+          .replaceAll(nativeSession, 'session')
+          .replaceAll('/capture/codex-parent/workdir', workdir),
+      );
+    }
+  }
+  options.configureBinding?.(binding);
   const bindingPath = join(runDir, 'gauntlet-agent', 'observer-binding.json');
   writeFileSync(bindingPath, JSON.stringify(binding));
   freezeObserverBundle(binding, evidenceDir);
@@ -793,6 +840,91 @@ test.each([
     expect(() => publishExecution(f.args)).toThrow();
     expect(readFileSync(candidatePath)).toEqual(candidate);
     expect(readFileSync(join(f.runDir, 'manifest.json'))).toEqual(manifest);
+    expect(readdirSync(f.resultsRoot)).toEqual([]);
+  } finally {
+    clean(f);
+  }
+});
+
+test('Codex 0.146 publication retains authenticated native trace members without publishing HOME', () => {
+  const f = observerPublication(false, { nativeTrace: true });
+  try {
+    const sourceTrace = join(
+      f.binding.home,
+      '.codex/rollout-traces/bundle/trace.jsonl',
+    );
+    const traceBytes = readFileSync(sourceTrace);
+    const published = publishExecution(f.args);
+    expect(published.runId).toBe('observed');
+    expect(existsSync(join(f.resultsRoot, 'observed', 'home'))).toBe(false);
+    expect(readFileSync(sourceTrace)).toEqual(traceBytes);
+    const bundle = readObserverBundle(
+      realpathSync(
+        join(f.resultsRoot, 'observed', 'brainstorming-evidence/bundle'),
+      ),
+    );
+    const member = bundle.supporting_files.find(
+      (file) =>
+        file.root_id === 'tool-trace' &&
+        file.relative_path === 'bundle/trace.jsonl',
+    );
+    expect(member).toBeDefined();
+    expect(
+      readFileSync(
+        join(
+          f.resultsRoot,
+          'observed',
+          'brainstorming-evidence/bundle',
+          member!.path,
+        ),
+      ),
+    ).toEqual(traceBytes);
+  } finally {
+    clean(f);
+  }
+});
+
+test.each([
+  'missing-trace',
+  'extra-transcripts',
+] as const)('native observer publication rejects %s from an otherwise frozen candidate', (change) => {
+  const f = observerPublication(false, {
+    nativeTrace: true,
+    configureBinding(binding) {
+      if (change === 'missing-trace')
+        binding.roots = binding.roots.filter(
+          (root) => root.kind !== 'tool_trace',
+        );
+      else {
+        const path = join(binding.home, '.codex/other-sessions');
+        mkdirSync(path, { recursive: true });
+        binding.roots.push({
+          id: 'extra-transcripts',
+          kind: 'transcripts',
+          path,
+        });
+      }
+    },
+  });
+  try {
+    expect(() => publishExecution(f.args)).toThrow();
+    expect(existsSync(f.runDir)).toBe(true);
+    expect(readdirSync(f.resultsRoot)).toEqual([]);
+  } finally {
+    clean(f);
+  }
+});
+
+test('native observer publication rejects a forged trace root without moving staging', () => {
+  const f = observerPublication(false, { nativeTrace: true });
+  try {
+    f.binding.roots.find((root) => root.kind === 'tool_trace')!.path = join(
+      f.binding.home,
+      'foreign-traces',
+    );
+    writeFileSync(f.bindingPath, JSON.stringify(f.binding));
+    expect(() => publishExecution(f.args)).toThrow();
+    expect(existsSync(f.runDir)).toBe(true);
     expect(readdirSync(f.resultsRoot)).toEqual([]);
   } finally {
     clean(f);

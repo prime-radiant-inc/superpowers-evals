@@ -441,17 +441,22 @@ export function publishExecution(args: {
       spec.public_env.HOME,
       binding.runtime === 'codex' ? '.codex/sessions' : '.claude/projects',
     );
+    const expectedRoots = new Map([
+      ['transcripts', transcriptPath],
+      ['artifacts', workdir],
+    ]);
+    if (binding.runtime === 'codex' && binding.cli_version === '0.146.0')
+      expectedRoots.set(
+        'tool_trace',
+        join(spec.public_env.HOME, '.codex/rollout-traces'),
+      );
     if (
       binding.run_id !== runId ||
       jcsCanonicalize(binding.campaign) !== jcsCanonicalize(intent.identity) ||
       binding.home !== spec.public_env.HOME ||
       binding.workdir !== workdir ||
-      binding.roots.length !== 2 ||
-      binding.roots.some(
-        (root) =>
-          root.path !==
-          (root.kind === 'transcripts' ? transcriptPath : workdir),
-      )
+      binding.roots.length !== expectedRoots.size ||
+      binding.roots.some((root) => root.path !== expectedRoots.get(root.kind))
     )
       throw refusal(
         'observer binding differs from frozen selection or bound runtime roots',
