@@ -1,7 +1,7 @@
 # PR 2258 five-model base-vs-head campaign: Design
 
 **Date:** 2026-09-06
-**Status:** design — draft for Drew's review
+**Status:** design — approved by Drew 2026-09-06 (open items resolved below)
 **Ticket:** PRI-3097
 **Context:** [PR 2258 recovery note](../../experiments/2026-09-06-pr2258-main-recovery.md),
 [Codex Astra/Sol pilot](../../experiments/2026-09-04-pr2258-astra-sol-brainstorming.md),
@@ -27,11 +27,13 @@ base arm is skill-identical to main. The PR diff touches only
 | --- | --- |
 | Base pin | `fd02874a` (the PR's actual base; comparable to the pilot) |
 | Head pin | `069edf3f` |
-| Grid | Nine behavioral scenarios at n=1 or n=2, plus one fractals SDD scenario at n=5 |
+| Grid | Nine behavioral scenarios at n=1 or n=2, plus `sdd-go-fractals-opus48` at n=3 |
 | Effort | xhigh on Codex and Claude Code, delivered as an **arm-level** declaration (option 1), not per-scenario fragments |
 | Codex-only strict observer scenario | Excluded |
 | Appliance | Reset the evals checkout to origin/main; approved |
-| Budget | $1k ledger cap; see §Budget for why this needs revisiting |
+| Budget | $1,500 ledger cap (raised from $1k when fractals joined; fractals reduced from n=5 to n=3) |
+| Landing | Direct merge of the WIP branch to `main`, then push |
+| Pre-campaign smoke | Authorized (about $1) |
 | Process | Spec first, then plan, then implementation |
 
 ## Arms
@@ -68,8 +70,8 @@ All ten scenarios run on both Claude and Codex on Linux. Caps are the story's
 | `writing-plans-no-spec-conversational` | Plan from final conversational requirements, no forced spec | 1 | 10 | 20m |
 | `cost-spec-plan-duplication` | Brainstorm-to-plan chain; plan references spec | 1 | 10 | 45m |
 | `user-pref-sdd-no-strategy-prompt` | Supplied execution method preserved | 1 | 10 | 10m |
-| `sdd-go-fractals-opus48` | End-to-end SDD execution of a fixed plan; longitudinal anchor | 5 | 50 | 120m |
-| **Total** | | | **150** | |
+| `sdd-go-fractals-opus48` | End-to-end SDD execution of a fixed plan; longitudinal anchor | 3 | 30 | 120m |
+| **Total** | | | **130** | |
 
 **Fractals variant.** `sdd-go-fractals-opus48` is the renamed
 `sdd-go-fractals-elicited` (Opus 4.8-elicited plan). It is the variant the
@@ -261,7 +263,7 @@ the Opus, Sonnet, and Haiku rows. The probe must pass with
 - Five comparisons, one per model, each `baseline: <model>_pr2258_base`,
   `treatment: <model>_pr2258_head`, the ten scenarios listed explicitly,
   `n: 1`, and `cells` overrides `brainstorming-todo-purpose-discovery: {n: 2}`
-  and `sdd-go-fractals-opus48: {n: 5}`.
+  and `sdd-go-fractals-opus48: {n: 3}`.
 - `reserve: 4`, `max_exposure_skew: 60`,
   `attempt_bounds: { max_attempts: 2, max_time_s: 7800 }` (the 120-minute
   fractals cap plus setup, capture, and checks).
@@ -270,7 +272,7 @@ the Opus, Sonnet, and Haiku rows. The probe must pass with
   refuses a mismatch, so the suite is edited after the snapshot is final.
 - Registered with `--global-cap 6`.
 
-Planned samples: 150. With reserve, at most 154 durable attempts plus
+Planned samples: 130. With reserve, at most 134 durable attempts plus
 retries within `max_attempts`.
 
 ## Budget
@@ -279,35 +281,31 @@ Estimates from the pilot and local results, per run, subject only. Astra is
 priced at roughly 2× gpt-5.5 rates and Sol at roughly 0.8×; xhigh inflates
 output tokens further, so these are upper-middle guesses, not measurements.
 
-| Model | Behavioral (20 runs) | Fractals (10 runs) |
+| Model | Behavioral (20 runs) | Fractals (6 runs) |
 | --- | --- | --- |
-| Astra | $3 × 20 = $60 | $45 × 10 = $450 |
-| Sol | $2 × 20 = $40 | $15 × 10 = $150 |
-| Luna | $0.3 × 20 = $6 | $1.5 × 10 = $15 |
-| Opus 5 | $2 × 20 = $40 | $10 × 10 = $100 |
-| Opus 4.8 | $1.2 × 20 = $24 | $7 × 10 = $70 |
-| Grader | $0.4 × 100 = $40 | $1.3 × 50 = $65 |
-| **Subtotal** | **$210** | **$850** |
+| Astra | $3 × 20 = $60 | $45 × 6 = $270 |
+| Sol | $2 × 20 = $40 | $15 × 6 = $90 |
+| Luna | $0.3 × 20 = $6 | $1.5 × 6 = $9 |
+| Opus 5 | $2 × 20 = $40 | $10 × 6 = $60 |
+| Opus 4.8 | $1.2 × 20 = $24 | $7 × 6 = $42 |
+| Grader | $0.4 × 100 = $40 | $1.3 × 30 = $39 |
+| **Subtotal** | **$210** | **$510** |
 
-Total about $1,060 before reserves and retries, roughly $1,300 with them.
-That exceeds the $1k cap you set before fractals joined the grid. Astra's
-fractals runs are about 40% of the whole campaign. Options, in my order of
-preference:
-
-1. Raise the ledger cap to $1,500 and keep n=5 everywhere.
-2. Keep $1k and set Astra's fractals cell to n=3 (saves about $180 plus
-   grader).
-3. Keep $1k and drop fractals to n=3 for every model (saves about $340).
+Total about $720 before reserves and retries, roughly $900 with them, against
+the $1,500 ledger cap Drew set on 2026-09-06 (fractals was cut from n=5 to
+n=3 at the same time). Astra's six fractals runs remain the single largest
+line. The V2 suite has no dollar field; the cap is enforced by the operator
+reading `campaign costs` and the stop rules in §Execution procedure.
 
 Wall clock at global cap 6: behavioral runs about 7 hours, fractals about
-8 hours, so roughly 15 hours if the pools stay full.
+5 hours, so roughly 12 hours if the pools stay full.
 
 ## Execution procedure
 
 1. **Repository.** On `wip/pr2258-five-model-campaign`: arms, scenario,
    effort feature, pricing snapshot, suite, experiment log entry. `bun run
-   check` and `bun run quorum check` green. Land on `main` and push (PR or
-   direct merge is your call; recent campaign work went direct).
+   check` and `bun run quorum check` green. Merge directly to `main` and
+   push (Drew's call, 2026-09-06).
 2. **Appliance source.** Preconditions: `doctor --json` ok, no run/sync lock,
    no active campaign (today: legacy V1 dirs unreadable as expected, two
    completed diagnostics, one registered-never-run
@@ -320,13 +318,13 @@ Wall clock at global cap 6: behavioral runs about 7 hours, fractals about
 3. **Prepare.** `evals-appliance prepare --json --superpowers-ref fd02874a…`
    rebuilds `superpowers-evals:local` from main (the last image is from
    2026-09-05 on the pinned pilot runtime) and proves the container preflight.
-4. **Smoke (needs your authorization).** One Claude and one Codex arm on the
+4. **Smoke (authorized 2026-09-06).** One Claude and one Codex arm on the
    smoke scenario via the helper's `run`, with `--effort xhigh` threaded;
    confirm the effective effort in both raw logs and that both subjects and
    the grader price with `unpriced_models: []` under the snapshot.
 5. **Register.** `evals-appliance campaign register suites/pr2258_five_model.yaml --global-cap 6 --json`.
    Check the frozen refs (evals = pushed main SHA, gauntlet = 588a81e8,
-   superpowers per arm = fd02874a / 069edf3f), 50 cells, 150 planned slots,
+   superpowers per arm = fd02874a / 069edf3f), 50 cells, 130 planned slots,
    the pricing snapshot digest, and that every surface arm shows
    `effort: xhigh`.
 6. **Run and watch.** `campaign run`, then `status` and `costs` periodically.
@@ -353,9 +351,10 @@ observations are appended after the run.
 - No new report schema fields beyond verdict provenance `effort`.
 - No repair or reuse of the two negative six-arm diagnostics.
 
-## Open items for Drew
+## Open items (resolved by Drew, 2026-09-06)
 
-1. Fractals variant: `sdd-go-fractals-opus48` (recommended) or `-gpt55`.
-2. Budget: option 1, 2, or 3 above.
-3. Landing: PR or direct merge to main.
-4. Authorization for the pre-campaign smoke (about $1).
+1. Fractals variant: `sdd-go-fractals-opus48`.
+2. Budget: fractals at n=3 for every model, and the ledger cap raised to
+   $1,500.
+3. Landing: direct merge to `main`.
+4. Pre-campaign smoke: authorized.
