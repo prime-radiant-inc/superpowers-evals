@@ -1,0 +1,50 @@
+{
+  "codex_version": "0.146.0",
+  "native_elf_sha256": "2e863156ed35ecc5253b1e2f907a9143077b9f7cb51942070c61996471ff6e04",
+  "source_commit": "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
+  "capture": "Pinned native Linux CLI with deterministic loopback provider. No real model calls. Native capture and cleanup owned by separate capture agent.",
+  "selection": "Raw manifests and complete trace JSONL are unchanged. Only needed linked payload members are copied. Ordinary session fixtures retain unchanged session metadata, outer exec call, inner patch event, and outer output in source order; other ordinary rows omitted. No native edges or results synthesized.",
+  "scope": "Captured add-file completed and failed outcomes qualified. Delete/update file-change and declined status schema members follow exact source. This proves source parsing, not observer installation or live evaluation readiness.",
+  "receipts": [
+    {
+      "fixture": "codex-0.146.0-trace-text.json",
+      "fixture_sha256": "a4d5c69e0d6ff3cf071372e788af6560db1dc52054b1bb336cb90de5356e0296",
+      "private_capture": ".superpowers/sdd/2026-09-05-pr2258-completion/diagnostic-r3-offline/codex-trace-text/capture/codex-parent/home/.codex/rollout-traces/trace-36120f96-9698-44f0-8fcf-1b90ac9a78dd-01a075b7-4ea7-7f53-a086-3d455194b767",
+      "trace_sha256": "45e5cf6291614d2ad3f658365a6b62427aa1728218bb1a435d3b9e35d83e0846",
+      "raw_trace_rows": 18,
+      "payload_members": ["payloads/1.json"]
+    },
+    {
+      "fixture": "codex-0.146.0-trace-patch-failed.json",
+      "fixture_sha256": "72283af055f7610d263f9d8c23080509512cf36d2f773a421fabddb461e9c5f8",
+      "private_capture": ".superpowers/sdd/2026-09-05-pr2258-completion/diagnostic-r3-offline/codex-trace-nested/codex-parent/home/.codex/rollout-traces/trace-a26b207b-3084-4f8f-9ed8-61294d60acc8-01a075bc-220b-7fd0-8bbe-6605e2e41099",
+      "trace_sha256": "37737ab2f5d5b7fcc2652ed7881a220824ee9faed5c4044c126bc2d083586500",
+      "raw_trace_rows": 22,
+      "payload_members": [
+        "payloads/1.json",
+        "payloads/6.json",
+        "payloads/7.json",
+        "payloads/8.json",
+        "payloads/9.json"
+      ],
+      "ordinary_source_sha256": "52993255d216d393f2ebd38972306ad7b158797ea91537f4a6798d0528b72fbe",
+      "ordinary_selected_lines": [1, 11, 12, 13]
+    },
+    {
+      "fixture": "codex-0.146.0-trace-patch-completed.json",
+      "fixture_sha256": "7ef889e5fa559edb880df6265cbfad404ffa669cd2add1a5f27318867a4ba234",
+      "private_capture": ".superpowers/sdd/2026-09-05-pr2258-completion/diagnostic-r3-offline/codex-trace-success/codex-parent/home/.codex/rollout-traces/trace-1dfb767b-74ad-4d66-a344-2e853534e705-01a075bd-59ee-7ae0-aa4a-5ca58fbdeb60",
+      "trace_sha256": "b403ca5ff23e8cec0eac9826ba80c43c32e03005c2d030b68a4b206ecb309a54",
+      "raw_trace_rows": 27,
+      "payload_members": [
+        "payloads/1.json",
+        "payloads/6.json",
+        "payloads/7.json",
+        "payloads/8.json",
+        "payloads/9.json"
+      ],
+      "ordinary_source_sha256": "ddc5ef26afee323e089db514acb88897cd9e5ac1b350b6063bf0c58e404e91c9",
+      "ordinary_selected_lines": [1, 11, 12, 13]
+    }
+  ]
+}
