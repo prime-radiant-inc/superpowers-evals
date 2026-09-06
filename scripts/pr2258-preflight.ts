@@ -45,8 +45,11 @@ export const PR2258_INSTRUMENT_FILES = [
   'src/experiments/observer/codex.ts',
   'src/experiments/observer/contracts.ts',
   'src/experiments/observer/final-state.ts',
+  'src/experiments/observer/independent-review.ts',
   'src/experiments/observer/raw.ts',
+  'src/experiments/observer/readout.ts',
   'src/experiments/observer/review.ts',
+  'src/experiments/observer/score.ts',
 ] as const;
 
 const RuntimeReceiptSchema = z
@@ -148,7 +151,8 @@ export const Pr2258QualificationReceiptsSchema = z
     exposure: z
       .object({
         fake_provider_six_way_overlap_verified: z.boolean(),
-        maximum_start_skew_s: z.number().nonnegative().nullable(),
+        maximum_start_skew_s: z.number().nonnegative(),
+        start_skew_margin_s: z.number().nonnegative(),
         receipt_sha256: z.string().nullable(),
       })
       .strict(),
@@ -647,11 +651,18 @@ export function validatePr2258Preflight(
   }
   if (!qualification.exposure.fake_provider_six_way_overlap_verified)
     blockers.push('fake-provider six-way overlap is not verified');
-  if (
-    qualification.exposure.maximum_start_skew_s !== null &&
-    qualification.exposure.maximum_start_skew_s > suite.max_exposure_skew
-  )
-    blockers.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
+  const fakeProviderSkew = qualification.exposure.maximum_start_skew_s;
+  if (typeof fakeProviderSkew !== 'number' || !Number.isFinite(fakeProviderSkew))
+    blockers.push('fake-provider maximum start skew evidence is missing');
+  else {
+    if (fakeProviderSkew > suite.max_exposure_skew)
+      blockers.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
+    const expectedMargin = Math.max(0, suite.max_exposure_skew - fakeProviderSkew);
+    if (qualification.exposure.start_skew_margin_s !== expectedMargin)
+      blockers.push(
+        `fake-provider start skew margin must be ${expectedMargin} seconds, got ${qualification.exposure.start_skew_margin_s}`,
+      );
+  }
   if (!hasReceiptDigest(qualification.exposure.receipt_sha256))
     blockers.push('six-way exposure receipt is missing');
 
@@ -687,6 +698,15 @@ export function validatePr2258Preflight(
         ...Object.values(diagnostic.served_model_ids),
         ...diagnostic.delegate_model_ids,
       ];
+      const expectedServedModels = [
+        ['Astra subject', diagnostic.served_model_ids.astra_subject, 'gpt-6-astra'],
+        ['Sol subject', diagnostic.served_model_ids.sol_subject, 'gpt-5.6-sol'],
+        ['Opus subject', diagnostic.served_model_ids.opus_subject, 'anthropic.claude-opus-5'],
+        ['Sonnet grader', diagnostic.served_model_ids.sonnet_grader, EXPECTED_GRADER_MODEL],
+      ] as const;
+      for (const [role, actual, expected] of expectedServedModels)
+        if (actual !== expected)
+          blockers.push(`${role} served ${actual}; expected exact approved model ${expected}`);
       for (const model of observedModels)
         if (!diagnostic.priced_models.includes(model))
           blockers.push(`diagnostic observed model ${model} is not priced for its endpoint`);

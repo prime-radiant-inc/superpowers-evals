@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,7 +10,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
   digestPr2258InstrumentFiles,
@@ -227,6 +228,7 @@ function completeReceipts(
     exposure: {
       fake_provider_six_way_overlap_verified: true,
       maximum_start_skew_s: 60,
+      start_skew_margin_s: 0,
       receipt_sha256: '6'.repeat(64),
     },
   };
@@ -268,12 +270,40 @@ function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function writeSourceFixture(root: string): string {
+  const sourceRoot = join(root, 'source-fixture');
+  const declarationPaths = [
+    'credentials.yaml',
+    'suites/pr2258_parallel_diagnostic.yaml',
+    'suites/pr2258_parallel_measured.yaml',
+    'docs/experiments/2026-09-05-pr2258-parallel-pricing/current.json',
+    ...EXPECTED_PAIRS.flatMap(([baseline, treatment]) => [
+      `arms/${baseline}.yaml`,
+      `arms/${treatment}.yaml`,
+    ]),
+  ];
+  for (const path of [...declarationPaths, ...PR2258_INSTRUMENT_FILES]) {
+    const destination = join(sourceRoot, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    const source = join(ROOT, path);
+    writeFileSync(
+      destination,
+      existsSync(source)
+        ? readFileSync(source)
+        : `export const pr2258TestFixture = ${JSON.stringify(path)};\n`,
+    );
+  }
+  return sourceRoot;
+}
+
 function writeReceiptSet(root: string): {
   manifestPath: string;
   capabilityPath: string;
   diagnosticPath: string;
+  sourceRoot: string;
 } {
   mkdirSync(root, { recursive: true });
+  const sourceRoot = writeSourceFixture(root);
   const { suite } = loadSuite('measured');
   const arms = loadArms();
   const qualification = completeReceipts(suite, arms);
@@ -313,7 +343,7 @@ function writeReceiptSet(root: string): {
   const diagnosticGo = completeDiagnosticGo(suite, qualification);
   const instrumentFiles = PR2258_INSTRUMENT_FILES.map((path) => ({
     path,
-    sha256: sha256(readFileSync(join(ROOT, path))),
+    sha256: sha256(readFileSync(join(sourceRoot, path))),
   }));
   const instrumentSha256 = digestPr2258InstrumentFiles(instrumentFiles);
   diagnosticGo.instrument_sha256 = instrumentSha256;
@@ -369,7 +399,7 @@ function writeReceiptSet(root: string): {
   };
   const manifestPath = join(root, 'receipt-set.json');
   writeFileSync(manifestPath, JSON.stringify(manifest));
-  return { manifestPath, capabilityPath, diagnosticPath };
+  return { manifestPath, capabilityPath, diagnosticPath, sourceRoot };
 }
 
 test.each([
@@ -464,9 +494,7 @@ test('parsed public policy supports the exact six-subject and six-grader wave', 
 });
 
 test('capability receipts make the diagnostic experiment ready before provider observations', () => {
-  const result = preflight('diagnostic', ({ receipts }) => {
-    receipts.exposure.maximum_start_skew_s = null;
-  });
+  const result = preflight('diagnostic');
   expect(result).toEqual({
     ready: true,
     blockers: [],
@@ -483,6 +511,25 @@ test('capability receipts make the diagnostic experiment ready before provider o
       grader_demand_by_model: { 'anthropic.claude-sonnet-5': 6 },
     }),
   });
+});
+
+test('diagnostic capability requires finite fake-provider skew and exact margin', () => {
+  const missingSkew = preflight('diagnostic', ({ receipts }) => {
+    Reflect.set(receipts.exposure, 'maximum_start_skew_s', null);
+  });
+  expect(missingSkew.ready).toBe(false);
+  expect(missingSkew.blockers).toContain(
+    'fake-provider maximum start skew evidence is missing',
+  );
+
+  const wrongMargin = preflight('diagnostic', ({ receipts }) => {
+    receipts.exposure.maximum_start_skew_s = 55;
+    receipts.exposure.start_skew_margin_s = 0;
+  });
+  expect(wrongMargin.ready).toBe(false);
+  expect(wrongMargin.blockers).toContain(
+    'fake-provider start skew margin must be 5 seconds, got 0',
+  );
 });
 
 test('measured experiment blocks without a diagnostic GO receipt', () => {
@@ -529,6 +576,33 @@ test('measured experiment rejects a diagnostic NO-GO bound to wrong artifacts', 
       expect.stringMatching(/diagnostic six-way start skew/i),
       expect.stringMatching(/grader 429/i),
       expect.stringMatching(/independent review is not GO/i),
+    ]),
+  );
+});
+
+test('measured experiment rejects role-swapped served model IDs', () => {
+  const result = preflight('measured', undefined, true, (diagnostic) => {
+    const astra = diagnostic.served_model_ids.astra_subject;
+    diagnostic.served_model_ids.astra_subject =
+      diagnostic.served_model_ids.sol_subject;
+    diagnostic.served_model_ids.sol_subject = astra;
+  });
+
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(/Astra subject served.*gpt-6-astra/i),
+      expect.stringMatching(/Sol subject served.*gpt-5.6-sol/i),
+    ]),
+  );
+});
+
+test('instrument inventory includes scoring, independent review and readout', () => {
+  expect(PR2258_INSTRUMENT_FILES).toEqual(
+    expect.arrayContaining([
+      'src/experiments/observer/score.ts',
+      'src/experiments/observer/independent-review.ts',
+      'src/experiments/observer/readout.ts',
     ]),
   );
 });
@@ -658,8 +732,8 @@ test('equal-priority suite blocks visit all comparisons before repetition two', 
 test('no-follow receipt-set loader accepts exact reviewed artifacts and source bytes', () => {
   const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
   try {
-    writeReceiptSet(root);
-    const input = loadPr2258ReceiptSet(ROOT, root, 'measured');
+    const paths = writeReceiptSet(root);
+    const input = loadPr2258ReceiptSet(paths.sourceRoot, root, 'measured');
 
     expect(validatePr2258Preflight(input).ready).toBe(true);
     expect(input.diagnosticGo?.review_receipt_authenticated).toBe(true);
@@ -674,15 +748,15 @@ test('receipt-set loader rejects altered and missing reviewed artifacts', () => 
   try {
     const altered = writeReceiptSet(alteredRoot);
     writeFileSync(altered.capabilityPath, '{}');
-    expect(() => loadPr2258ReceiptSet(ROOT, alteredRoot, 'diagnostic')).toThrow(
-      /capability review digest/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(altered.sourceRoot, alteredRoot, 'diagnostic'),
+    ).toThrow(/capability review digest/i);
 
     const missing = writeReceiptSet(missingRoot);
     unlinkSync(missing.diagnosticPath);
-    expect(() => loadPr2258ReceiptSet(ROOT, missingRoot, 'measured')).toThrow(
-      /diagnostic GO review/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(missing.sourceRoot, missingRoot, 'measured'),
+    ).toThrow(/diagnostic GO review/i);
   } finally {
     rmSync(alteredRoot, { recursive: true, force: true });
     rmSync(missingRoot, { recursive: true, force: true });
@@ -701,9 +775,9 @@ test('receipt-set loader rejects a missing referenced qualification receipt', ()
     >;
     unlinkSync(join(root, receipts[0]!['path'] as string));
 
-    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
-      /qualification evidence receipt/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/qualification evidence receipt/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -718,9 +792,9 @@ test('receipt-set loader refuses a symlinked reviewed artifact', () => {
     unlinkSync(paths.capabilityPath);
     symlinkSync('capability-target.json', paths.capabilityPath);
 
-    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
-      /capability review/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/capability review/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -738,9 +812,23 @@ test('receipt-set loader hashes each exact observer instrument source file', () 
     files[0]!['sha256'] = '0'.repeat(64);
     writeFileSync(paths.manifestPath, JSON.stringify(manifest));
 
-    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
-      /observer instrument.*digest/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/observer instrument.*digest/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt-set loader blocks when a required instrument source is absent', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    unlinkSync(join(paths.sourceRoot, 'src/experiments/observer/readout.ts'));
+
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/observer instrument.*readout\.ts/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -767,9 +855,9 @@ test('receipt-set loader rejects a reviewed receipt bound to a different pin', (
     capabilityRef['sha256'] = sha256(bytes);
     writeFileSync(paths.manifestPath, JSON.stringify(manifest));
 
-    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
-      /capability review binding/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/capability review binding/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -798,9 +886,9 @@ test('receipt-set loader hashes current pricing bytes instead of trusting its ma
     capabilityRef['sha256'] = sha256(capabilityBytes);
     writeFileSync(paths.manifestPath, JSON.stringify(manifest));
 
-    expect(() => loadPr2258ReceiptSet(ROOT, root, 'diagnostic')).toThrow(
-      /source pricing snapshot digest/i,
-    );
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/source pricing snapshot digest/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
