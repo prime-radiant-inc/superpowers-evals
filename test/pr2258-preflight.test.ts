@@ -572,6 +572,22 @@ const deferredQualificationCases: {
     gap: /Claude native chronology/,
   },
   {
+    name: 'unverified account capacity',
+    mutate: (receipts) => {
+      receipts.capacity.accounts[1]!.verified = false;
+      receipts.capacity.accounts[1]!.max_concurrency = 0;
+    },
+    gap: /account bedrock-account capacity is unverified/,
+  },
+  {
+    name: 'unverified model capacity',
+    mutate: (receipts) => {
+      receipts.capacity.models[3]!.verified = false;
+      receipts.capacity.models[3]!.max_concurrency = 0;
+    },
+    gap: /model anthropic.claude-sonnet-5 has no verified capacity receipt/,
+  },
+  {
     name: 'fake capacity',
     mutate: (receipts) => {
       receipts.capacity.fake_provider_six_way_verified = false;
@@ -797,6 +813,7 @@ test('account and per-model capacity evidence are independent blockers', () => {
   const account = preflight('diagnostic', ({ receipts }) => {
     receipts.capacity.accounts[0]!.max_concurrency = 3;
   });
+  expect(account.ready).toBe(false);
   expect(account.blockers).toContain(
     'account openai-subject-account needs 4 concurrent calls but verified capacity is 3',
   );
@@ -804,8 +821,37 @@ test('account and per-model capacity evidence are independent blockers', () => {
   const model = preflight('diagnostic', ({ receipts }) => {
     receipts.capacity.models[3]!.max_concurrency = 5;
   });
+  expect(model.ready).toBe(false);
   expect(model.blockers).toContain(
     'model anthropic.claude-sonnet-5 needs 6 concurrent calls but verified capacity is 5',
+  );
+});
+
+test.each([
+  'diagnostic',
+  'measured',
+] as const)('%s requires declared account mappings even when capacity is unverified', (suiteName) => {
+  const result = preflight(suiteName, ({ receipts }) => {
+    receipts.capacity.accounts[0]!.credentials = ['openai_responses_6astra'];
+    receipts.capacity.accounts[0]!.verified = false;
+    receipts.capacity.accounts[0]!.max_concurrency = 0;
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    'credential openai_responses_56sol has no aggregate account capacity receipt',
+  );
+});
+
+test.each([
+  'diagnostic',
+  'measured',
+] as const)('%s requires a declared capacity row for each active model', (suiteName) => {
+  const result = preflight(suiteName, ({ receipts }) => {
+    receipts.capacity.models.pop();
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    'model anthropic.claude-sonnet-5 has no verified capacity receipt',
   );
 });
 

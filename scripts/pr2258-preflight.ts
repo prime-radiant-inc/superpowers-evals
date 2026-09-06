@@ -607,7 +607,7 @@ export function validatePr2258Preflight(
       needed += demandByCredential[credential] ?? 0;
     }
     if (!account.verified)
-      blockers.push(`account ${account.account} capacity is unverified`);
+      qualificationChecks.push(`account ${account.account} capacity is unverified`);
     else if (account.max_concurrency < needed)
       blockers.push(`account ${account.account} needs ${needed} concurrent calls but verified capacity is ${account.max_concurrency}`);
   }
@@ -631,8 +631,10 @@ export function validatePr2258Preflight(
   }
   for (const [model, needed] of Object.entries(modelDemand)) {
     const receipt = modelReceipts.get(model);
-    if (receipt === undefined || !receipt.verified)
+    if (receipt === undefined)
       blockers.push(`model ${model} has no verified capacity receipt`);
+    else if (!receipt.verified)
+      qualificationChecks.push(`model ${model} has no verified capacity receipt`);
     else if (receipt.max_concurrency < needed)
       blockers.push(`model ${model} needs ${needed} concurrent calls but verified capacity is ${receipt.max_concurrency}`);
   }
