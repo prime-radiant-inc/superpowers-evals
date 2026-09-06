@@ -140,3 +140,28 @@ image digest. These are runtime inventory facts, not native grammar evidence.
 The existing fake provider only drives non-streaming Gauntlet requests; a small
 test-only streaming provider is being implemented to support native CLI capture
 without inference spending. Linux capture still requires its concrete gate.
+
+## Reviewed source integration
+
+Task 2 receipt access passed both scoped fix reviews: the actor can discover
+validated receipts through model-visible tool results, and pages fit a 32 KiB
+serialized UTF-8 bound even with deep paths. Worker reports 31 capture and
+Gauntlet journey tests passing. Integrated source ends at `841a2c28`.
+Task 3 reviewed corrections end at `86601219`. Their native authority and
+passing cross-dialect/descendant requirements remain open.
+
+Task 6 source is reviewed and integrated through `4fde4c1c`. The second fix
+round binds served models to their exact roles, includes scoring and readout
+files in the instrument inventory, and requires finite fake-provider start skew
+and its margin to the fixed 60-second bound. All review findings are addressed;
+worker reports 26 focused tests, typecheck and lint passing. The runtime
+projection, served/delegate/cache and quota requirements remain unverified and
+are retained as operational gates, including the unchecked runtime proof item
+in Task 6. The preflight cannot return ready merely because its source tests pass.
+
+The producer uncovered an existing file-only publisher limitation: required empty
+artifact directories would be rejected. The implementation may supply only the
+verified bundle's normalized run-relative directory inventory to that existing
+check. The mandatory observer gate must authenticate it first. If wrong, unlisted
+directories could publish; exact added/deleted/empty-directory tests cover this
+ruling without a new manifest schema or optional validation callback.
