@@ -1,0 +1,19 @@
+{
+  "source_sha256": "302610f138d764cbac11537d0274dcf6101652a11b8bef3cee1ff1e08bef6307",
+  "fixture_sha256": "4b4d031abe10e21f90f30e433347d05083babb4932f2df6e9715cbbcbc11c48f",
+  "capture_source_commit": "6e63aa17cc9b52bf31c17e576ab86fd8fb5edb5e",
+  "physical_lines": [1, 13, 14, 16, 17, 18, 19, 20, 21],
+  "transformation": "Selected actual header and second-turn rows, compact JSON reserialization; generic bundled instruction text omitted only from header base_instructions.text and thread_settings.collaboration_mode.settings.developer_instructions",
+  "privacy_review": "Inspected selected rows: synthetic capture paths, generated session/turn IDs, generic scripted text and local-provider counters. No credentials or personal content.",
+  "limits": "Two native text turns; no tools or descendants. Parent-reported capture result CAPTURED with cleanup stopped, two inputs and two responses; full raw independently replayed through adapter and binding.",
+  "image": "sha256:500e28caf737a820c3f30f21f757b089b8d548081e714e1a20dff1a82de37691",
+  "native_binary_sha256": "2e863156ed35ecc5253b1e2f907a9143077b9f7cb51942070c61996471ff6e04",
+  "unchanged_full_raw_replay": {
+    "physical_lines": 21,
+    "conversation": "parent",
+    "physical_calls": 0,
+    "scripted_user_lines": [7, 16],
+    "assistant_lines": [10, 19],
+    "adapter": "indexCodexTranscript via indexBoundObserverSource"
+  }
+}

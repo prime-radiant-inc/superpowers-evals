@@ -212,3 +212,43 @@ test('partial world updates retain metadata and reject conflicting local identit
     ),
   ).toThrow();
 });
+
+test('native second-turn settings preserve the later typed input and response', () => {
+  const second = readFileSync(
+    new URL(
+      './fixtures/observer/codex-0.146.0-second-turn.jsonl',
+      import.meta.url,
+    ),
+  );
+  const header = JSON.parse(second.toString().split('\n')[0]!).payload;
+  const actualSource = { ...source, expected_session_id: header.id };
+  const index = indexBoundObserverSource(binding, actualSource, second);
+  expect(
+    index.entries
+      .filter((entry) => entry.kind === 'message')
+      .map((entry) => entry.text),
+  ).toEqual([
+    'I approve this text-only capture. Please acknowledge native capture input two. Do not use tools.',
+    'Native capture response two complete.',
+  ]);
+  expect(
+    index.entries.flatMap((entry) =>
+      entry.kind === 'message' && entry.role === 'user'
+        ? [entry.approval_eligibility]
+        : [],
+    ),
+  ).toEqual(['eligible']);
+  const rows = second
+    .toString()
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  rows[1].payload.thread_settings.cwd = '/foreign';
+  expect(() =>
+    indexBoundObserverSource(
+      binding,
+      actualSource,
+      Buffer.from(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`),
+    ),
+  ).toThrow();
+});

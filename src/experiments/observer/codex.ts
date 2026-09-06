@@ -873,6 +873,39 @@ export function indexCodexTranscript(
       continue;
     }
     if (type === 'event_msg') {
+      const payload = row.value['payload'];
+      if (
+        source.expected_cli_version === '0.146.0' &&
+        payload !== undefined &&
+        isJsonObject(payload) &&
+        payload['type'] === 'thread_settings_applied'
+      ) {
+        if (
+          Object.keys(payload).some(
+            (key) => key !== 'type' && key !== 'thread_settings',
+          )
+        )
+          fail(
+            'unknown_record',
+            'Thread settings event has an uninspected field.',
+            row.anchor,
+          );
+        checkContextIdentity(
+          requireObject(
+            payload['thread_settings'],
+            row.anchor,
+            'Thread settings',
+          ),
+          source,
+          row.anchor,
+        );
+        entries.push({
+          kind: 'non_action',
+          anchor: row.anchor,
+          record_type: 'event_msg.thread_settings_applied',
+        });
+        continue;
+      }
       const native =
         source.expected_cli_version === '0.146.0'
           ? NativeEventSchema.safeParse(row.value['payload'])
