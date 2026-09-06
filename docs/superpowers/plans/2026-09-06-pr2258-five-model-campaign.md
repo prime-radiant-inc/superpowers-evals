@@ -1233,17 +1233,45 @@ test('a run effort refuses a scenario fragment that already sets model_reasoning
 Run: `bun test test/agent-codex.test.ts`
 Expected: FAIL — the four new tests: the config lacks the effort block; the collision test does not throw.
 
-- [ ] **Step 3: Implement the effort prepender**
+- [ ] **Step 3: Implement the effort prepender over a shared prepend helper**
 
-In `src/agents/codex.ts`, add after `prependScenarioConfigFragment`:
+In `src/agents/codex.ts`, replace the body of `prependScenarioConfigFragment` so both prependers share one helper, and add `prependEffortKey` after it. The fragment function's bytes-on-disk behavior is unchanged (the existing fragment tests stay green):
 
 ```ts
+// Prepend `block` (newline-terminated) plus a separating blank line ahead of
+// the generated config so its bare keys stay at TOML root scope — appending
+// would place them inside the config's last [table]. A stock subscription
+// arm may generate no config of its own; the block then stands as the whole
+// file rather than failing on the absent generated config.
+function prependConfigBlock(configPath: string, block: string): void {
+  const generated = existsSync(configPath)
+    ? readFileSync(configPath, 'utf8')
+    : '';
+  writeFileSync(configPath, `${block}\n${generated}`);
+}
+
+// Prepend a scenario's codex.config.toml fragment to the generated config.toml:
+// a provenance comment, then the fragment byte-exact. A run without a scenario
+// dir, or a scenario without the fragment, leaves the generated config
+// untouched.
+function prependScenarioConfigFragment(
+  configPath: string,
+  scenarioDir: string | undefined,
+): void {
+  if (scenarioDir === undefined) return;
+  const fragmentPath = join(scenarioDir, 'codex.config.toml');
+  if (!existsSync(fragmentPath)) return;
+  prependConfigBlock(
+    configPath,
+    `# prepended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}`,
+  );
+}
+
 // Root-level `model_reasoning_effort` requested by the run (an arm-level
-// effort in campaigns, or `quorum run --effort`). Prepended for the same
-// reason the scenario fragment is: a bare key must precede every generated
-// [table] to stay at TOML root scope. A scenario fragment that also sets the
-// key would make the file a duplicate-key TOML error inside codex — a silent
-// indeterminate — so the collision is refused here, loudly, at setup.
+// effort in campaigns, or `quorum run --effort`). A scenario fragment that
+// also sets the key would make the file a duplicate-key TOML error inside
+// codex — a silent indeterminate — so the collision is refused here, loudly,
+// at setup.
 function prependEffortKey(
   configPath: string,
   effort: string | undefined,
@@ -1261,12 +1289,9 @@ function prependEffortKey(
       );
     }
   }
-  const generated = existsSync(configPath)
-    ? readFileSync(configPath, 'utf8')
-    : '';
-  writeFileSync(
+  prependConfigBlock(
     configPath,
-    `# effort requested by the run\nmodel_reasoning_effort = "${tomlBasicString(effort)}"\n\n${generated}`,
+    `# effort requested by the run\nmodel_reasoning_effort = "${tomlBasicString(effort)}"\n`,
   );
 }
 ```
@@ -2346,7 +2371,12 @@ Expected: push succeeds; record the new main SHA (call it `MAIN_SHA` below).
 
 ### Task 12: Appliance install and the effort smoke campaign
 
-Operator steps over Tailscale SSH. Report JSON fields and counts only.
+Operator steps over Tailscale SSH. Report JSON fields and counts only. The
+`jq` field paths in Tasks 12 and 13 are the operator's reading guide, not a
+verified contract: on the first call of each helper verb, print the whole
+JSON with `jq .`, confirm the field names, and adapt the filter before
+relying on it. A missing field is a reason to look, never a reason to
+proceed.
 
 - [ ] **Step 1: Preconditions**
 
