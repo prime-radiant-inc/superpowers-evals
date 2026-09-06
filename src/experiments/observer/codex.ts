@@ -573,6 +573,20 @@ function indexMessage(
   return entries;
 }
 
+const NativeReasoningSchema = z
+  .object({
+    type: z.literal('reasoning'),
+    id: z.string().min(1),
+    summary: z.array(
+      z.object({ type: z.literal('summary_text'), text: z.string() }).strict(),
+    ),
+    encrypted_content: z.string().min(1),
+    internal_chat_message_metadata_passthrough: z
+      .object({ turn_id: z.string().min(1) })
+      .strict(),
+  })
+  .strict();
+
 function indexResponseItem(
   payloadValue: JsonValue | undefined,
   anchor: RawAnchor,
@@ -580,11 +594,24 @@ function indexResponseItem(
   calls: Map<string, CallRecord>,
   results: Map<string, ReplayRecord>,
   messages: Map<string, ReplayRecord>,
+  cliVersion: string,
 ): RawEntry[] {
   const payload = requireObject(payloadValue, anchor, 'response_item payload');
   const type = payload['type'];
   if (typeof type !== 'string' || type.length === 0) {
     fail('invalid_record', 'Response item type is required.', anchor);
+  }
+  if (type === 'reasoning' && cliVersion === '0.146.0') {
+    if (!NativeReasoningSchema.safeParse(payload).success)
+      fail(
+        'unknown_record',
+        'Reasoning shape is outside the inspected dialect.',
+        anchor,
+      );
+    // Reasoning describes internal deliberation, never approval or a physical action.
+    return [
+      { kind: 'non_action', anchor, record_type: 'response_item.reasoning' },
+    ];
   }
   if (type === 'message') {
     return indexMessage(payload, anchor, identity, messages);
@@ -647,11 +674,12 @@ const TurnContextSchema = z
 // Native 0.146.0 event telemetry duplicates messages or records turn status.
 // It grants no approval or tool authority.
 const NativeEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('agent_reasoning'), text: z.string() }).strict(),
   z
     .object({
       type: z.literal('agent_message'),
       message: z.string(),
-      phase: z.null(),
+      phase: z.enum(['commentary', 'final_answer']).nullable(),
       memory_citation: z.null(),
     })
     .strict(),
@@ -939,6 +967,7 @@ export function indexCodexTranscript(
           calls,
           results,
           messages,
+          source.expected_cli_version,
         ),
       );
       continue;

@@ -252,3 +252,98 @@ test('native second-turn settings preserve the later typed input and response', 
     ),
   ).toThrow();
 });
+
+const reasoningRows: NativeRow[] = readFileSync(
+  new URL('./fixtures/observer/codex-0.146.0-reasoning.jsonl', import.meta.url),
+  'utf8',
+)
+  .trimEnd()
+  .split('\n')
+  .map((line) => JSON.parse(line));
+const reasoningSource: RawSource = {
+  ...source,
+  expected_session_id: 'reasoning-fixture',
+  expected_cwd: '/fixture',
+};
+function indexReasoningRows(rows: NativeRow[]) {
+  return indexCodexTranscript(
+    reasoningSource,
+    Buffer.from(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`),
+  );
+}
+
+test.each([
+  2, 3, 4, 5, 9,
+])('native metadata fixture row %d contributes no message or physical action', (row) => {
+  const index = indexReasoningRows([reasoningRows[0]!, reasoningRows[row]!]);
+  expect(index.entries).toHaveLength(2);
+  expect(index.entries.every((entry) => entry.kind === 'non_action')).toBe(
+    true,
+  );
+});
+
+test('reasoning metadata preserves actual messages and physical call chronology', () => {
+  const index = indexReasoningRows(reasoningRows);
+  expect(
+    index.entries.flatMap((entry) =>
+      entry.kind === 'message'
+        ? [[entry.anchor.line, entry.text, entry.approval_eligibility]]
+        : [],
+    ),
+  ).toEqual([
+    [2, 'Please inspect the working directory.', 'eligible'],
+    [7, 'Inspecting the directory.', 'ineligible'],
+    [11, 'Inspection complete.', 'ineligible'],
+  ]);
+  expect(
+    index.entries.flatMap((entry) =>
+      entry.kind === 'call' || entry.kind === 'result'
+        ? [[entry.kind, entry.anchor.line]]
+        : [],
+    ),
+  ).toEqual([
+    ['call', 8],
+    ['result', 9],
+  ]);
+  const result = index.entries.find((entry) => entry.kind === 'result');
+  expect(result?.kind === 'result' && result.call_anchor.line).toBe(8);
+});
+
+test.each([
+  [2, 'type', 'uninspected_reasoning'],
+  [2, 'id', null],
+  [2, 'encrypted_content', {}],
+  [2, 'summary', [{ type: 'function_call', text: 'pwd' }]],
+  [2, 'summary', [{ type: 'summary_text', text: 1 }]],
+  [2, 'summary', [{ type: 'summary_text', text: 'text', action: {} }]],
+  [2, 'internal_chat_message_metadata_passthrough', { turn_id: 1 }],
+  [
+    2,
+    'internal_chat_message_metadata_passthrough',
+    { turn_id: 't', action: {} },
+  ],
+  [2, 'hidden_action', {}],
+  [3, 'text', {}],
+  [3, 'hidden_action', {}],
+  [5, 'phase', 'uninspected_phase'],
+  [5, 'hidden_action', {}],
+] as const)('native metadata rejects uninspected row %d field %s', (row, field, value) => {
+  const changedRow = structuredClone(reasoningRows[row]!);
+  changedRow.payload[field] = value;
+  expect(() => indexReasoningRows([reasoningRows[0]!, changedRow])).toThrow();
+});
+
+test('reasoning metadata does not widen older Codex dialects', () => {
+  const header = structuredClone(reasoningRows[0]!);
+  header.payload['cli_version'] = '0.144.3';
+  for (const row of [2, 3, 5]) {
+    expect(() =>
+      indexCodexTranscript(
+        { ...reasoningSource, expected_cli_version: '0.144.3' },
+        Buffer.from(
+          `${JSON.stringify(header)}\n${JSON.stringify(reasoningRows[row])}\n`,
+        ),
+      ),
+    ).toThrow();
+  }
+});
