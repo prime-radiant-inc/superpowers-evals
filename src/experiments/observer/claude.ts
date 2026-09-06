@@ -85,6 +85,139 @@ function contentBlocks(
   });
 }
 
+/** Only the captured native CLI input envelope grants human authority. */
+function isInspectedNativeParentInput(row: JsonObject): boolean {
+  const origin = row['origin'];
+  return (
+    row['type'] === 'user' &&
+    isObject(origin) &&
+    Object.keys(origin).length === 1 &&
+    origin['kind'] === 'human' &&
+    row['promptSource'] === 'typed' &&
+    row['entrypoint'] === 'cli' &&
+    row['userType'] === 'external' &&
+    row['isSidechain'] === false &&
+    row['parentUuid'] === null &&
+    row['agentId'] === undefined &&
+    row['version'] === '2.1.209' &&
+    typeof row['sessionId'] === 'string' &&
+    row['sessionId'].length > 0 &&
+    typeof row['cwd'] === 'string' &&
+    row['cwd'].length > 0 &&
+    row['isCompactSummary'] !== true &&
+    isObject(row['message']) &&
+    row['message']['role'] === 'user' &&
+    typeof row['message']['content'] === 'string'
+  );
+}
+
+export function inspectedClaudeParentIdentity(raw: Uint8Array): {
+  session_id: string;
+  cwd: string;
+  cli_version: string;
+} | null {
+  const placeholder: RawSource = {
+    source_id: 'claude-parent-discovery',
+    runtime: 'claude',
+    expected_session_id: 'unresolved',
+    expected_cwd: 'unresolved',
+    expected_cli_version: '2.1.209',
+  };
+  const rows = parseCompleteJsonl(placeholder, raw);
+  const parent = rows.find(({ value }) => isInspectedNativeParentInput(value));
+  if (!parent) {
+    for (const { value, anchor } of rows) {
+      const type = recordType(value, anchor);
+      if (
+        type !== 'mode' &&
+        type !== 'permission-mode' &&
+        type !== 'file-history-snapshot'
+      ) {
+        unknownRecord(
+          'Claude source has no inspected native parent input.',
+          anchor,
+        );
+      }
+      inspectNativeMetadata(value, type, anchor);
+    }
+    return null;
+  }
+  const source = {
+    ...placeholder,
+    expected_session_id: parent.value['sessionId'] as string,
+    expected_cwd: parent.value['cwd'] as string,
+  };
+  const index = indexClaudeTranscript(source, raw);
+  if (index.identity.conversation !== 'parent') {
+    throw new ObserverEvidenceError(
+      'identity_conflict',
+      'Claude source contradicts native parent provenance.',
+    );
+  }
+  return {
+    session_id: source.expected_session_id,
+    cwd: source.expected_cwd,
+    cli_version: source.expected_cli_version,
+  };
+}
+
+function exactKeys(row: JsonObject, keys: string[], anchor: RawAnchor): void {
+  if (Object.keys(row).some((key) => !keys.includes(key))) {
+    unknownRecord('Claude metadata includes an uninspected field.', anchor);
+  }
+}
+
+function inspectNativeMetadata(
+  row: JsonObject,
+  type: string,
+  anchor: RawAnchor,
+): void {
+  if (
+    type !== 'file-history-snapshot' &&
+    (typeof row['sessionId'] !== 'string' || row['sessionId'].length === 0)
+  ) {
+    invalidRecord('Claude native metadata has no session identity.', anchor);
+  }
+  if (type === 'mode' || type === 'permission-mode') {
+    const key = type === 'mode' ? 'mode' : 'permissionMode';
+    exactKeys(row, ['type', key, 'sessionId'], anchor);
+    if (row[key] !== (type === 'mode' ? 'normal' : 'dontAsk')) {
+      unknownRecord('Claude metadata variant is not inspected.', anchor);
+    }
+  } else if (type === 'last-prompt') {
+    exactKeys(row, ['type', 'lastPrompt', 'leafUuid', 'sessionId'], anchor);
+    if (
+      typeof row['lastPrompt'] !== 'string' ||
+      typeof row['leafUuid'] !== 'string'
+    ) {
+      invalidRecord('Claude last-prompt metadata is malformed.', anchor);
+    }
+  } else {
+    exactKeys(
+      row,
+      ['type', 'messageId', 'snapshot', 'isSnapshotUpdate'],
+      anchor,
+    );
+    const snapshot = row['snapshot'];
+    if (!isObject(snapshot))
+      invalidRecord('Claude file snapshot is malformed.', anchor);
+    exactKeys(
+      snapshot,
+      ['messageId', 'trackedFileBackups', 'timestamp'],
+      anchor,
+    );
+    if (
+      typeof row['messageId'] !== 'string' ||
+      snapshot['messageId'] !== row['messageId'] ||
+      typeof row['isSnapshotUpdate'] !== 'boolean' ||
+      typeof snapshot['timestamp'] !== 'string' ||
+      !isObject(snapshot['trackedFileBackups'])
+    ) {
+      invalidRecord('Claude file snapshot is malformed.', anchor);
+    }
+  }
+}
+
 function textEntry(
   anchor: RawAnchor,
   role: 'assistant' | 'user',
@@ -124,7 +257,11 @@ function textEntry(
     text,
     message_id: id,
     claimed_origin: userType === 'external' ? 'external' : 'unclaimed',
-    approval_eligibility: descendant ? 'ineligible' : 'unresolved',
+    approval_eligibility: descendant
+      ? 'ineligible'
+      : isInspectedNativeParentInput(row)
+        ? 'eligible'
+        : 'unresolved',
   };
 }
 
@@ -255,6 +392,7 @@ export function indexClaudeTranscript(
   };
   const identityEvidence: RawAnchor[] = [];
   let descendant = false;
+  let parent = false;
 
   for (const parsed of rows) {
     const row = parsed.value;
@@ -265,7 +403,11 @@ export function indexClaudeTranscript(
       type !== 'assistant' &&
       type !== 'user' &&
       type !== 'attachment' &&
-      type !== 'ai-title'
+      type !== 'ai-title' &&
+      type !== 'mode' &&
+      type !== 'permission-mode' &&
+      type !== 'file-history-snapshot' &&
+      type !== 'last-prompt'
     ) {
       unknownRecord('Claude record type is not supported.', rowAnchor);
     }
@@ -299,6 +441,7 @@ export function indexClaudeTranscript(
       identityEvidence.push(rowAnchor);
     }
     if (conversationClaims.descendant) descendant = true;
+    if (isInspectedNativeParentInput(row)) parent = true;
 
     if (previousUuid) {
       for (const target of previousUuid.targets) {
@@ -313,7 +456,20 @@ export function indexClaudeTranscript(
 
     const targets: ReplayTarget[] = [];
 
-    if (type === 'queue-operation') {
+    if (
+      type === 'mode' ||
+      type === 'permission-mode' ||
+      type === 'file-history-snapshot' ||
+      type === 'last-prompt'
+    ) {
+      if (source.expected_cli_version !== '2.1.209')
+        unknownRecord(
+          'Claude native metadata build is not inspected.',
+          rowAnchor,
+        );
+      inspectNativeMetadata(row, type, rowAnchor);
+      addCanonicalEntry(entries, targets, nonAction(rowAnchor, type));
+    } else if (type === 'queue-operation') {
       const operation = row['operation'];
       if (typeof operation !== 'string') {
         invalidRecord('Claude queue operation is malformed.', rowAnchor);
@@ -334,9 +490,47 @@ export function indexClaudeTranscript(
       const attachmentType = attachment['type'];
       if (
         attachmentType !== 'deferred_tools_delta' &&
-        attachmentType !== 'skill_listing'
+        attachmentType !== 'skill_listing' &&
+        attachmentType !== 'agent_listing_delta'
       ) {
         unknownRecord('Claude attachment subtype is not supported.', rowAnchor);
+      }
+      if (attachmentType === 'agent_listing_delta') {
+        if (row['message'] !== undefined)
+          unknownRecord(
+            'Claude agent listing contains an uninspected message.',
+            rowAnchor,
+          );
+        if (source.expected_cli_version !== '2.1.209')
+          unknownRecord(
+            'Claude agent listing build is not inspected.',
+            rowAnchor,
+          );
+        exactKeys(
+          attachment,
+          [
+            'type',
+            'addedTypes',
+            'addedLines',
+            'removedTypes',
+            'isInitial',
+            'showConcurrencyNote',
+          ],
+          rowAnchor,
+        );
+        for (const key of ['addedTypes', 'addedLines', 'removedTypes']) {
+          const values = attachment[key];
+          if (
+            !Array.isArray(values) ||
+            !values.every((value) => typeof value === 'string')
+          )
+            invalidRecord('Claude agent listing is malformed.', rowAnchor);
+        }
+        if (
+          typeof attachment['isInitial'] !== 'boolean' ||
+          typeof attachment['showConcurrencyNote'] !== 'boolean'
+        )
+          invalidRecord('Claude agent listing flags are malformed.', rowAnchor);
       }
       addCanonicalEntry(
         entries,
@@ -563,7 +757,11 @@ export function indexClaudeTranscript(
     source,
     identity: {
       ...observed,
-      conversation: descendant ? 'descendant' : 'unresolved',
+      conversation: descendant
+        ? 'descendant'
+        : parent
+          ? 'parent'
+          : 'unresolved',
       evidence: identityEvidence,
     },
     prefix: {
