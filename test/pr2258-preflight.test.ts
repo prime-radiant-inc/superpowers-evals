@@ -70,7 +70,7 @@ function completeDiagnosticGo(
     served_model_ids: {
       astra_subject: 'gpt-6-astra',
       sol_subject: 'gpt-5.6-sol',
-      opus_subject: 'anthropic.claude-opus-5',
+      opus_subject: 'claude-opus-5',
       sonnet_grader: 'anthropic.claude-sonnet-5',
     },
     delegate_model_ids: [],
@@ -79,6 +79,7 @@ function completeDiagnosticGo(
       'gpt-6-astra',
       'gpt-5.6-sol',
       'anthropic.claude-opus-5',
+      'claude-opus-5',
       'anthropic.claude-sonnet-5',
     ],
     unpriced_models: [],
@@ -186,6 +187,7 @@ function completeReceipts(
         'gpt-6-astra',
         'gpt-5.6-sol',
         'anthropic.claude-opus-5',
+        'claude-opus-5',
         'anthropic.claude-sonnet-5',
       ],
       receipt_sha256: '4'.repeat(64),
@@ -681,12 +683,44 @@ test('measured experiment blocks without a diagnostic GO receipt', () => {
   );
 });
 
-test('authenticated diagnostic GO makes the exact measured experiment ready', () => {
+test('authenticated diagnostic GO with the native Opus served ID makes the exact measured experiment ready', () => {
   const result = preflight('measured');
 
   expect(result.ready).toBe(true);
   expect(result.blockers).toEqual([]);
   expect(result.evidence.planned_slots).toBe(12);
+});
+
+test.each([
+  'anthropic.claude-opus-5',
+  'claude-opus-5-latest',
+])('measured experiment rejects substituting %s for the observed native Opus ID', (model) => {
+  const result = preflight('measured', undefined, true, (diagnostic) => {
+    diagnostic.served_model_ids.opus_subject = model;
+    diagnostic.priced_models.push(model);
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    `Opus subject served ${model}; expected exact approved model claude-opus-5`,
+  );
+});
+
+test.each([
+  ['diagnostic', 'anthropic.claude-opus-5'],
+  ['diagnostic', 'claude-opus-5'],
+  ['measured', 'anthropic.claude-opus-5'],
+  ['measured', 'claude-opus-5'],
+] as const)('%s requires pricing qualification for Opus ID %s', (suiteName, model) => {
+  const result = preflight(suiteName, ({ receipts }) => {
+    receipts.pricing.primary_models_priced =
+      receipts.pricing.primary_models_priced.filter(
+        (priced) => priced !== model,
+      );
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    `pricing does not cover primary model ${model}`,
+  );
 });
 
 test('measured experiment rejects a diagnostic NO-GO bound to wrong artifacts', () => {

@@ -538,6 +538,7 @@ export function validatePr2258Preflight(
     'gpt-6-astra',
     'gpt-5.6-sol',
     'anthropic.claude-opus-5',
+    'claude-opus-5',
     EXPECTED_GRADER_MODEL,
   ];
   for (const model of primaryModels)
@@ -731,7 +732,7 @@ export function validatePr2258Preflight(
       const expectedServedModels = [
         ['Astra subject', diagnostic.served_model_ids.astra_subject, 'gpt-6-astra'],
         ['Sol subject', diagnostic.served_model_ids.sol_subject, 'gpt-5.6-sol'],
-        ['Opus subject', diagnostic.served_model_ids.opus_subject, 'anthropic.claude-opus-5'],
+        ['Opus subject', diagnostic.served_model_ids.opus_subject, 'claude-opus-5'],
         ['Sonnet grader', diagnostic.served_model_ids.sonnet_grader, EXPECTED_GRADER_MODEL],
       ] as const;
       for (const [role, actual, expected] of expectedServedModels)
