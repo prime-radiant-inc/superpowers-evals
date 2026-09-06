@@ -435,7 +435,8 @@ export async function captureNativeParent(
     persist();
     requireCondition(Date.now() < deadline, 'capture deadline exceeded');
     const refusal = provider?.records.find(
-      (record) => record.decision !== 'accepted',
+      (record) =>
+        record.decision !== 'accepted' && record.decision !== 'health-check',
     );
     requireCondition(!refusal, `provider refusal: ${refusal?.decision}`);
     inventoryNativeCapture(config.output, false);
@@ -652,7 +653,9 @@ export async function captureNativeParent(
         await pause(100);
         const text = screen();
         if (
-          provider.records.length === index + 1 &&
+          provider.records.filter((record) => record.decision === 'accepted')
+            .length ===
+            index + 1 &&
           text.includes(replies[index]!)
         )
           break;
@@ -689,7 +692,8 @@ export async function captureNativeParent(
     safeWrite('requests.json', provider?.records ?? []);
     safeWrite('inputs.json', inputLedger);
     const refusedRequest = provider?.records.find(
-      (record) => record.decision !== 'accepted',
+      (record) =>
+        record.decision !== 'accepted' && record.decision !== 'health-check',
     );
     if (refusedRequest) refuse(`provider refusal: ${refusedRequest.decision}`);
     const observed = attempt(() => inventoryNativeCapture(config.output));

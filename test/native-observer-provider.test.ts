@@ -55,6 +55,68 @@ async function post(
   });
 }
 
+test('records an unauthenticated HEAD / health probe without consuming a scripted response', async () => {
+  const server = startNativeObserverProvider({
+    port: 0,
+    maxRequests: 2,
+    steps: [
+      {
+        protocol: 'messages',
+        request: bodies.messages,
+        blocks: [{ type: 'text', text: 'after health check' }],
+      },
+    ],
+  });
+  try {
+    const health = await fetch(server.url, { method: 'HEAD', proxy: '' });
+    expect(health.status).toBe(200);
+    expect(await health.text()).toBe('');
+    const response = await post(server.url, 'messages', bodies.messages);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('message_stop');
+    expect(server.records.map((record) => record.decision)).toEqual([
+      'health-check',
+      'accepted',
+    ]);
+    expect(server.records[0]).toMatchObject({
+      method: 'HEAD',
+      path: '/',
+      fakeAuth: false,
+      chunks: [],
+    });
+    expect(
+      (await fetch(server.url, { method: 'HEAD', proxy: '' })).status,
+    ).toBe(429);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('health probes retain the all-request cap and refusal latch', async () => {
+  const server = startNativeObserverProvider({
+    port: 0,
+    maxRequests: 3,
+    steps: [],
+  });
+  try {
+    expect(
+      (await fetch(server.url, { method: 'HEAD', proxy: '' })).status,
+    ).toBe(200);
+    expect((await fetch(server.url, { method: 'GET', proxy: '' })).status).toBe(
+      404,
+    );
+    expect(
+      (await fetch(server.url, { method: 'HEAD', proxy: '' })).status,
+    ).toBe(409);
+    expect(
+      (await fetch(server.url, { method: 'HEAD', proxy: '' })).status,
+    ).toBe(429);
+    expect(server.records.at(-1)?.decision).toBe('request count exceeded');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('streams both protocols over localhost and preserves split tool input and text', async () => {
   const server = startNativeObserverProvider({
     port: 0,
@@ -532,7 +594,10 @@ test('enforces response, request and byte bounds without serving excess output',
       413,
     );
     expect((await post(server.url, 'messages', {})).status).toBe(429);
-    expect(server.records).toHaveLength(1);
+    expect(server.records).toHaveLength(2);
+    expect(server.records[1]?.decision).toBe('request count exceeded');
+    expect((await post(server.url, 'messages', {})).status).toBe(429);
+    expect(server.records).toHaveLength(2);
   } finally {
     await server.stop();
   }

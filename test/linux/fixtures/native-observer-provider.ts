@@ -460,7 +460,9 @@ export function startNativeObserverProvider(options: Options) {
     hostname: '127.0.0.1',
     port: options.port ?? 43871,
     async fetch(request) {
-      if (++requests > maxRequests) {
+      // Keep one terminal cap record so capture cannot mistake an over-limit
+      // health probe for a successful run, while bounding the in-memory ledger.
+      if (++requests > maxRequests + 1) {
         failed = true;
         return new Response('request count exceeded', { status: 429 });
       }
@@ -491,8 +493,15 @@ export function startNativeObserverProvider(options: Options) {
         record.decision = reason;
         return new Response(reason, { status });
       };
+      if (requests > maxRequests) return refuse(429, 'request count exceeded');
       if (failed) return refuse(409, 'fixture stopped after refusal');
       if (reading) return refuse(409, 'concurrent request read');
+      // The pinned Claude CLI probes connectivity before sending model input.
+      // This exact bodyless route is transport evidence, not a scripted turn.
+      if (request.method === 'HEAD' && path === '/') {
+        record.decision = 'health-check';
+        return new Response(null, { status: 200 });
+      }
       if (request.method !== 'POST' || !protocol)
         return refuse(404, 'unexpected route');
       if (!fakeAuth) return refuse(401, 'expected fixture auth');

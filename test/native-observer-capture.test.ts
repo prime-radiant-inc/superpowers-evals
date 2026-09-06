@@ -45,6 +45,7 @@ import { createInterface } from 'node:readline';
 if (process.argv.includes('--version')) { console.log('fixture-native 1'); process.exit(0); }
 if (process.argv.includes('--help')) { console.log('--no-alt-screen --sandbox --ask-for-approval --model --permission-mode --strict-mcp-config --setting-sources'); process.exit(0); }
 const home = process.env.HOME;
+if (${JSON.stringify(mode)} === 'health-probe') await fetch(process.env.ANTHROPIC_BASE_URL, { method: 'HEAD' });
 mkdirSync(home + '/raw', { recursive: true });
 writeFileSync(home + '/observed.json', JSON.stringify({ argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), pid: process.pid }));
 if (${JSON.stringify(mode)} === 'oversize') { writeFileSync(home + '/oversize', ''); truncateSync(home + '/oversize', 257 * 1024 * 1024); }
@@ -99,6 +100,26 @@ const testBoundary = {
   verifyBoundary: () => ({ kind: 'explicit-fake-native-test' }),
   providerPort: 0,
 };
+
+localTest(
+  'a startup health probe does not consume either native capture turn',
+  async () => {
+    const config = fixture('health-probe', 'claude');
+    const result = await captureNativeParent(config, testBoundary);
+    expect(result.reason).toBeUndefined();
+    expect(result.outcome).toBe('captured');
+    expect(result.cleanup).toBe('stopped');
+    const requests = JSON.parse(
+      readFileSync(join(config.output, 'requests.json'), 'utf8'),
+    );
+    expect(
+      requests.map((record: { decision: string }) => record.decision),
+    ).toEqual(['health-check', 'accepted', 'accepted']);
+    expect(
+      JSON.parse(readFileSync(join(config.output, 'inputs.json'), 'utf8')),
+    ).toHaveLength(2);
+  },
+);
 
 localTest(
   'captures two real terminal submissions with private fresh environment and kills its tmux server',
