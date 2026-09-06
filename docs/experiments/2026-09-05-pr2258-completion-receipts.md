@@ -35,17 +35,18 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 
 ## Execution state
 
-Reviewed source is integrated through `00798a4c`. Both exact installed native
-builds completed two no-provider text turns and clean shutdown on the selected
-Linux appliance. The last scoped review finding is closed. The minimum installed
-source update passed at `0d6eae90`. The claimed missing-grader-key blocker was
-subsequently diagnosed as a credential-policy mismatch; see the correction below.
-No diagnostic or measured provider attempt has started.
+The second authorized six-attempt diagnostic completed on September 6 at
+`2026-09-06T07:20:57.776Z`, campaign
+`4e5de280-cab9-4bdc-bda6-4620dd325e68`. Its frozen installed source is
+`d682f776`; all six results are unusable and all three strict pairs are missing.
+Shutdown is verified. The decision is **NO-GO**, and no measured attempt has
+started. The first failed diagnostic remains separately preserved.
 
-Drew's approved diagnostic-first sequence below supersedes the older Gate A/B
-prerequisite prose. Exhaustive fault rehearsal remains deferred, and incomplete
-native physical-call/descendant coverage is an explicit diagnostic gap. The full
-comparison remains incomplete until real diagnostic and measured evidence exists.
+The smallest observed Claude production-metadata correction is committed at
+`9a7c60b5` and independently reviewed. It is a local source correction, not
+installed qualification. Codex still lacks sufficient native result provenance;
+see the second diagnostic receipt below. No further paid attempt is authorized
+by this receipt. The full comparison remains incomplete.
 
 For each completed task append its commit, test command/results, review and fix
 outcomes, evidence references, active authorization and next dependency. Preserve
@@ -650,3 +651,89 @@ the current preflight's explicitly fake-provider capacity/overlap fields cannot
 honestly be satisfied by relabeling live diagnostic observations. Complete
 native chronology, remaining capability evidence and diagnostic GO stay open;
 source fixes alone do not establish measured readiness.
+
+
+## September 6: second authorized diagnostic, NO-GO
+
+Drew's subsequent “do it” was explicitly acknowledged as approval for one fresh
+six-attempt set after the first set's corrections. No historical attempt was
+reused. Installed preflight returned ready with zero blockers and twelve declared
+qualification gaps. The helper registered and launched exactly once: six slots,
+three n=1 pairs, zero reserves, one attempt per slot, cap six, 60-second skew
+bound and 2,400-second attempt ceiling.
+
+Campaign `4e5de280-cab9-4bdc-bda6-4620dd325e68` freezes Evals
+`d682f776497d990b57d7cb6e4f15905c551e0c7a`, Gauntlet
+`588a81e80fe3cd7b7d3bc2c7f4207bed4ecb14df`, existing shared Mantle
+Sonnet 5 grader, the unchanged base/head Superpowers revisions and pricing digest
+`609f6cbb26be00d29be02614c22abeeb556c9d2235f53d1e830b949cca3b1c6f`.
+Input digest is
+`98d1b00b220fb19bdc0194f188a8cf2fd339726e76119c48a9c7ac3cd53c9320`.
+
+It ran from `2026-09-06T07:12:07.762Z` to `2026-09-06T07:20:57.776Z`
+(**530.014 seconds**). Canonical report: completed, termination verified,
+complete false, **six unusable attempts, zero valid pairs out of three**.
+Strict readout has `interpretation_ready: false`. All pairs lack final positive
+validity and authenticated publication and are excluded for exposure. Initial
+observation of all six containers running together does not establish six
+complete overlapping subject exposure intervals. Doctor reports both appliance
+locks released and the shared appliance healthy.
+
+Both Claude workers refused `permissionMode: bypassPermissions`. The isolated
+capture driver selected `dontAsk`; production selects
+`--dangerously-skip-permissions`. The observer therefore overfit its capture
+configuration. Commit `9a7c60b5` accepts the observed scalar within the existing
+closed metadata shape. It retains session/build checks, action rejection and
+parent authority. The implementer replayed both unchanged stopped 27-row traces
+successfully and discovered no further parser blocker. Independent review found
+no actionable issues and passed 45 focused tests; its production replay claim
+is explicitly reported, while its fixture replays were independently witnessed.
+No campaign evidence was changed or repaired into a usable score.
+
+All four Codex workers refused an event outside the inspected dialect. The
+read-only diagnostic found interruption metadata, web-search completion events
+and nested patch results. In both Sol traces, `patch_apply_end.call_id` differs
+from the enclosing execution call ID; the outer command invokes `apply_patch`,
+but the records inspected so far do not explicitly link the nested result ID.
+Discarding the patch result as harmless metadata would lose a physical-effect
+witness. Adjacency is insufficient proof for assigning it to the outer call.
+The remaining native relationship must be established or represented explicitly
+as unresolved evidence before this instrument can qualify. No Codex parser
+relaxation or invented ID mapping was applied. Web completion has an explicit
+ID match to the following native web-call record, but the current index requires
+results to follow their calls. Its representation also needs to preserve both
+physical anchors without duplicate actions or synthetic chronology. The short
+text-only qualification did not establish either production action/result path.
+
+Canonical subject and grader accounting each have zero observed records out of
+six: costs are missing, not zero. Separately preserved unpublished usage has
+six priced subject estimates totaling **$3.2524458** and six grader sidecars
+estimated at **$2.57307094** using the campaign's frozen rates, including recorded
+5-minute versus 1-hour cache creation. Their combined **$5.82551674** is a
+supplemental estimate, not an invoice or repaired canonical campaign total.
+No subject model is unpriced in these sidecars. The grader records all name
+`anthropic.claude-sonnet-5`; no new credential failure was observed.
+
+Private receipts are under the plan workspace's `diagnostic-r2-20260906/`:
+registration, launch, status, report, costs, strict readout, terminal doctor,
+per-attempt unpublished usage, supplemental arithmetic, and both adapter
+diagnoses. Exact-byte digests:
+
+- Canonical helper report: `93fe433f6370a01b53c997a301efe2c81f32b29db19d59fcf3c3b3787167f250`.
+- Strict readout: `b36d050c525a4fb0279465f704728ef6177ed229e71d7e16e78f8668f7ba0303`.
+- Supplemental cost estimate: `177eec7ed401392e028a9627f519b70919a73101d4138b6b80da2341fa652451`.
+
+This diagnostic is final NO-GO. Independent behavioral call review cannot make
+missing authenticated bundles usable, so no review set or behavioral comparison
+was fabricated. No measured run, replacement diagnostic, provider probe, source
+installation, push or merge followed it. Remaining work is the Codex native
+result relationship, production-path qualification of the resulting instrument,
+then an explicitly approved fresh diagnostic and conditional measured run.
+
+
+Final root verification after `9a7c60b5`: `bun run check` passed Biome and
+TypeScript, **4,052 core tests, 17 explicit skips, zero failures**, plus **144
+dashboard tests, zero failures**. Scenario validation and `git diff --check`
+passed. Independent receipt review found no mismatch in campaign counts, timing,
+cost arithmetic, missingness, digests or the NO-GO conclusion. These checks do
+not close installed/native qualification or authorize another live attempt.
