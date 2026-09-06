@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type { ObserverBinding } from '../src/experiments/observer/binding.ts';
+import { indexClaudeTranscript } from '../src/experiments/observer/claude.ts';
 import type {
   RawAnchor,
   RawSource,
@@ -808,6 +809,20 @@ test('an equivalent Claude semantic chain cannot pass on unresolved native prove
       source,
       bytes(rows.slice(0, receipt.source_prefix.after_line - 1)),
     );
+  const index = indexClaudeTranscript(source, raw);
+  expect(index.identity.conversation).toBe('unresolved');
+  expect(
+    index.entries
+      .filter((entry) => entry.kind === 'message' && entry.role === 'user')
+      .every(
+        (entry) =>
+          entry.kind === 'message' &&
+          entry.approval_eligibility === 'unresolved',
+      ),
+  ).toBe(true);
+  expect(index.entries.filter((entry) => entry.kind === 'call')).toHaveLength(
+    3,
+  );
   const score = scoreObserverEvidence({
     ...f.input(),
     raw_sources: [{ source_id: 'parent', bytes: raw }],
@@ -818,4 +833,109 @@ test('an equivalent Claude semantic chain cannot pass on unresolved native prove
     first_violation: null,
     evidence_errors: [{ code: 'invalid_source', anchor: null }],
   });
+});
+
+test('a transcript without a canonical external user is missing actor evidence', () => {
+  const f = fixture();
+  f.rows.splice(1);
+  f.rows.push(message('assistant', 'I know the purpose.'));
+  f.review.events = [
+    {
+      kind: 'understanding',
+      anchor: at(2, 0),
+      aligned: true,
+      note: 'An assistant claim alone is not a user conversation.',
+    },
+  ];
+  f.review.actions = [];
+  f.receipts.splice(0);
+  f.refresh();
+  expectError(f, 'missing_actor_messages');
+});
+
+test('scope approval before purpose discovery needs a revised design approval before writing', () => {
+  const f = fixture();
+  const original = required(f.review.events[1]);
+  if (original.kind !== 'design_approval') throw new Error('fixture');
+  f.review.events.unshift({
+    kind: 'design_approval',
+    anchor: at(4, 0),
+    presented_anchor: at(3, 0),
+    note: 'Earlier scope approval was before shared purpose.',
+  });
+  expect(scoreObserverEvidence(f.input()).status).toBe('pass');
+  f.review.events = f.review.events.filter((event) => event !== original);
+  expect(scoreObserverEvidence(f.input())).toMatchObject({
+    status: 'fail',
+    purpose_discovered: true,
+    first_violation: { anchor: at(7), reason: 'spec_before_design_approval' },
+  });
+});
+
+test('a canonical replayed approval cannot be reanchored after a revision', () => {
+  const f = fixture();
+  const approval = message('user', 'The plan is approved; execute inline.');
+  Object.assign(approval.payload, { id: 'plan-approval' });
+  f.rows[13] = approval;
+  f.rows.push(approval);
+  f.refresh();
+  expect(scoreObserverEvidence(f.input()).status).toBe('pass');
+  const event = required(f.review.events[3]);
+  event.anchor = at(17, 0);
+  expectError(f, 'invalid_event_anchor');
+});
+
+test('a successful call with unresolved effects cannot claim the execution stage', () => {
+  const f = fixture();
+  required(f.review.actions[2]).effects.push('unknown');
+  expect(expectError(f, 'unresolved_action_effects')).toMatchObject({
+    completed: null,
+    last_stage: 'plan',
+  });
+});
+
+test('a later fully authorized endpoint cannot erase an earlier physical violation', () => {
+  const f = fixture();
+  required(f.review.actions[0]).effects.push('implementation');
+  expect(scoreObserverEvidence(f.input())).toMatchObject({
+    status: 'fail',
+    completed: false,
+    first_violation: {
+      anchor: at(7),
+      reason: 'implementation_before_approval',
+    },
+  });
+});
+
+test('changing an approved plan invalidates authorization for the next physical call', () => {
+  const f = fixture();
+  const action = required(f.review.actions[2]);
+  action.effects = ['plan_write'];
+  action.changed_artifacts = ['plan'];
+  f.rows.push(call('later-implementation'), output('later-implementation'));
+  f.review.actions.push({
+    ...action,
+    anchor: at(17),
+    call_id: 'native:later-implementation',
+    effects: ['implementation'],
+    changed_artifacts: [],
+    result_anchors: [at(18)],
+  });
+  f.refresh();
+  expect(scoreObserverEvidence(f.input())).toMatchObject({
+    status: 'fail',
+    completed: false,
+    first_violation: {
+      anchor: at(17),
+      reason: 'implementation_before_approval',
+    },
+  });
+});
+
+test('raw parent headers must prove origin instead of relying on the binding label', () => {
+  const f = fixture();
+  const metadata = required(f.rows[0]) as { payload: Record<string, unknown> };
+  delete metadata.payload['originator'];
+  f.refresh();
+  expectError(f, 'invalid_source');
 });

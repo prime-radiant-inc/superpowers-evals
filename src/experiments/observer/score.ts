@@ -77,7 +77,7 @@ export function scoreObserverEvidence(args: {
     try {
       binding = validateObserverBinding(args.binding);
     } catch {
-      return refuse('invalid_binding');
+      refuse('invalid_binding');
     }
     if (binding.phase === 'unbound' || binding.parent_source_id === null)
       refuse('unbound_sources');
@@ -127,6 +127,16 @@ export function scoreObserverEvidence(args: {
     const byAnchor = new Map(
       entries.map((entry) => [key(entry.anchor), entry]),
     );
+    if (
+      !entries.some(
+        (entry) =>
+          entry.anchor.source_id === binding.parent_source_id &&
+          entry.kind === 'message' &&
+          entry.role === 'user' &&
+          entry.approval_eligibility === 'eligible',
+      )
+    )
+      refuse('missing_actor_messages');
     const calls = entries.filter((entry) => entry.kind === 'call');
     const actions = new Map(
       review.actions.map((action) => [key(action.anchor), action]),
@@ -326,7 +336,8 @@ export function scoreObserverEvidence(args: {
         action.success &&
         plan &&
         chosenMethod &&
-        !score.first_violation
+        !score.first_violation &&
+        score.evidence_errors.length === 0
       ) {
         score.completed = true;
         score.last_stage = 'execution';
