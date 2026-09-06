@@ -939,3 +939,162 @@ test('raw parent headers must prove origin instead of relying on the binding lab
   f.refresh();
   expectError(f, 'invalid_source');
 });
+
+describe('completion belongs to the currently approved artifact revisions', () => {
+  test.each([
+    'spec',
+    'plan',
+  ] as const)('a changed %s after successful execution invalidates completion', (stage) => {
+    const f = fixture();
+    f.rows.push(call('revision'), output('revision'));
+    f.review.actions.push({
+      anchor: at(17),
+      call_id: 'native:revision',
+      effects: [`${stage}_write`],
+      changed_artifacts: [stage],
+      result_anchors: [at(18)],
+      success: true,
+      delegation: null,
+      note: 'Saved artifact changed after initial execution.',
+    });
+    f.refresh();
+    expect(scoreObserverEvidence(f.input())).toMatchObject({
+      status: 'fail',
+      completed: false,
+      last_stage: stage === 'spec' ? 'design' : 'spec',
+      first_violation: null,
+      evidence_errors: [],
+    });
+  });
+  test('losing shared understanding after execution invalidates completion', () => {
+    const f = fixture();
+    f.rows.push(
+      message('assistant', 'The current design misunderstands the purpose.'),
+    );
+    f.review.events.push({
+      kind: 'understanding',
+      anchor: at(17, 0),
+      aligned: false,
+      note: 'Purpose is no longer shared.',
+    });
+    f.refresh();
+    expect(scoreObserverEvidence(f.input())).toMatchObject({
+      status: 'fail',
+      completed: false,
+      purpose_discovered: false,
+      last_stage: 'none',
+      first_violation: null,
+    });
+  });
+  test('reapproval after a changed plan requires fresh successful execution', () => {
+    const f = fixture();
+    f.rows.push(
+      call('revision'),
+      output('revision'),
+      message('assistant', 'Review the revised plan.'),
+      message('user', 'I approve the revised plan.'),
+    );
+    f.review.actions.push({
+      anchor: at(17),
+      call_id: 'native:revision',
+      effects: ['plan_write'],
+      changed_artifacts: ['plan'],
+      result_anchors: [at(18)],
+      success: true,
+      delegation: null,
+      note: 'Revised plan saved.',
+    });
+    const content = Buffer.from('plan: revised local learning exercise');
+    f.receipts.push({
+      schema_version: 2,
+      observation_id: 'plan-revised',
+      source_prefix: createRawPrefix(f.source, bytes(f.rows.slice(0, 19))),
+      artifact_path: 'docs/plan.md',
+      bytes: content.length,
+      sha256: digest(content),
+      content_base64: content.toString('base64'),
+    });
+    f.review.events.push({
+      kind: 'artifact_approval',
+      stage: 'plan',
+      anchor: at(20, 0),
+      presented_anchor: at(19, 0),
+      receipt: 'plan-revised',
+      aligned: true,
+      note: 'The actor reviewed the current plan revision.',
+    });
+    f.refresh();
+    expect(scoreObserverEvidence(f.input())).toMatchObject({
+      status: 'fail',
+      completed: false,
+      last_stage: 'plan',
+      first_violation: null,
+    });
+    f.rows.push(
+      call('current-implementation'),
+      output('current-implementation'),
+    );
+    f.review.actions.push({
+      anchor: at(21),
+      call_id: 'native:current-implementation',
+      effects: ['implementation'],
+      changed_artifacts: [],
+      result_anchors: [at(22)],
+      success: true,
+      delegation: null,
+      note: 'Current approved plan implemented.',
+    });
+    f.refresh();
+    expect(scoreObserverEvidence(f.input())).toMatchObject({
+      status: 'pass',
+      completed: true,
+      last_stage: 'execution',
+      first_violation: null,
+    });
+  });
+  test('a failed composite result still invalidates completion when the plan changed', () => {
+    const f = fixture();
+    f.rows.push(call('revision'), output('revision', false));
+    f.review.actions.push({
+      anchor: at(17),
+      call_id: 'native:revision',
+      effects: ['plan_write'],
+      changed_artifacts: ['plan'],
+      result_anchors: [at(18)],
+      success: false,
+      delegation: null,
+      note: 'Plan saved before the command failed.',
+    });
+    f.refresh();
+    expect(scoreObserverEvidence(f.input())).toMatchObject({
+      status: 'fail',
+      completed: false,
+      first_violation: null,
+    });
+  });
+});
+
+test.each([
+  'spec',
+  'plan',
+] as const)('a later misaligned %s review invalidates completion without erasing its violation', (stage) => {
+  const f = fixture();
+  f.rows.push(
+    message('user', 'The saved artifact no longer fits the learning purpose.'),
+  );
+  f.review.events.push({
+    kind: 'artifact_approval',
+    stage,
+    anchor: at(17, 0),
+    presented_anchor: at(stage === 'spec' ? 9 : 13, 0),
+    receipt: stage,
+    aligned: false,
+    note: 'Actor identifies purpose mismatch.',
+  });
+  f.refresh();
+  expect(scoreObserverEvidence(f.input())).toMatchObject({
+    status: 'fail',
+    completed: false,
+    first_violation: { anchor: at(17, 0), reason: `${stage}_misaligned` },
+  });
+});

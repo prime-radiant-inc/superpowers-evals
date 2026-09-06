@@ -265,6 +265,18 @@ export function scoreObserverEvidence(args: {
     const violation = (anchor: RawAnchor, reason: string) => {
       score.first_violation ??= { anchor, reason };
     };
+    const invalidateCompletion = () => {
+      score.completed = false;
+      score.last_stage = plan
+        ? 'plan'
+        : spec
+          ? 'spec'
+          : design
+            ? 'design'
+            : score.purpose_discovered
+              ? 'understanding'
+              : 'none';
+    };
     const applyEvent = (event: ReviewEvent) => {
       if (event.kind === 'understanding') {
         score.purpose_discovered = event.aligned;
@@ -272,6 +284,7 @@ export function scoreObserverEvidence(args: {
           design = false;
           spec = false;
           plan = false;
+          invalidateCompletion();
         } else score.last_stage = 'understanding';
       } else if (event.kind === 'design_approval') {
         design = score.purpose_discovered === true;
@@ -283,10 +296,15 @@ export function scoreObserverEvidence(args: {
         if (event.stage === 'spec') {
           spec = design && event.aligned;
           if (spec) score.last_stage = 'spec';
+          else {
+            plan = false;
+            invalidateCompletion();
+          }
         } else {
           if (!spec) violation(event.anchor, 'plan_before_spec_approval');
           plan = spec && event.aligned;
           if (plan) score.last_stage = 'plan';
+          else invalidateCompletion();
         }
       }
     };
@@ -331,6 +349,7 @@ export function scoreObserverEvidence(args: {
         plan = false;
       }
       if (changedPlan) plan = false;
+      if (changedSpec || changedPlan) invalidateCompletion();
       if (
         action.effects.includes('implementation') &&
         action.success &&
