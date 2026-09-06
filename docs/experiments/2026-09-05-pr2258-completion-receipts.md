@@ -35,18 +35,16 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 
 ## Execution state
 
-Tasks 1, 4, 5 and 6 have reviewed source implementations integrated. Tasks 2 and
-3 have reviewed source slices; native parent/descendant qualification and Claude
-eligibility remain incomplete. Task 7's integrated full check and final reviews
-are complete for the current source preparation. All four Important findings
-and the later narrow BOM defect are corrected and reviewed. Gate A's private
-command packet passed operational review; final source/artifact pins are being
-prepared. Gate B's concrete installed packet depends on Task 8 Linux receipts.
+Reviewed source is integrated through `00798a4c`. Both exact installed native
+builds completed two no-provider text turns and clean shutdown on the selected
+Linux appliance. The last scoped review finding is closed. The minimum installed
+source update is prepared; the dedicated Mantle grader bearer remains missing.
+No diagnostic or measured provider attempt has started.
 
-No Linux/native qualification, installed preparation, credential issuance,
-provider execution, push or merge has occurred. Tasks 8–11 remain gated.
-The full completion plan and comparison are not complete. The next action is
-the explicitly approved Gate A tranche, once Drew authorizes its concrete packet.
+Drew's approved diagnostic-first sequence below supersedes the older Gate A/B
+prerequisite prose. Exhaustive fault rehearsal remains deferred, and incomplete
+native physical-call/descendant coverage is an explicit diagnostic gap. The full
+comparison remains incomplete until real diagnostic and measured evidence exists.
 
 For each completed task append its commit, test command/results, review and fix
 outcomes, evidence references, active authorization and next dependency. Preserve
@@ -404,3 +402,48 @@ The subject credential channels are present; the dedicated Mantle grader bearer
 is absent from the selected blessed bundle. Only names/presence and inequality
 booleans were inspected; no secret values are recorded here. Drew was asked for
 an existing secret-store reference while independent source work continues.
+
+## Native capture and minimum source completion
+
+Both inspected builds now completed two actual typed parent turns using the
+bounded local fake provider: Codex `0.146.0` (21 raw rows, two eligible inputs)
+and Claude `2.1.209` (13 raw rows, two eligible inputs). Both captures reported
+`captured`, stopped cleanup, two accepted model requests and no receipt failures.
+The original private raw bytes replay through the matching native adapters;
+redacted fixtures preserve observed record structure. These text-only captures
+establish parent startup/continuation and shutdown, not physical tool effects,
+subagents, provider service, or the full six-attempt campaign path.
+
+The capture fixes cover metadata-only symlink inventory, stable post-stop
+inventory and actual tmpfs bounds, directory trust/onboarding, the exact health
+and messages routes, opaque unused tool catalogs, completed SSE cancellation,
+and disabling the inspected native Claude title request. Earlier refused
+captures are retained with equal visibility. No paid inference was used.
+
+Native adapters now select the exact inspected builds and preserve their known
+context metadata while retaining identity and unknown-action refusals. Claude's
+later typed inputs require the preceding trusted UUID chain; review found and
+corrected a missing-UUID chain bypass in `b1e2be7b`. Scoped re-review closed the
+finding with no new findings. The scenario now admits Claude as well as Codex.
+Diagnostic preflight exposes unobserved chronology/parallelism as gaps while
+still blocking known timing violations. Measured requirements remain unchanged.
+
+`00798a4c` fixes installed registration to freeze the executing Evals checkout,
+with a real-Git regression proving it cannot silently select older origin/main.
+The minimum installation packet uses existing mutation and registration locks,
+a fast-forward, unchanged dependencies/image/config/helper/results paths, and
+installed provider-free checks. Historical campaign records remain preserved.
+
+Root-observed full `bun run check`: **4,011 core passes, 13 skips, zero failures**,
+plus **144 dashboard passes, zero failures**; Biome and TypeScript passed.
+This run started at `77439cca`; final narrow fixes were separately verified at
+`00798a4c` with **126 focused passes, 726 assertions, zero failures**, followed by
+passing typecheck and scenario validation. The deferred Linux fault tests and
+Windows test remain skipped; they are not operational evidence.
+
+Current official account quota reads show Mantle Opus 5 input/output limits of
+20M/2M tokens per minute and Sonnet 5 limits of 3M/300K. These token quotas do not
+prove six-way overlap or provider success. The selected bundle has subject
+credentials but lacks the dedicated grader bearer. Its existing secret-store
+reference is requested from Drew; no subject credential is substituted and no
+new credential is issued. Independent installed preparation continues.
