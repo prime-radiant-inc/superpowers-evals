@@ -48,7 +48,7 @@ helper pins `superpowers-evals:local` to its resolved image digest before attemp
 are prepared. No campaign can bypass source, credential, host-ownership or
 platform checks through a CLI flag or environment variable.
 
-The examples and active suites select `sonnet5` as grader: direct Anthropic
+The general comparison examples select `sonnet5` as grader: direct Anthropic
 `claude-sonnet-5`, using `ANTHROPIC_API_KEY` and an explicit two-slot campaign cap. This source
 capacity is not a claim about an account's verified provider quota. Claude Mantle subjects require
 `AWS_BEARER_TOKEN_BEDROCK`; Codex/Pi OpenAI subjects require `OPENAI_API_KEY`;
@@ -62,7 +62,7 @@ These are prerequisite names, not supplied
 credentials. Keep actual values in the configured blessed bundle, never Git.
 The grader key must differ in value from every selected subject secret. Missing
 keys and aliasing the same secret under different names refuse preparation.
-The active suites' direct Anthropic grading route differs from historical Mantle
+Those examples' direct Anthropic grading route differs from historical Mantle
 grading: do not infer numerical continuity with those historical runs. No auth
 bridge or expanded harness allowlist is implied by an example.
 
@@ -164,3 +164,49 @@ actual platform checks. Portable fake-command tests establish source behavior;
 they do not establish Linux container isolation, installed cutover or provider
 readiness. Gated Linux fake-provider qualification and any paid run need separate
 operational authorization.
+
+## PR 2258 shared observer comparison
+
+The experiment-specific suites are `suites/pr2258_parallel_diagnostic.yaml`
+and `suites/pr2258_parallel_measured.yaml`. They compare base/head within
+Codex Astra, Codex Sol and Claude Opus 5 on
+`brainstorming-todo-shared-intent`. The diagnostic plans six fresh attempts
+(one pair per stack); measured plans twelve different attempts (two pairs per
+stack). Both use global cap six, zero reserves, one attempt per slot, a
+2,400-second attempt ceiling and a 60-second exposure-skew bound.
+
+These suites select Mantle `sonnet5_bedrock_pr2258_grader`, whose public key
+variable is `QUORUM_PR2258_GRADER_BEARER`. The actual secret must be distinct
+from the Opus subject bearer. Public configuration alone does not establish
+that separation, quota, native CLI support or installed readiness.
+
+Before registration and execution, run the non-launching preflight against the
+approved private qualification root containing `receipt-set.json`:
+
+```bash
+bun scripts/pr2258-preflight.ts diagnostic /absolute/approved/qualification
+bun scripts/pr2258-preflight.ts measured /absolute/approved/qualification
+```
+
+The loader authenticates explicit reviewed receipts, their referenced evidence,
+pricing bytes and the observer source inventory. Reviewed claims still require
+human or independent agent judgment; a digest proves byte identity, not semantic
+truth. Diagnostic readiness requires qualified capability evidence. Measured
+readiness additionally requires a reviewed diagnostic GO with the same pins,
+three valid pairs, six subject exposures, exact served roles, complete accounting
+and acceptable overlap/skew. Missing evidence refuses readiness.
+
+The observer freezes raw sources, artifact receipts, review input and strict
+score together. After exact container shutdown, publication accepts the unchanged
+candidate only if its final bound source inventory still matches. A telemetry
+append is a mismatch. Independent review sidecars live outside sealed runs;
+cosmetic annotations do not change strict scores. The strict cohort uses
+authenticated valid block pairs and determinate strict scores independently of
+the general composed cohort. Missing independent review withholds interpretation
+and cosmetic labels while retaining authenticated sealed scores.
+
+Follow the [completion plan](superpowers/plans/2026-09-05-pr2258-completion.md)
+for concrete Linux, installed and spending gates and the
+[execution receipts](experiments/2026-09-05-pr2258-completion-receipts.md) for
+current completion status. Source tests and declarations do not close these
+gates. Historical diagnostic runs are excluded from both fresh campaigns.

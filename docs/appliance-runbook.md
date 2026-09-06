@@ -73,7 +73,7 @@ A freshly dead holder can require up to the 150-second stale-lease interval befo
 cancel succeeds. `unresolved`/`stopping` with next action `cancel` means inspect the
 reason and retry after that interval; never delete ownership files to continue.
 
-The current active suites grade with direct Anthropic `sonnet5` and require
+The general comparison examples grade with direct Anthropic `sonnet5` and require
 `ANTHROPIC_API_KEY` distinct in value from every subject key. Mantle subject keys
 use `AWS_BEARER_TOKEN_BEDROCK`; OpenAI subjects use `OPENAI_API_KEY`. A shared
 secret under multiple names is refused. This grading route differs from the
@@ -83,6 +83,14 @@ provider quotas. A separately keyed Mantle grader remains supported through
 credential and suite configuration only. Historical artifacts remain unchanged and are not
 runtime-compatible inputs. Source tests do not establish installed cutover,
 Linux qualification, live credentials or provider readiness.
+
+For PR 2258, use the [shared observer comparison procedure](campaign-comparisons.md#pr-2258-shared-observer-comparison). Its suites select the separately
+keyed Mantle grader, cap six, and six diagnostic followed conditionally by twelve
+measured attempts. Run the authenticated phase-specific preflight before the
+installed helper's registration/execution path. Preserve the exact diagnostic
+identity and reviewed GO; neither repeated registration nor a repaired result
+replaces the approved fresh cohort. The completion plan retains concrete Linux,
+installed/credential and spending gates.
 
 ## Before Launch
 
