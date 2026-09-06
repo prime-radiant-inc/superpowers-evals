@@ -138,3 +138,23 @@ test('native context and event allowances remain closed to uninspected fields an
     ),
   ).toThrow();
 });
+
+test('preserves the native assistant response without counting its telemetry twice', () => {
+  const events = readFileSync(
+    new URL(
+      './fixtures/observer/codex-0.146.0-response-events.jsonl',
+      import.meta.url,
+    ),
+  );
+  const index = indexCodexTranscript(source, events);
+  expect(
+    index.entries
+      .filter((entry) => entry.kind === 'message')
+      .map((entry) => entry.text),
+  ).toEqual(['Native capture response one complete.']);
+  expect(
+    index.entries.filter(
+      (entry) => entry.kind === 'call' || entry.kind === 'result',
+    ),
+  ).toEqual([]);
+});

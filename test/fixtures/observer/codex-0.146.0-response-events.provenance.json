@@ -1,0 +1,9 @@
+{
+  "source_sha256": "d60a5932cdb5b56f3e7eaa4651b49d78b0af51b5e9a1984e48455487c111f0bc",
+  "fixture_sha256": "33981409c3c7b6c609f466ad795157691d80a32a64b1822a5a210a186d0ff850",
+  "capture_source_commit": "4a4a63f0",
+  "physical_lines": [2, 8, 9, 10, 11, 12],
+  "transformation": "none; exact event and assistant-response physical lines copied",
+  "privacy_review": "Only generated turn/message IDs, scripted generic input/output, timestamps and synthetic token counts from isolated local provider. No credentials or personal content.",
+  "limits": "One native text response persisted; capture driver then refused normal transport cancellation. No tool or descendant qualification."
+}

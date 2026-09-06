@@ -745,6 +745,14 @@ const WorldStateSchema = z
 const NativeEventSchema = z.discriminatedUnion('type', [
   z
     .object({
+      type: z.literal('agent_message'),
+      message: z.string(),
+      phase: z.null(),
+      memory_citation: z.null(),
+    })
+    .strict(),
+  z
+    .object({
       type: z.literal('task_started'),
       turn_id: z.string().min(1),
       started_at: z.number().int().nonnegative(),
@@ -767,13 +775,15 @@ const NativeEventSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('task_complete'),
       turn_id: z.string().min(1),
-      last_agent_message: z.null(),
+      last_agent_message: z.string().nullable(),
       error: z
         .object({ message: z.string(), codex_error_info: z.literal('other') })
-        .strict(),
+        .strict()
+        .optional(),
       started_at: z.number().int().nonnegative(),
       completed_at: z.number().int().nonnegative(),
       duration_ms: z.number().int().nonnegative(),
+      time_to_first_token_ms: z.number().int().nonnegative().optional(),
     })
     .strict(),
 ]);
@@ -810,6 +820,20 @@ const TokenCountSchema = z
       .strict(),
   })
   .strict();
+const NativeUsageSchema = UsageSchema.extend({
+  cache_write_input_tokens: z.number().int().nonnegative(),
+}).strict();
+const NativeTokenCountSchema = TokenCountSchema.extend({
+  info: TokenCountSchema.shape.info
+    .extend({
+      total_token_usage: NativeUsageSchema,
+      last_token_usage: NativeUsageSchema,
+    })
+    .strict(),
+  rate_limits: TokenCountSchema.shape.rate_limits
+    .extend({ spend_control_reached: z.null() })
+    .strict(),
+}).strict();
 function indexContext(
   value: JsonValue | undefined,
   source: RawSource,
@@ -904,7 +928,11 @@ export function indexCodexTranscript(
           : null;
       if (
         !native?.success &&
-        !TokenCountSchema.safeParse(row.value['payload']).success
+        !(
+          source.expected_cli_version === '0.146.0'
+            ? NativeTokenCountSchema
+            : TokenCountSchema
+        ).safeParse(row.value['payload']).success
       )
         fail(
           'unknown_record',
