@@ -296,3 +296,79 @@ test('source EACCES refuses capture without receipts', () => {
     chmodSync(f.log, 0o600);
   }
 });
+
+test('receipt discovery exposes authenticated IDs and paths in bounded pages', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  writeFileSync(f.spec, 'Learning React');
+  const captured = captureInput(f.workdir);
+  const wd = Buffer.from(f.workdir).toString('base64');
+  const result = runObserverCommand('observer-receipts', wd) as {
+    receipts: { path: string; observation_id: string; artifact_path: string }[];
+    next_cursor: string | null;
+  };
+  const expected = captured.receipts.find(
+    (receipt) => receipt.artifact_path === 'spec.md',
+  )!;
+  expect(
+    result.receipts.find(
+      (receipt) => receipt.observation_id === expected.observation_id,
+    )?.path,
+  ).toBe(join(f.evidence, `${expected.name}.json`));
+  expect(result.next_cursor).toBeNull();
+  for (let i = 0; i < 9; i++) captureInput(f.workdir);
+  const first = runObserverCommand('observer-receipts', wd) as typeof result;
+  expect(first.receipts).toHaveLength(16);
+  expect(first.next_cursor).not.toBeNull();
+  const second = runObserverCommand(
+    'observer-receipts',
+    wd,
+    first.next_cursor!,
+  ) as typeof result;
+  expect(second.receipts).toHaveLength(4);
+  expect(second.next_cursor).toBeNull();
+  expect(
+    new Set(
+      [...first.receipts, ...second.receipts].map(
+        (receipt) => receipt.observation_id,
+      ),
+    ).size,
+  ).toBe(20);
+  expect(() =>
+    runObserverCommand(
+      'observer-receipts',
+      wd,
+      Buffer.from('../home').toString('base64'),
+    ),
+  ).toThrow();
+  mkdirSync(join(f.evidence, 'bundle'));
+  writeFileSync(join(f.evidence, 'bundle', 'capture-unowned.json'), 'invalid');
+  expect(
+    (runObserverCommand('observer-receipts', wd) as typeof result).receipts,
+  ).toHaveLength(16);
+});
+for (const mutation of ['bytes', 'prefix', 'id', 'symlink'])
+  test(`receipt discovery and reading reject ${mutation} tampering`, () => {
+    const f = fixture();
+    writeFileSync(f.log, f.raw);
+    const captured = captureInput(f.workdir);
+    const path = join(f.evidence, `${captured.receipts[0]!.name}.json`);
+    const receipt = JSON.parse(readFileSync(path, 'utf8'));
+    if (mutation === 'bytes')
+      receipt.content_base64 = Buffer.from('forged').toString('base64');
+    if (mutation === 'prefix') receipt.source_prefix.sha256 = '0'.repeat(64);
+    if (mutation === 'id') receipt.observation_id = 'conflicting-id';
+    if (mutation === 'symlink') {
+      rmSync(path);
+      symlinkSync(f.log, path);
+    } else writeFileSync(path, JSON.stringify(receipt));
+    const wd = Buffer.from(f.workdir).toString('base64');
+    expect(() => runObserverCommand('observer-receipts', wd)).toThrow();
+    expect(() =>
+      runObserverCommand(
+        'observer-read',
+        wd,
+        Buffer.from(path).toString('base64'),
+      ),
+    ).toThrow();
+  });

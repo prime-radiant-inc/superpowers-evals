@@ -71,7 +71,7 @@ try {
       score.status === 'pass' ? 0 : score.status === 'fail' ? 1 : 127;
   } else {
     throw new Error(
-      'Usage: brainstorming-evidence.ts install RUNNER_BINDING_PATH | observer-index WORKDIR_BASE64 | observer-read WORKDIR_BASE64 PATH_BASE64 | observer-write-review WORKDIR_BASE64 CONTENT_BASE64 | snapshot RAW_LOG ARTIFACT RECEIPT | index RAW_LOG | score EVIDENCE_DIR',
+      'Usage: brainstorming-evidence.ts install RUNNER_BINDING_PATH | observer-index WORKDIR_BASE64 | observer-receipts WORKDIR_BASE64 [CURSOR_BASE64] | observer-read WORKDIR_BASE64 PATH_BASE64 | observer-write-review WORKDIR_BASE64 CONTENT_BASE64 | snapshot RAW_LOG ARTIFACT RECEIPT | index RAW_LOG | score EVIDENCE_DIR',
     );
   }
 } catch (error) {

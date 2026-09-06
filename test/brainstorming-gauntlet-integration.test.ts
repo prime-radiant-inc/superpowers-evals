@@ -93,37 +93,108 @@ writeFileSync(${JSON.stringify(delivered)}, JSON.stringify({ reply: Bun.argv[2],
 `,
       );
       const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+      let actorReceipt: {
+        observation_id: string;
+        artifact_path: string;
+        content_base64: string;
+      } | null = null;
+      let selectedReceipt: { path: string; observation_id: string } | null =
+        null;
+      const actorJson = (messages: unknown[], id: string): unknown => {
+        const message = messages.find(
+          (message) =>
+            typeof message === 'object' &&
+            message !== null &&
+            (message as { tool_call_id?: string }).tool_call_id === id,
+        ) as { content: string } | undefined;
+        if (!message) return undefined;
+        const json = message.content
+          .split('\n')
+          .find((line) => line.startsWith('{'));
+        if (!json) throw new Error(`Actor did not receive JSON from ${id}`);
+        return JSON.parse(json);
+      };
+      const responses = [
+        step('reply', 'type_and_submit', {
+          text: `bun ${quote(subject)} ${quote(reply)}`,
+        }),
+        step('discover', 'bash', {
+          command: observerCommand(workdir, 'observer-receipts'),
+        }),
+        report(
+          'pass',
+          'accepted',
+          'Actor discovered and read the exact persisted receipt',
+        ),
+      ];
+      const scripted = makeScriptedClient(responses, 1000);
       await run({
         ...args,
         target: 'local',
         adapterType: args.adapter,
         config: loadConfig(args.cli, {}),
-        clientFactory: () =>
-          makeScriptedClient(
-            [
-              step('inspect', 'bash', {
+        clientFactory: () => ({
+          ...scripted,
+          async chat(messages: unknown[]) {
+            const discovered = actorJson(messages, 'discover') as
+              | {
+                  receipts: {
+                    path: string;
+                    observation_id: string;
+                    artifact_path: string;
+                  }[];
+                }
+              | undefined;
+            if (discovered && !selectedReceipt) {
+              const selected = discovered.receipts.find(
+                (receipt) => receipt.artifact_path === 'spec.md',
+              );
+              if (!selected)
+                throw new Error('Actor cannot discover the spec receipt');
+              selectedReceipt = selected;
+              return step('receipt-read', 'bash', {
                 command: observerCommand(
                   workdir,
                   'observer-read',
-                  Buffer.from(spec).toString('base64'),
+                  Buffer.from(selected.path).toString('base64'),
                 ),
-              }),
-              step('index', 'bash', {
-                command: observerCommand(workdir, 'observer-index'),
-              }),
-              step('reply', 'type_and_submit', {
-                text: `bun ${quote(subject)} ${quote(reply)}`,
-              }),
-              report(
-                'pass',
-                'accepted',
-                'Local subject validated persisted evidence',
-              ),
-            ],
-            1000,
-          ),
+              });
+            }
+            const read = actorJson(messages, 'receipt-read') as
+              | { content_base64: string }
+              | undefined;
+            if (read) {
+              actorReceipt = JSON.parse(
+                Buffer.from(read.content_base64, 'base64').toString(),
+              );
+              if (
+                actorReceipt?.observation_id !== selectedReceipt?.observation_id
+              )
+                throw new Error('Actor receipt identity changed');
+            }
+            return scripted.chat(messages);
+          },
+        }),
       });
       expect(JSON.parse(readFileSync(delivered, 'utf8')).reply).toBe(reply);
+      if (!actorReceipt || !selectedReceipt)
+        throw new Error('Actor never received the receipt');
+      const observed = actorReceipt as {
+        observation_id: string;
+        artifact_path: string;
+        content_base64: string;
+      };
+      const selected = selectedReceipt as {
+        path: string;
+        observation_id: string;
+      };
+      expect(observed.observation_id).toBe(selected.observation_id);
+      expect(Buffer.from(observed.content_base64, 'base64').toString()).toBe(
+        'Learn React state and event handling',
+      );
+      expect(
+        JSON.parse(readFileSync(selected.path, 'utf8')).observation_id,
+      ).toBe(observed.observation_id);
       expect(
         readdirSync(join(runDir, 'brainstorming-evidence')).length,
       ).toBeGreaterThan(0);

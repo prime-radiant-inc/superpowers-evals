@@ -1,8 +1,19 @@
 // Scenario-specific observer evidence, kept outside the Coding-Agent workdir.
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  fstatSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { readPinnedNoFollowBytes } from '../appliance/credential-scope.ts';
+import {
+  closePin,
+  pinAbsoluteDir,
+  readPinnedNoFollowBytes,
+} from '../appliance/credential-scope.ts';
 import {
   discoverObserverSources,
   indexBoundObserverSource,
@@ -15,6 +26,7 @@ import {
   type FinalState,
   verifyFinalState,
 } from './observer/final-state.ts';
+import { verifyRawPrefix } from './observer/raw.ts';
 import {
   type ArtifactReceipt,
   validateArtifactReceipt,
@@ -112,6 +124,8 @@ Follow the story's actor policy. Read presented artifacts before replying. The i
 
 The shared shell accepts only these exact observer commands. Substitute canonical base64 text for PATH_BASE64 or CONTENT_BASE64. Use no redirection, shell operators or command substitution.
 
+- List authenticated receipt IDs and paths (16 per page): ${observerCommand(workdir, 'observer-receipts')}
+  If next_cursor is non-null, append it as one single-quoted base64 argument to that same command. Read the returned receipt path with observer-read and cite its observation_id.
 - Index the bound source: ${observerCommand(workdir, 'observer-index')}
 - Read an artifact or private receipt: ${observerCommand(workdir, 'observer-read', 'PATH_BASE64')}
 - Save the complete V2 actor review once to private evidence/review.json: ${observerCommand(workdir, 'observer-write-review', 'CONTENT_BASE64')}
@@ -248,7 +262,11 @@ const observerCli = resolve(
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 export function observerCommand(
   workdir: string,
-  operation: 'observer-index' | 'observer-read' | 'observer-write-review',
+  operation:
+    | 'observer-index'
+    | 'observer-receipts'
+    | 'observer-read'
+    | 'observer-write-review',
   argument?: string,
 ): string {
   return [
@@ -284,17 +302,18 @@ export function guardedInputCapture(workdir: string, request: unknown) {
       throw new Error('Shared shell requires one observer command.');
     const allowed =
       command === observerCommand(workdir, 'observer-index') ||
-      (['observer-read', 'observer-write-review'] as const).some(
-        (operation) => {
-          const prefix = `${observerCommand(workdir, operation)} `;
-          if (!command.startsWith(prefix)) return false;
-          const rest = command.slice(prefix.length);
-          return (
-            /^'[A-Za-z0-9+/]*={0,2}'$/.test(rest) &&
-            canonicalBase64(rest.slice(1, -1))
-          );
-        },
-      );
+      command === observerCommand(workdir, 'observer-receipts') ||
+      (
+        ['observer-read', 'observer-write-review', 'observer-receipts'] as const
+      ).some((operation) => {
+        const prefix = `${observerCommand(workdir, operation)} `;
+        if (!command.startsWith(prefix)) return false;
+        const rest = command.slice(prefix.length);
+        return (
+          /^'[A-Za-z0-9+/]*={0,2}'$/.test(rest) &&
+          canonicalBase64(rest.slice(1, -1))
+        );
+      });
     if (!allowed)
       throw new Error(
         'Shared shell accepts only a single private observer command; artifact edits and reply injection are refused.',
@@ -302,6 +321,109 @@ export function guardedInputCapture(workdir: string, request: unknown) {
   } else if (name !== 'type' && name !== 'press' && name !== 'type_and_submit')
     throw new Error('Input route is not supported.');
   return captureInput(workdir);
+}
+
+const receiptFilename =
+  /^capture-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.json$/;
+function readObservedReceipt(
+  evidence: string,
+  name: string,
+  observation: InputObservation,
+) {
+  if (!receiptFilename.test(name))
+    throw new Error('Receipt filename is not an owned capture identity.');
+  const raw = readPinnedNoFollowBytes(
+    evidence,
+    [name],
+    'observer receipt',
+    true,
+  );
+  if (!raw) throw new Error('Observer receipt is unavailable.');
+  const receipt = validateArtifactReceipt(
+    JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)),
+  );
+  if (name !== `capture-${receipt.observation_id}.json`)
+    throw new Error(
+      'Receipt filename conflicts with its observation identity.',
+    );
+  const parent = observation.binding.sources.find(
+    (entry) => entry.source.source_id === observation.binding.parent_source_id,
+  );
+  if (!parent) throw new Error('Receipt requires its bound parent.');
+  verifyRawPrefix(
+    parent.source,
+    Buffer.from(observation.raw_base64, 'base64'),
+    receipt.source_prefix,
+  );
+  return { raw, receipt };
+}
+function listObservedReceipts(
+  workdir: string,
+  evidence: string,
+  cursor?: string,
+) {
+  const observation = readInputObservation(workdir);
+  const pin = pinAbsoluteDir(evidence, 'observer receipts');
+  try {
+    const inventory = () =>
+      readdirSync(pin.viaPath)
+        .filter((name) => name.startsWith('capture-') && name.endsWith('.json'))
+        .sort();
+    const names = inventory();
+    let after = -1;
+    if (cursor !== undefined) {
+      if (!canonicalBase64(cursor))
+        throw new Error('Receipt cursor must be canonical base64.');
+      const name = new TextDecoder('utf-8', { fatal: true }).decode(
+        Buffer.from(cursor, 'base64'),
+      );
+      after = names.indexOf(name);
+      if (!receiptFilename.test(name) || after < 0)
+        throw new Error('Receipt cursor must name an existing owned capture.');
+    }
+    const identities = new Set<string>();
+    const metadata = names.map((name) => {
+      const { raw, receipt } = readObservedReceipt(evidence, name, observation);
+      if (identities.has(receipt.observation_id))
+        throw new Error('Duplicate receipt observation identity.');
+      identities.add(receipt.observation_id);
+      return {
+        path: join(evidence, name),
+        observation_id: receipt.observation_id,
+        artifact_path: receipt.artifact_path,
+        source_prefix: receipt.source_prefix,
+        bytes: receipt.bytes,
+        sha256: receipt.sha256,
+        file_bytes: raw.length,
+        file_sha256: createHash('sha256').update(raw).digest('hex'),
+      };
+    });
+    const current = pinAbsoluteDir(evidence, 'observer receipts');
+    try {
+      const before = fstatSync(pin.fd);
+      const after = fstatSync(current.fd);
+      if (
+        before.dev !== after.dev ||
+        before.ino !== after.ino ||
+        JSON.stringify(names) !== JSON.stringify(inventory())
+      )
+        throw new Error('Receipt inventory changed during observation.');
+    } finally {
+      closePin(current);
+    }
+    verifyFinalState(observation.binding.roots, observation.inventory);
+    const end = Math.min(after + 17, names.length);
+    const last = names[end - 1];
+    return {
+      receipts: metadata.slice(after + 1, end),
+      next_cursor:
+        end < names.length && last
+          ? Buffer.from(last).toString('base64')
+          : null,
+    };
+  } finally {
+    closePin(pin);
+  }
 }
 
 export function runObserverCommand(
@@ -314,6 +436,8 @@ export function runObserverCommand(
   const workdir = Buffer.from(encodedWorkdir, 'base64').toString('utf8');
   const binding = readBinding(workdir);
   const evidence = join(dirname(workdir), 'brainstorming-evidence');
+  if (operation === 'observer-receipts')
+    return listObservedReceipts(workdir, evidence, argument);
   if (operation === 'observer-index' && argument === undefined) {
     const observation = readInputObservation(workdir);
     const parent = observation.binding.sources.find(
@@ -352,12 +476,26 @@ export function runObserverCommand(
       throw new Error(
         'Observer read must remain within artifacts or private evidence/context.',
       );
-    const raw = readPinnedNoFollowBytes(
-      root,
-      path.slice(root.length + 1).split('/'),
-      'observer read',
-      true,
-    );
+    const raw =
+      root === evidence && basename(path).startsWith('capture-')
+        ? (() => {
+            if (dirname(path) !== evidence)
+              throw new Error('Receipt must be an owned top-level capture.');
+            const observation = readInputObservation(workdir);
+            const { raw } = readObservedReceipt(
+              evidence,
+              basename(path),
+              observation,
+            );
+            verifyFinalState(observation.binding.roots, observation.inventory);
+            return raw;
+          })()
+        : readPinnedNoFollowBytes(
+            root,
+            path.slice(root.length + 1).split('/'),
+            'observer read',
+            true,
+          );
     return { path, content_base64: raw?.toString('base64') };
   }
   throw new Error('Observer command is not supported.');
