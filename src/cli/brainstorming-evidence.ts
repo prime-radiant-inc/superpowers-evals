@@ -19,6 +19,35 @@ function arg(index: number): string {
   if (!value) throw new Error(`Missing argument ${index + 1}`);
   return value;
 }
+function readoutArgs(
+  values: string[],
+): Parameters<typeof readObserverCampaign>[0] {
+  const allowed = new Set(['--campaign-dir', '--results-root', '--review-set']);
+  const paths = new Map<string, string>();
+  for (let index = 0; index < values.length; index += 2) {
+    const flag = values[index];
+    const value = values[index + 1];
+    if (!flag || !allowed.has(flag))
+      throw new Error(`readout arguments: unknown option ${flag ?? ''}`);
+    if (paths.has(flag))
+      throw new Error(`readout arguments: duplicate ${flag}`);
+    if (!value || value.startsWith('--'))
+      throw new Error(`readout arguments: missing value for ${flag}`);
+    paths.set(flag, value);
+  }
+  const campaignDir = paths.get('--campaign-dir');
+  const resultsRoot = paths.get('--results-root');
+  if (!campaignDir || !resultsRoot)
+    throw new Error(
+      'readout arguments: --campaign-dir and --results-root are required',
+    );
+  const reviewSetPath = paths.get('--review-set');
+  return {
+    campaignDir: resolve(campaignDir),
+    resultsRoot: resolve(resultsRoot),
+    ...(reviewSetPath ? { reviewSetPath: resolve(reviewSetPath) } : {}),
+  };
+}
 try {
   if (command === 'install' && args.length === 1) {
     const path = resolve(arg(0));
@@ -41,20 +70,9 @@ try {
     console.log(JSON.stringify(captureInput(resolve(arg(0)))));
   } else if (command === 'index' && args.length === 1) {
     console.log(JSON.stringify(indexObserverBundle(resolve(arg(0))), null, 2));
-  } else if (
-    command === 'readout' &&
-    (args.length === 2 || args.length === 3)
-  ) {
+  } else if (command === 'readout') {
     console.log(
-      JSON.stringify(
-        readObserverCampaign({
-          campaignDir: resolve(arg(0)),
-          resultsRoot: resolve(arg(1)),
-          ...(args[2] ? { reviewSetPath: resolve(args[2]) } : {}),
-        }),
-        null,
-        2,
-      ),
+      JSON.stringify(readObserverCampaign(readoutArgs(args)), null, 2),
     );
   } else if (command === 'score' && args.length === 1) {
     const score = readObserverScore(resolve(arg(0)));
@@ -63,7 +81,7 @@ try {
       score.status === 'pass' ? 0 : score.status === 'fail' ? 1 : 127;
   } else {
     throw new Error(
-      'Usage: brainstorming-evidence.ts install RUNNER_BINDING_PATH | observer-index WORKDIR_BASE64 | observer-receipts WORKDIR_BASE64 [CURSOR_BASE64] | observer-read WORKDIR_BASE64 PATH_BASE64 | observer-write-review WORKDIR_BASE64 CONTENT_BASE64 | snapshot WORKDIR | index BUNDLE_DIR | score BUNDLE_DIR | readout CAMPAIGN_DIR RESULTS_ROOT [REVIEW_SET]',
+      'Usage: brainstorming-evidence.ts install RUNNER_BINDING_PATH | observer-index WORKDIR_BASE64 | observer-receipts WORKDIR_BASE64 [CURSOR_BASE64] | observer-read WORKDIR_BASE64 PATH_BASE64 | observer-write-review WORKDIR_BASE64 CONTENT_BASE64 | snapshot WORKDIR | index BUNDLE_DIR | score BUNDLE_DIR | readout --campaign-dir PATH --results-root PATH [--review-set PATH]',
     );
   }
 } catch (error) {

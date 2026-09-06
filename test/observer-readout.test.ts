@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   mkdirSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   ExecutionJournalWriter,
   initExecutionJournal,
@@ -756,4 +757,71 @@ test('unauthenticated review claims remain in rejected submissions without being
   expect(
     r.attempts[0]?.disagreements.some((reason) => reason.includes('Reviewer')),
   ).toBe(false);
+});
+
+function readoutCli(args: string[]) {
+  return spawnSync(
+    process.execPath,
+    [
+      resolve(import.meta.dir, '../src/cli/brainstorming-evidence.ts'),
+      'readout',
+      ...args,
+    ],
+    { encoding: 'utf8' },
+  );
+}
+test.each([
+  true,
+  false,
+])('readout CLI accepts explicit roots and review set for active=%s', (active) => {
+  const f = fixture({ active });
+  const result = readoutCli([
+    '--results-root',
+    f.resultsRoot,
+    '--review-set',
+    f.reviews(),
+    '--campaign-dir',
+    f.campaignDir,
+  ]);
+  expect(result.status).toBe(0);
+  const output = JSON.parse(result.stdout);
+  expect(output.behavior_available).toBe(!active);
+  if (active) expect(output.comparisons).toEqual([]);
+  else {
+    expect(output.comparisons.length).toBe(1);
+    expect(
+      output.attempts.every(
+        (attempt: { review: { ready: boolean } }) => attempt.review.ready,
+      ),
+    ).toBe(true);
+  }
+});
+test('readout CLI rejects missing duplicate unknown and positional arguments before reading evidence', () => {
+  const f = fixture({ active: true });
+  const required = [
+    '--campaign-dir',
+    f.campaignDir,
+    '--results-root',
+    f.resultsRoot,
+  ];
+  const invalid = [
+    [],
+    ['--campaign-dir'],
+    ['--campaign-dir', f.campaignDir],
+    ['--results-root', f.resultsRoot],
+    ['--campaign-dir', f.campaignDir, '--results-root'],
+    [...required, '--review-set'],
+    [...required, '--campaign-dir', f.campaignDir],
+    [...required, '--results-root', f.resultsRoot],
+    [...required, '--review-set', 'absent', '--review-set', 'also-absent'],
+    [...required, '--unknown', f.campaignDir],
+    [f.campaignDir, f.resultsRoot],
+    [...required, 'unexpected'],
+  ];
+  for (const args of invalid) {
+    const result = readoutCli(args);
+    expect(result.status).toBe(127);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('readout arguments:');
+  }
 });

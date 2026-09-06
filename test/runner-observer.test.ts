@@ -232,7 +232,9 @@ test('observer readout CLI preserves active-campaign behavior hiding', () => {
       [
         resolve(import.meta.dir, '../src/cli/brainstorming-evidence.ts'),
         'readout',
+        '--campaign-dir',
         f.campaignDir,
+        '--results-root',
         results,
       ],
       { encoding: 'utf8' },
