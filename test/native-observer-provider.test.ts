@@ -2,7 +2,10 @@ import { expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { getEnv } from '../src/env.ts';
-import { startNativeObserverProvider } from './linux/fixtures/native-observer-provider.ts';
+import {
+  type NativeObserverBlock,
+  startNativeObserverProvider,
+} from './linux/fixtures/native-observer-provider.ts';
 
 const schema = {
   type: 'object',
@@ -236,6 +239,147 @@ test('a request predicate cannot bypass advertised-tool schema validation', asyn
     expect(server.records[0]?.chunks).toEqual([]);
   } finally {
     await server.stop();
+  }
+});
+
+test('a response factory uses an observed toy child ID in a later advertised join tool', async () => {
+  // These are fictional test tools, not a claim about either native CLI.
+  const request = {
+    ...bodies.responses,
+    tools: [
+      ...bodies.responses.tools,
+      {
+        type: 'function',
+        name: 'fixture_join',
+        parameters: {
+          type: 'object',
+          properties: { child_id: { type: 'string' } },
+          required: ['child_id'],
+          additionalProperties: false,
+        },
+      },
+    ],
+  };
+  let childId: string | undefined;
+  const server = startNativeObserverProvider({
+    port: 0,
+    steps: [
+      {
+        protocol: 'responses',
+        request,
+        blocks: [
+          {
+            type: 'tool',
+            name: 'fixture_note',
+            id: 'call_fixture_create',
+            input: { note: 'toy child' },
+          },
+        ],
+      },
+      {
+        protocol: 'responses',
+        request: (body) => {
+          const result = (body['input'] as Record<string, unknown>[]).at(-1)!;
+          if (
+            result['type'] !== 'function_call_output' ||
+            result['call_id'] !== 'call_fixture_create' ||
+            typeof result['output'] !== 'string'
+          )
+            return false;
+          const observed = JSON.parse(result['output']) as {
+            fixture_child_id?: unknown;
+          };
+          if (typeof observed.fixture_child_id !== 'string') return false;
+          childId = observed.fixture_child_id;
+          return true;
+        },
+        blocks: (body) => {
+          const result = (body['input'] as Record<string, unknown>[]).at(-1)!;
+          if (result['call_id'] !== 'call_fixture_create') {
+            throw new Error('unexpected toy tool result');
+          }
+          return [
+            {
+              type: 'tool',
+              name: 'fixture_join',
+              id: 'call_fixture_join',
+              input: { child_id: childId },
+            },
+          ];
+        },
+      },
+    ],
+  });
+  try {
+    const created = await post(server.url, 'responses', request);
+    expect(created.status).toBe(200);
+    const creation = (await created.text())
+      .trim()
+      .split('\n\n')
+      .map((event) => JSON.parse(event.split('\ndata: ')[1]!))
+      .at(-1).response.output[0];
+    expect(creation.name).toBe('fixture_note');
+    const observedId = crypto.randomUUID();
+    const joined = await post(server.url, 'responses', {
+      ...request,
+      input: [
+        ...request.input,
+        {
+          type: 'function_call_output',
+          call_id: creation.call_id,
+          output: JSON.stringify({ fixture_child_id: observedId }),
+        },
+      ],
+    });
+    expect(joined.status).toBe(200);
+    const joinCall = (await joined.text())
+      .trim()
+      .split('\n\n')
+      .map((event) => JSON.parse(event.split('\ndata: ')[1]!))
+      .at(-1).response.output[0];
+    expect(joinCall.name).toBe('fixture_join');
+    expect(JSON.parse(joinCall.arguments)).toEqual({ child_id: observedId });
+  } finally {
+    await server.stop();
+  }
+});
+
+test('invalid factory output, unadvertised tools, arguments and oversized responses refuse before SSE', async () => {
+  const invalid: unknown[] = [
+    null,
+    [],
+    [{ type: 'invented' }],
+    [{ type: 'tool', name: 'not_advertised', id: 'call_fixture', input: {} }],
+    [
+      {
+        type: 'tool',
+        name: 'fixture_note',
+        id: 'call_fixture',
+        input: { note: 2 },
+      },
+    ],
+    [{ type: 'text', text: 'x'.repeat(2048) }],
+  ];
+  for (const blocks of invalid) {
+    const server = startNativeObserverProvider({
+      port: 0,
+      maxResponseBytes: 1024,
+      steps: [
+        {
+          protocol: 'responses',
+          request: bodies.responses,
+          blocks: () => blocks as NativeObserverBlock[],
+        },
+      ],
+    });
+    try {
+      expect(
+        (await post(server.url, 'responses', bodies.responses)).status,
+      ).toBe(400);
+      expect(server.records[0]?.chunks).toEqual([]);
+    } finally {
+      await server.stop();
+    }
   }
 });
 

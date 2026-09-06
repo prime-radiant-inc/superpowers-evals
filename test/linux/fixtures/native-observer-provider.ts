@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
 
+export type NativeObserverBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool'; id: string; name: string; input: unknown };
+
 export interface NativeObserverStep {
   protocol: 'messages' | 'responses';
   // Predicates are supplied by the inspected capture script, receive a copy,
@@ -8,11 +12,16 @@ export interface NativeObserverStep {
   request:
     | Record<string, unknown>
     | ((request: Readonly<Record<string, unknown>>) => boolean);
-  blocks: (
-    | { type: 'text'; text: string }
-    | { type: 'tool'; id: string; name: string; input: unknown }
-  )[];
+  // Factories run only after request acceptance. Their output is cloned and
+  // subjected to the same catalog, argument and byte limits as fixed blocks.
+  blocks:
+    | NativeObserverBlock[]
+    | ((request: Readonly<Record<string, unknown>>) => NativeObserverBlock[]);
 }
+type ResolvedStep = Omit<NativeObserverStep, 'blocks'> & {
+  blocks: NativeObserverBlock[];
+};
+
 interface Options {
   port?: number;
   steps: NativeObserverStep[];
@@ -147,7 +156,7 @@ function validator(schema: unknown): (value: unknown) => boolean {
   };
 }
 
-function validateStep(step: NativeObserverStep, request: ObjectValue) {
+function validateStep(step: ResolvedStep, request: ObjectValue) {
   requireCondition(
     step.protocol === 'messages' || step.protocol === 'responses',
     'unsupported protocol',
@@ -180,7 +189,10 @@ function validateStep(step: NativeObserverStep, request: ObjectValue) {
       ),
     );
   }
-  requireCondition(step.blocks.length > 0, 'empty response');
+  requireCondition(
+    Array.isArray(step.blocks) && step.blocks.length > 0,
+    'expected nonempty response blocks',
+  );
   const ids = new Set<string>();
   for (const block of step.blocks) {
     if (block.type === 'text') {
@@ -214,7 +226,7 @@ function parts(value: string): string[] {
 // Wire event shapes are from the official SDKs bundled in the selected Gauntlet
 // checkout. These are protocol fixtures, not native CLI transcript evidence.
 function eventsFor(
-  step: NativeObserverStep,
+  step: ResolvedStep,
   sequence: number,
   request: ObjectValue,
 ): ObjectValue[] {
@@ -406,15 +418,25 @@ export function startNativeObserverProvider(options: Options) {
       typeof step.request === 'function'
         ? step.request
         : structuredClone(step.request),
-    blocks: structuredClone(step.blocks),
+    blocks:
+      typeof step.blocks === 'function'
+        ? step.blocks
+        : structuredClone(step.blocks),
   }));
   const compile = (
     step: NativeObserverStep,
     request: ObjectValue,
     index: number,
   ) => {
-    validateStep(step, request);
-    const chunks = eventsFor(step, index + 1, request).flatMap((event) =>
+    const resolved: ResolvedStep = {
+      ...step,
+      blocks:
+        typeof step.blocks === 'function'
+          ? structuredClone(step.blocks(structuredClone(request)))
+          : step.blocks,
+    };
+    validateStep(resolved, request);
+    const chunks = eventsFor(resolved, index + 1, request).flatMap((event) =>
       parts(`event: ${event['type']}\ndata: ${JSON.stringify(event)}\n\n`),
     );
     requireCondition(
@@ -424,7 +446,7 @@ export function startNativeObserverProvider(options: Options) {
     return chunks;
   };
   const streams = steps.map((step, index) =>
-    typeof step.request === 'function'
+    typeof step.request === 'function' || typeof step.blocks === 'function'
       ? undefined
       : compile(step, step.request, index),
   );
