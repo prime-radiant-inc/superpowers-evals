@@ -190,6 +190,7 @@ localTest(
         } else {
           expect(observed.seededConfig.hasCompletedOnboarding).toBe(true);
           expect(observed.seededConfig.theme).toBe('dark');
+          expect(observed.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE).toBe('1');
         }
         expect(observed.argv).not.toContain('exec');
         expect(observed.argv).not.toContain('-p');

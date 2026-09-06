@@ -601,6 +601,8 @@ export async function captureNativeParent(
     } else {
       env['ANTHROPIC_API_KEY'] = 'native-capture-fake';
       env['ANTHROPIC_BASE_URL'] = endpoint;
+      // The pinned CLI gates its automatic session-title request on this flag.
+      env['CLAUDE_CODE_DISABLE_TERMINAL_TITLE'] = '1';
       // The existing Claude adapter seeds project trust and the literal key's approval suffix.
       writeFileSync(
         join(home, '.claude.json'),
