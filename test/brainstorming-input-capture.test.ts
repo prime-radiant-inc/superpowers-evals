@@ -372,3 +372,64 @@ for (const mutation of ['bytes', 'prefix', 'id', 'symlink'])
       ),
     ).toThrow();
   });
+
+test('deep legal artifact paths paginate below the transport byte cap without loss', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  // Control characters are legal filesystem path bytes and expand to six JSON bytes.
+  const component = '\u0001'.repeat(160);
+  const deep = join(f.workdir, component, component, component, component);
+  mkdirSync(deep, { recursive: true });
+  for (let i = 0; i < 17; i++)
+    writeFileSync(join(deep, `${'\u0001'.repeat(120)}-${i}.md`), 'artifact');
+  const captured = captureInput(f.workdir);
+  const wd = Buffer.from(f.workdir).toString('base64');
+  type Page = {
+    receipts: { observation_id: string; path: string }[];
+    next_cursor: string | null;
+  };
+  const first = runObserverCommand('observer-receipts', wd) as Page;
+  expect(Buffer.byteLength(`${JSON.stringify(first)}\n`)).toBeLessThanOrEqual(
+    32 * 1024,
+  );
+  expect(first.receipts.length).toBeGreaterThan(0);
+  expect(first.receipts.length).toBeLessThan(16);
+  expect(runObserverCommand('observer-receipts', wd)).toEqual(first);
+  const ids: string[] = [];
+  let page = first;
+  let calls = 0;
+  for (;;) {
+    expect(Buffer.byteLength(`${JSON.stringify(page)}\n`)).toBeLessThanOrEqual(
+      32 * 1024,
+    );
+    expect(page.receipts.length).toBeGreaterThan(0);
+    ids.push(...page.receipts.map((receipt) => receipt.observation_id));
+    calls++;
+    if (page.next_cursor === null) break;
+    expect(calls).toBeLessThan(captured.receipts.length);
+    page = runObserverCommand(
+      'observer-receipts',
+      wd,
+      page.next_cursor,
+    ) as Page;
+  }
+  expect(ids.sort()).toEqual(
+    captured.receipts.map((receipt) => receipt.observation_id).sort(),
+  );
+  expect(new Set(ids).size).toBe(captured.receipts.length);
+});
+test('one schema-valid oversized receipt refuses instead of truncating or skipping it', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  const captured = captureInput(f.workdir);
+  const path = join(f.evidence, `${captured.receipts[0]!.name}.json`);
+  const receipt = JSON.parse(readFileSync(path, 'utf8'));
+  receipt.artifact_path = '\u0001'.repeat(6000);
+  writeFileSync(path, JSON.stringify(receipt));
+  expect(() =>
+    runObserverCommand(
+      'observer-receipts',
+      Buffer.from(f.workdir).toString('base64'),
+    ),
+  ).toThrow('exceeds the receipt page byte limit');
+});

@@ -124,7 +124,7 @@ Follow the story's actor policy. Read presented artifacts before replying. The i
 
 The shared shell accepts only these exact observer commands. Substitute canonical base64 text for PATH_BASE64 or CONTENT_BASE64. Use no redirection, shell operators or command substitution.
 
-- List authenticated receipt IDs and paths (16 per page): ${observerCommand(workdir, 'observer-receipts')}
+- List authenticated receipt IDs and paths (at most 16 entries and 32 KiB of serialized UTF-8 per page): ${observerCommand(workdir, 'observer-receipts')}
   If next_cursor is non-null, append it as one single-quoted base64 argument to that same command. Read the returned receipt path with observer-read and cite its observation_id.
 - Index the bound source: ${observerCommand(workdir, 'observer-index')}
 - Read an artifact or private receipt: ${observerCommand(workdir, 'observer-read', 'PATH_BASE64')}
@@ -400,8 +400,8 @@ function listObservedReceipts(
     });
     const current = pinAbsoluteDir(evidence, 'observer receipts');
     try {
-      const before = fstatSync(pin.fd);
-      const after = fstatSync(current.fd);
+      const before = fstatSync(pin.fd, { bigint: true });
+      const after = fstatSync(current.fd, { bigint: true });
       if (
         before.dev !== after.dev ||
         before.ino !== after.ino ||
@@ -412,15 +412,28 @@ function listObservedReceipts(
       closePin(current);
     }
     verifyFinalState(observation.binding.roots, observation.inventory);
-    const end = Math.min(after + 17, names.length);
-    const last = names[end - 1];
-    return {
-      receipts: metadata.slice(after + 1, end),
+    // The bash transport caps stdout at 64 KiB. Include the complete JSON
+    // envelope, cursor and CLI newline; leave half the cap as transport headroom.
+    const byteLimit = 32 * 1024;
+    const pageFor = (start: number, end: number) => ({
+      receipts: metadata.slice(start, end),
       next_cursor:
-        end < names.length && last
-          ? Buffer.from(last).toString('base64')
+        end < names.length && names[end - 1]
+          ? Buffer.from(names[end - 1] as string).toString('base64')
           : null,
-    };
+    });
+    const fits = (page: ReturnType<typeof pageFor>) =>
+      Buffer.byteLength(`${JSON.stringify(page)}\n`, 'utf8') <= byteLimit;
+    for (let index = 0; index < metadata.length; index++) {
+      if (!fits(pageFor(index, index + 1)))
+        throw new Error(
+          'One receipt exceeds the receipt page byte limit; no records were truncated or skipped.',
+        );
+    }
+    let end = after + 1;
+    const limit = Math.min(after + 17, names.length);
+    while (end < limit && fits(pageFor(after + 1, end + 1))) end++;
+    return pageFor(after + 1, end);
   } finally {
     closePin(pin);
   }

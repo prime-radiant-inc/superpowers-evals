@@ -21,9 +21,9 @@ import { buildGauntletArgv } from '../src/runner/index.ts';
 import { runSetup } from '../src/setup-step.ts';
 
 const gauntletRoot = getEnv('GAUNTLET_ROOT');
-test.skipIf(!gauntletRoot)(
-  'Quorum setup and argv activate capture through Gauntlet run and real TUI dispatch',
-  async () => {
+test.skipIf(!gauntletRoot).each([false, true])(
+  'Quorum setup and argv expose authenticated receipt pages through real TUI dispatch (deep=%s)',
+  async (deepPaths) => {
     const runDir = realpathSync(
       mkdtempSync(join(tmpdir(), 'brainstorming-gauntlet-')),
     );
@@ -53,6 +53,16 @@ test.skipIf(!gauntletRoot)(
       const rawLog = join(logDir, 'main.jsonl');
       const spec = join(workdir, 'spec.md');
       writeFileSync(spec, 'Learn React state and event handling');
+      if (deepPaths) {
+        const component = '\u0001'.repeat(160);
+        const deep = join(workdir, component, component, component, component);
+        mkdirSync(deep, { recursive: true });
+        for (let i = 0; i < 17; i++)
+          writeFileSync(
+            join(deep, `${'\u0001'.repeat(120)}-${i}.md`),
+            'Learn React state and event handling',
+          );
+      }
       writeFileSync(
         rawLog,
         `${JSON.stringify({ type: 'session_meta', payload: { id: 'main', cwd: workdir, cli_version: '0.144.3', originator: 'codex-tui', thread_source: 'user', source: 'cli' } })}\n${JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Please review spec.md.' }] } })}\n`,
@@ -146,8 +156,13 @@ writeFileSync(${JSON.stringify(delivered)}, JSON.stringify({ reply: Bun.argv[2],
                 }
               | undefined;
             if (discovered && !selectedReceipt) {
-              const selected = discovered.receipts.find(
-                (receipt) => receipt.artifact_path === 'spec.md',
+              expect(
+                Buffer.byteLength(`${JSON.stringify(discovered)}\n`),
+              ).toBeLessThanOrEqual(32 * 1024);
+              const selected = discovered.receipts.find((receipt) =>
+                deepPaths
+                  ? receipt.artifact_path.includes('/')
+                  : receipt.artifact_path === 'spec.md',
               );
               if (!selected)
                 throw new Error('Actor cannot discover the spec receipt');
