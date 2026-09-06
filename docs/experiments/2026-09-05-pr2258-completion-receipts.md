@@ -35,16 +35,18 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 
 ## Execution state
 
-Tasks 1, 5 and 6 have reviewed source implementations integrated. Tasks 2 and 3
-have reviewed source slices, with native parent/descendant qualification still
-incomplete. Task 4 and the native capture driver have integrated corrections
-that passed scoped re-review. Task 7's first full check found one credential test
-fixture omission, now fixed and reviewed. The six-concurrent Linux rehearsal
-is being prepared as source; no Linux or native qualification has run.
-Tasks 9–11 remain pending. Source implementation/review remains authorized.
-Linux qualification, installed changes/credential issuance and provider execution
-each await their concrete packet and applicable authorization. No new spending,
-provider request, Docker run, installed change, push or merge occurred here.
+Tasks 1, 4, 5 and 6 have reviewed source implementations integrated. Tasks 2 and
+3 have reviewed source slices; native parent/descendant qualification and Claude
+eligibility remain incomplete. Task 7's integrated full check and final reviews
+are complete for the current source preparation. All four Important findings
+and the later narrow BOM defect are corrected and reviewed. Gate A's private
+command packet passed operational review; final source/artifact pins are being
+prepared. Gate B's concrete installed packet depends on Task 8 Linux receipts.
+
+No Linux/native qualification, installed preparation, credential issuance,
+provider execution, push or merge has occurred. Tasks 8–11 remain gated.
+The full completion plan and comparison are not complete. The next action is
+the explicitly approved Gate A tranche, once Drew authorizes its concrete packet.
 
 For each completed task append its commit, test command/results, review and fix
 outcomes, evidence references, active authorization and next dependency. Preserve
@@ -277,3 +279,89 @@ identified a source-revision preflight gap: mutually consistent receipt strings
 and the observer file list do not authenticate the actual executing checkout.
 Its correction belongs to the final combined fix wave; green tests do not waive
 that finding. Source and dependent qualification pins must be refreshed afterward.
+
+## Final whole-branch review
+
+Fresh specification and code reviewers inspected `672a0ad2..294513c2` and
+requested changes. Their combined list has four Important source defects:
+actual executing checkout identity/bytes were not authenticated against the
+reviewed Evals SHA; selected credentials sharing a compiled quota pool were
+not summed; duplicate account identities could split aggregate demand into
+separately checked rows; and unbounded observer index/member responses could
+exceed the pinned Gauntlet 64 KiB stdout cap. No Critical or Minor finding was
+raised. All six recorded architectural rulings were accepted.
+
+One fresh implementer owns the combined correction wave from `02411699`, with
+behavioral regressions and one scoped re-review afterward. The review confirms
+the candidate/shutdown/publication, immutable replay and strict/general readout
+boundaries as coherent with the selected design, while preserving the separate
+native and operational acceptance gaps. Source is not yet ready for qualification.
+
+## Reviewed final correction and integrated evidence
+
+The combined source correction is integrated as `04991f4f` and `08eb2b62`.
+Preflight now authenticates the complete executing Git tree before and after
+receipt intake, including modifications hidden by index flags. It sums subject
+and grader demand by actual pool identity and rejects duplicate account rows.
+Observer reads use authenticated continuation with complete content hashes and
+a measured 32 KiB serialized envelope. Readable UTF-8 chunks and an exact
+`receipt-content` view expose saved approval revisions through the closed guard.
+No arbitrary shell route or scoring/campaign change was added.
+
+Worker reports 68 focused source passes and five actual pinned-Gauntlet
+integration passes. The latter exercises large indexes, individual call/result
+payloads, documents, raw receipts and earlier saved revisions through the real
+local tool transport. Initial truncated-JSON and readability failures are retained
+in the private logs, as are an existing five-second test timeout during concurrent
+suites and its unchanged-timeout sequential pass.
+
+The sole final scoped review marked all four Important findings addressed and
+found one Minor: the default UTF-8 decoder could omit a leading BOM, including
+at a page boundary. Correction `f399d517`, integrated as `35312e0f`, changes the
+shared decoder option and adds both regressions. Worker observed two RED failures,
+then seven focused passes (301 assertions), typecheck and scoped lint passing.
+The BOM-only review passed with no residual or new finding. Other decoders and
+native transcript grammar are unchanged.
+
+Execution ruling 7: apply Drew's explicit standing instruction to fix discovered
+bugs immediately to this narrow BOM correction, rather than defer it under the
+skill's final-wave guideline. User instructions take precedence over skill
+guidance. If wrong, this adds a small verification pass beyond the planned review
+budget; leaving it would knowingly retain broken readable-byte fidelity. No
+second broad review or unrelated correction wave was opened.
+
+Root-observed integrated `bun run check` at `08eb2b62`: **3,953 core passes,
+13 skips, zero failures**, 21,849 assertions across 262 files (236.80 seconds),
+plus **144 dashboard passes, zero failures**. Biome and TypeScript passed.
+Separate scenario validation exited 0. The actual Gauntlet file ran all five
+cases using `588a81e8`. The subsequent one-option BOM change is covered by its
+focused tests/typecheck/lint and review above; the entire suite was not repeated
+for that narrow correction. Twelve Linux tests and one Windows test remain
+skipped and are not qualification evidence.
+
+## Concrete Gate A preparation
+
+The private packet selects the existing appliance, existing image and exact
+Gauntlet/Superpowers source, a new detached source namespace, frozen dependency
+installs with clean credentials, all twelve gated Linux tests, the five-case
+Gauntlet guard file, and two sequential no-network native parent captures.
+Only ordinary package-registry access is included in dependency preparation.
+The existing six-way fixture has 24 GiB aggregate tmpfs capacity and no CPU,
+memory or PID cap; the requested approval must include that actual footprint.
+The native captures have explicit smaller resources, client deadlines, private
+output retention and exact container teardown. They do not establish every
+native rare case or descendant chronology.
+
+Static shell checks initially passed while operational review still found four
+command defects: bundle verification cwd, stale Gauntlet case count, conditional
+shell error handling during copy, and unbounded Docker clients. Two scoped
+packet correction passes resolved those findings and their fix-introduced
+function-timeout/copy-budget/cleanup-write issues. Final packet review approved
+with no open findings. All nine shell blocks passed syntax and ShellCheck;
+these are preparation receipts, not executed cleanup proof. The final source
+pin, bundle/config digests and concrete authorization request stay private.
+
+Gate B remains unprepared because it requires actual Linux qualification receipts
+and the exact resulting installed/source/image/credential change packet. Neither
+Gate A preparation nor green source checks authorizes that work or provider
+spending. No diagnostic or measured attempt has started.
