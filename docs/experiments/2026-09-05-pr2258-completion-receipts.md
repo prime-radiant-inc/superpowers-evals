@@ -38,7 +38,7 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 Reviewed source is integrated through `00798a4c`. Both exact installed native
 builds completed two no-provider text turns and clean shutdown on the selected
 Linux appliance. The last scoped review finding is closed. The minimum installed
-source update is prepared; the dedicated Mantle grader bearer remains missing.
+source update passed at `0d6eae90`; the dedicated Mantle grader bearer remains missing.
 No diagnostic or measured provider attempt has started.
 
 Drew's approved diagnostic-first sequence below supersedes the older Gate A/B
@@ -447,3 +447,32 @@ prove six-way overlap or provider success. The selected bundle has subject
 credentials but lacks the dedicated grader bearer. Its existing secret-store
 reference is requested from Drew; no subject credential is substituted and no
 new credential is issued. Independent installed preparation continues.
+
+## Installed minimum update
+
+The selected appliance fast-forwarded its existing clean branch from `6b9bc68a`
+to `0d6eae90` under the existing mutation locks and registration lease. Config,
+helper, remote branch reference and all historical campaign document hashes
+remained unchanged; the image and dependency manifests matched the reviewed
+pins. The installed source stayed clean. Doctor passed during the update and
+afterward, with run/sync locks released. No provider was called.
+
+The installed focused regressions passed: **2 tests, 21 assertions, zero failures**
+for mixed historical listing and freezing installed source despite older
+origin/main. A distinct provider-free command-check registration then froze
+`0d6eae90` and Gauntlet `588a81e8`, six planned slots, zero reserves and the exact
+Sonnet grader. Installed status reported registered; costs reported zero attempts.
+Exact cancellation correctly refused because no start was consumed, and the
+behavioral report correctly refused registered state. This proves those command
+boundaries, not cancellation of an active controller. The unused identity and all
+historical evidence remain preserved; it is not a diagnostic sample.
+
+Remaining diagnostic preparation is explicit: obtain the dedicated grader secret
+reference, verify actual six-arm credential projections/cleanup and prepared
+runtime settings, authenticate installed pricing and minimum-boundary receipts,
+and substantiate account/model capacity without treating TPM as concurrency.
+Codex's scenario fragment already requests `xhigh`; verify its actual prepared
+HOME rather than adding another configuration mechanism. Assemble and execute
+the reviewed installed preflight only when these claims have supporting evidence.
+Full native chronology and observed parallel overlap remain diagnostic gaps.
+There is no diagnostic GO, provider attempt, measured result, push or merge.
