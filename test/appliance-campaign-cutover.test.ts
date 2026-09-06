@@ -270,6 +270,47 @@ test('campaign registration refuses an arm absent from isolated frozen intake wi
   }
 });
 
+test('campaign registration freezes the installed checkout when origin main is older', () => {
+  const f = helperFixture();
+  const git = (...args: string[]) => {
+    const result = f.r.runner.run('git', ['-C', f.r.evalsCheckout, ...args]);
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  try {
+    git('update-ref', 'refs/remotes/origin/main', f.r.evalsRef);
+    const cliPath = join(f.r.evalsCheckout, 'src/cli/index.ts');
+    const installedCode = `${readFileSync(cliPath, 'utf8')}\n// Installed capture support.\n`;
+    writeFileSync(cliPath, installedCode);
+    git('add', 'src/cli/index.ts');
+    git('commit', '-qm', 'Install capture support');
+    const installedSha = git('rev-parse', 'HEAD');
+    expect(installedSha).not.toBe(f.r.evalsRef);
+    const commands = campaignCommands({
+      loaded: {
+        ...f.loaded,
+        config: {
+          ...f.loaded.config,
+          evals: { ...f.loaded.config.evals, ref: 'main' },
+        },
+      },
+      runner: f.r.runner,
+      probe: FAKE_PROBE,
+    });
+    const registration = commands.register({ suite: f.suite, json: true });
+    expect(registration.experiment.refs.evals).toBe(installedSha);
+    expect(
+      readFileSync(
+        join(registration.campaignDir, 'evals/src/cli/index.ts'),
+        'utf8',
+      ),
+    ).toBe(installedCode);
+    expect(git('rev-parse', 'refs/remotes/origin/main')).toBe(f.r.evalsRef);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test('production command journey registers a fresh identity, gates one real controller, reads and seals its result', async () => {
   const f = helperFixture();
   const registration = f.commands.register({ suite: f.suite, json: true });
