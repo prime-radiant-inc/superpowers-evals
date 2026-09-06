@@ -85,25 +85,31 @@ function contentBlocks(
   });
 }
 
-/** Only the captured native CLI input envelope grants human authority. */
-function isInspectedNativeParentInput(row: JsonObject): boolean {
-  const origin = row['origin'];
+/** Captured native envelopes distinguish the parent CLI from SDK and child rows. */
+function isInspectedNativeEnvelope(row: JsonObject): boolean {
   return (
-    row['type'] === 'user' &&
-    isObject(origin) &&
-    Object.keys(origin).length === 1 &&
-    origin['kind'] === 'human' &&
-    row['promptSource'] === 'typed' &&
     row['entrypoint'] === 'cli' &&
     row['userType'] === 'external' &&
     row['isSidechain'] === false &&
-    row['parentUuid'] === null &&
     row['agentId'] === undefined &&
     row['version'] === '2.1.209' &&
     typeof row['sessionId'] === 'string' &&
     row['sessionId'].length > 0 &&
     typeof row['cwd'] === 'string' &&
     row['cwd'].length > 0 &&
+    (row['session_id'] === undefined || row['session_id'] === row['sessionId'])
+  );
+}
+
+function isInspectedNativeHumanInput(row: JsonObject): boolean {
+  const origin = row['origin'];
+  return (
+    isInspectedNativeEnvelope(row) &&
+    row['type'] === 'user' &&
+    isObject(origin) &&
+    Object.keys(origin).length === 1 &&
+    origin['kind'] === 'human' &&
+    row['promptSource'] === 'typed' &&
     row['isCompactSummary'] !== true &&
     isObject(row['message']) &&
     row['message']['role'] === 'user' &&
@@ -124,7 +130,10 @@ export function inspectedClaudeParentIdentity(raw: Uint8Array): {
     expected_cli_version: '2.1.209',
   };
   const rows = parseCompleteJsonl(placeholder, raw);
-  const parent = rows.find(({ value }) => isInspectedNativeParentInput(value));
+  const parent = rows.find(
+    ({ value }) =>
+      isInspectedNativeHumanInput(value) && value['parentUuid'] === null,
+  );
   if (!parent) {
     for (const { value, anchor } of rows) {
       const type = recordType(value, anchor);
@@ -225,6 +234,7 @@ function textEntry(
   id: string | null,
   row: JsonObject,
   descendant: boolean,
+  nativeApprovalEligible: boolean,
 ): RawEntry {
   if (role === 'assistant') {
     return {
@@ -259,7 +269,7 @@ function textEntry(
     claimed_origin: userType === 'external' ? 'external' : 'unclaimed',
     approval_eligibility: descendant
       ? 'ineligible'
-      : isInspectedNativeParentInput(row)
+      : nativeApprovalEligible
         ? 'eligible'
         : 'unresolved',
   };
@@ -393,6 +403,8 @@ export function indexClaudeTranscript(
   const identityEvidence: RawAnchor[] = [];
   let descendant = false;
   let parent = false;
+  let nativeChainStarted = false;
+  let nativeChainUuid: string | null = null;
 
   for (const parsed of rows) {
     const row = parsed.value;
@@ -407,7 +419,8 @@ export function indexClaudeTranscript(
       type !== 'mode' &&
       type !== 'permission-mode' &&
       type !== 'file-history-snapshot' &&
-      type !== 'last-prompt'
+      type !== 'last-prompt' &&
+      type !== 'system'
     ) {
       unknownRecord('Claude record type is not supported.', rowAnchor);
     }
@@ -441,7 +454,6 @@ export function indexClaudeTranscript(
       identityEvidence.push(rowAnchor);
     }
     if (conversationClaims.descendant) descendant = true;
-    if (isInspectedNativeParentInput(row)) parent = true;
 
     if (previousUuid) {
       for (const target of previousUuid.targets) {
@@ -454,6 +466,17 @@ export function indexClaudeTranscript(
       continue;
     }
 
+    const nativeHumanInput = isInspectedNativeHumanInput(row);
+    // Every UUID link must continue the previously inspected physical chain.
+    const nativeChainLinked: boolean =
+      typeof uuid === 'string' &&
+      isInspectedNativeEnvelope(row) &&
+      ((!nativeChainStarted &&
+        nativeHumanInput &&
+        row['parentUuid'] === null) ||
+        (nativeChainUuid !== null && row['parentUuid'] === nativeChainUuid));
+    const nativeApprovalEligible = nativeHumanInput && nativeChainLinked;
+    if (nativeApprovalEligible) parent = true;
     const targets: ReplayTarget[] = [];
 
     if (
@@ -469,6 +492,54 @@ export function indexClaudeTranscript(
         );
       inspectNativeMetadata(row, type, rowAnchor);
       addCanonicalEntry(entries, targets, nonAction(rowAnchor, type));
+    } else if (type === 'system') {
+      if (
+        source.expected_cli_version !== '2.1.209' ||
+        row['subtype'] !== 'turn_duration'
+      )
+        unknownRecord(
+          'Claude system metadata variant is not inspected.',
+          rowAnchor,
+        );
+      exactKeys(
+        row,
+        [
+          'parentUuid',
+          'isSidechain',
+          'type',
+          'subtype',
+          'durationMs',
+          'messageCount',
+          'timestamp',
+          'uuid',
+          'isMeta',
+          'userType',
+          'entrypoint',
+          'cwd',
+          'sessionId',
+          'version',
+          'gitBranch',
+        ],
+        rowAnchor,
+      );
+      const duration = row['durationMs'];
+      const count = row['messageCount'];
+      if (
+        typeof duration !== 'number' ||
+        !Number.isFinite(duration) ||
+        duration < 0 ||
+        typeof count !== 'number' ||
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        typeof row['timestamp'] !== 'string' ||
+        row['isMeta'] !== false
+      )
+        invalidRecord('Claude turn-duration metadata is malformed.', rowAnchor);
+      addCanonicalEntry(
+        entries,
+        targets,
+        nonAction(rowAnchor, 'system.turn_duration'),
+      );
     } else if (type === 'queue-operation') {
       const operation = row['operation'];
       if (typeof operation !== 'string') {
@@ -599,7 +670,15 @@ export function indexClaudeTranscript(
         addCanonicalEntry(
           entries,
           targets,
-          textEntry(rowAnchor, role, content, id, row, descendant),
+          textEntry(
+            rowAnchor,
+            role,
+            content,
+            id,
+            row,
+            descendant,
+            nativeApprovalEligible,
+          ),
         );
       } else if (content.length === 0) {
         addCanonicalEntry(
@@ -623,7 +702,15 @@ export function indexClaudeTranscript(
             addCanonicalEntry(
               entries,
               targets,
-              textEntry(blockAnchor, role, text, id, row, descendant),
+              textEntry(
+                blockAnchor,
+                role,
+                text,
+                id,
+                row,
+                descendant,
+                nativeApprovalEligible,
+              ),
             );
             continue;
           }
@@ -748,6 +835,8 @@ export function indexClaudeTranscript(
     }
 
     if (typeof uuid === 'string') {
+      nativeChainStarted = true;
+      nativeChainUuid = nativeChainLinked ? uuid : null;
       seenUuids.set(uuid, { canonical_row: canonicalRow, targets });
     }
   }

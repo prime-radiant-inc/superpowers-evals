@@ -136,3 +136,111 @@ test('binding discovers only a qualified native parent and rejects conflicting i
     ),
   ).toThrow();
 });
+
+const twoTurnRaw = new Uint8Array(
+  await Bun.file(
+    new URL(
+      './fixtures/claude-2.1.209-native-two-turns.jsonl',
+      import.meta.url,
+    ),
+  ).arrayBuffer(),
+);
+const twoTurnRows = new TextDecoder()
+  .decode(twoTurnRaw)
+  .trimEnd()
+  .split('\n')
+  .map((line) => JSON.parse(line));
+const twoTurnSource = {
+  ...source,
+  expected_session_id: 'a7485dd1-6b5e-4f47-956e-ffcd198af2e9',
+};
+
+test('captured later typed input gains authority through the earlier native UUID chain', () => {
+  const identity = inspectedClaudeParentIdentity(twoTurnRaw);
+  expect(identity).toEqual({
+    session_id: twoTurnSource.expected_session_id,
+    cwd: twoTurnSource.expected_cwd,
+    cli_version: twoTurnSource.expected_cli_version,
+  });
+  const replay = indexClaudeTranscript(twoTurnSource, twoTurnRaw);
+  expect(replay.identity.conversation).toBe('parent');
+  expect(
+    replay.entries
+      .filter(
+        (entry) =>
+          entry.kind === 'message' && entry.approval_eligibility === 'eligible',
+      )
+      .map((entry) => entry.anchor),
+  ).toEqual([
+    { source_id: 'native', line: 4, block: null },
+    { source_id: 'native', line: 10, block: null },
+  ]);
+  expect(
+    replay.entries
+      .filter((entry) => entry.kind === 'non_action')
+      .map((entry) => entry.anchor.line),
+  ).toEqual([1, 2, 3, 5, 6, 8, 9, 12, 13]);
+  const prefix = indexClaudeTranscript(
+    twoTurnSource,
+    bytes(twoTurnRows.slice(0, 8)),
+  );
+  expect(replay.entries.filter((entry) => entry.anchor.line <= 8)).toEqual(
+    prefix.entries,
+  );
+  expect(
+    replay.entries.some(
+      (entry) => entry.kind === 'call' || entry.kind === 'result',
+    ),
+  ).toBe(false);
+});
+
+test('later native approval requires an unbroken physically earlier parent chain', () => {
+  for (const change of [
+    { parentUuid: undefined },
+    { parentUuid: null },
+    { parentUuid: 'unknown' },
+    { parentUuid: twoTurnRows[11].uuid },
+    { parentUuid: twoTurnRows[3].uuid },
+    { origin: undefined },
+    { entrypoint: 'sdk' },
+  ]) {
+    const changed = structuredClone(twoTurnRows);
+    changed[9] = { ...changed[9], ...change };
+    const index = indexClaudeTranscript(twoTurnSource, bytes(changed));
+    expect(
+      index.entries.find((entry) => entry.anchor.line === 10),
+    ).not.toMatchObject({ approval_eligibility: 'eligible' });
+  }
+  for (const change of [
+    { parentUuid: 'unknown' },
+    { entrypoint: 'sdk' },
+    { version: undefined },
+    { isSidechain: undefined },
+    { sessionId: undefined },
+    { cwd: undefined },
+  ]) {
+    const changed = structuredClone(twoTurnRows);
+    changed[7] = { ...changed[7], ...change };
+    const index = indexClaudeTranscript(twoTurnSource, bytes(changed));
+    expect(
+      index.entries.find((entry) => entry.anchor.line === 10),
+    ).not.toMatchObject({ approval_eligibility: 'eligible' });
+  }
+});
+
+test('turn-duration metadata preserves its anchor but rejects uninspected action variants', () => {
+  for (const change of [
+    { subtype: 'tool_execution' },
+    { message: { role: 'assistant', content: [] } },
+    { durationMs: -1 },
+    { messageCount: 1.5 },
+    { toolUseResult: { stdout: 'hidden' } },
+  ]) {
+    expect(() =>
+      indexClaudeTranscript(
+        twoTurnSource,
+        bytes([{ ...twoTurnRows[7], ...change }]),
+      ),
+    ).toThrow();
+  }
+});
