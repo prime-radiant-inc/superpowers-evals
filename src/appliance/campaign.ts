@@ -36,6 +36,7 @@ import { getEnv } from '../env.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import { startCampaignOnce } from './campaign-run.ts';
 import { ApplianceError } from './errors.ts';
+import { currentCheckoutSha } from './git.ts';
 import { assertInsideRoot, assertNoFollowDirChain } from './safe-fs.ts';
 import type { LoadedApplianceStateConfig } from './types.ts';
 
@@ -186,7 +187,7 @@ export function campaignCommands(deps: CampaignCommandDeps) {
         evalsCheckout: loaded.config.evals.path,
         gauntletCheckout: loaded.config.gauntlet.path,
         superpowersCheckout: loaded.config.superpowers.path,
-        evalsRef: loaded.config.evals.ref,
+        evalsRef: currentCheckoutSha(loaded.config.evals.path, 'evals', runner),
         gauntletRef: loaded.config.gauntlet.ref,
         runner,
         clock: new RealClock(),
