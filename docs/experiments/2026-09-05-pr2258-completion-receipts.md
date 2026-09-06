@@ -539,3 +539,18 @@ container consumption. No inference request, diagnostic sample or measured
 sample was launched by this correction. Continue the remaining installed
 settings/pricing/capacity evidence and diagnostic receipt packaging with the
 existing credentials; do not request the withdrawn PR-specific grader key.
+
+## Diagnostic capacity and execution authorization
+
+Drew approved completing the remaining installed checks and starting the six
+diagnostic attempts, followed by twelve fresh measured attempts only after
+trustworthy diagnostic GO. No replacement or extra provider probes are included.
+
+Source `195fb773` records unverified capacity in declared account/model rows as
+diagnostic qualification gaps. It does not infer concurrency from token quotas.
+Verified insufficient capacity, missing declarations, duplicate/grouping errors
+and compiled scheduler constraints remain blockers. Measured admission still
+requires capacity qualification. Independent bounded review found no actionable
+issues; root observed **55 tests, 158 assertions, zero failures** and a passing
+TypeScript check. This changes readiness classification, not the experiment's
+models, six-attempt count, concurrency caps, timing or pricing.
