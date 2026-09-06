@@ -511,7 +511,7 @@ function observerPage(
       'Observer continuation differs from authenticated source content.',
     );
   const offset = cursor?.offset ?? 0;
-  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
   let readable = true;
   try {
     decoder.decode(raw);

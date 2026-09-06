@@ -463,6 +463,47 @@ interface EvidencePage {
 }
 const encodeObserver = (value: string) => Buffer.from(value).toString('base64');
 
+test.each([
+  'leading',
+  'continuation',
+] as const)('readable pages preserve a %s BOM code point byte-for-byte', (position) => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  writeFileSync(f.spec, 'a'.repeat(50000));
+  captureInput(f.workdir);
+  const read = (cursor?: string) =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(f.spec),
+      cursor,
+    ) as EvidencePage;
+  const probe = read();
+  const boundary = Buffer.from(probe.content_base64, 'base64').length;
+  const original = Buffer.from(
+    `${position === 'continuation' ? 'a'.repeat(boundary) : ''}\uFEFF${'b'.repeat(50000)}`,
+  );
+  writeFileSync(f.spec, original);
+  const expectedDigest = createHash('sha256').update(original).digest('hex');
+  const chunks: Buffer[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = read(cursor);
+    const readable = Buffer.from(page.content_utf8!);
+    expect(readable).toEqual(Buffer.from(page.content_base64, 'base64'));
+    expect(page.offset).toBe(Buffer.concat(chunks).length);
+    expect(page.bytes).toBe(original.length);
+    expect(page.sha256).toBe(expectedDigest);
+    chunks.push(readable);
+    cursor = page.next_cursor ?? undefined;
+  } while (cursor);
+  const restored = Buffer.concat(chunks);
+  expect(restored).toEqual(original);
+  expect(createHash('sha256').update(restored).digest('hex')).toBe(
+    expectedDigest,
+  );
+});
+
 test('bounded index and document pages preserve oversized physical payloads and exact bytes', () => {
   const f = fixture();
   const payload = 'α漢🙂'.repeat(12000);
