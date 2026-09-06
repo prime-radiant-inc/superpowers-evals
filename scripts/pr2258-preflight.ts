@@ -1,11 +1,14 @@
 #!/usr/bin/env bun
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, readlinkSync, realpathSync, readFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { compileResourcePolicy } from '../src/campaign/resource-policy.ts';
-import { readPinnedNoFollowBytes } from '../src/appliance/credential-scope.ts';
+import { blockDemandVector, compileResourcePolicy } from '../src/campaign/resource-policy.ts';
+import { GLOBAL_POOL } from '../src/campaign/simulate.ts';
+import { defaultCommandRunner, type CommandRunner } from '../src/agents/command-runner.ts';
+import { getEnv } from '../src/env.ts';
+import { closePin, pinAbsoluteDir, readPinnedNoFollowBytes } from '../src/appliance/credential-scope.ts';
 import { ArmSchema, type Arm } from '../src/contracts/campaign/arm.ts';
 import {
   GraderSchema,
@@ -159,6 +162,12 @@ export const Pr2258QualificationReceiptsSchema = z
   })
   .strict()
   .superRefine((value, context) => {
+    const accounts = new Set<string>();
+    value.capacity.accounts.forEach((receipt, index) => {
+      if (accounts.has(receipt.account))
+        context.addIssue({ code: 'custom', message: `duplicate account capacity receipt for ${receipt.account}`, path: ['capacity', 'accounts', index, 'account'] });
+      accounts.add(receipt.account);
+    });
     const seen = new Set<string>();
     value.capacity.models.forEach((receipt, index) => {
       if (seen.has(receipt.model))
@@ -558,23 +567,36 @@ export function validatePr2258Preflight(
   let policy: ReadonlyMap<string, PoolPolicy> = new Map();
   try {
     policy = compileResourcePolicy(credentials, activeCredentialNames);
-    for (const [credentialName, needed] of Object.entries(demandByCredential)) {
-      const credential = credentials[credentialName];
-      if (credential === undefined) continue;
-      const id = poolKey(credential, credentialName);
+    const sampleCredentials = Object.entries(subjectDemandByCredential).flatMap(([name, count]) => Array<string>(count).fill(name));
+    const credentialPool = (name: string) => {
+      const credential = credentials[name];
+      if (!credential) throw new Error(`active credential ${name} is missing`);
+      return poolKey(credential, name);
+    };
+    const graderPool = credentialPool(EXPECTED_GRADER);
+    const demand = blockDemandVector({
+      block: { sample_ids: sampleCredentials },
+      sampleArmCredentialPool: credentialPool,
+      graderPool,
+    });
+    for (const [id, needed] of demand) {
+      if (id === GLOBAL_POOL) continue;
       const available = policy.get(id)?.max_concurrency;
-      const role = credentialName === EXPECTED_GRADER ? 'grader' : 'subject';
       if (available === undefined)
-        blockers.push(`${role} pool ${id} is absent from compiled resource policy`);
+        blockers.push(`pool ${id} is absent from compiled resource policy`);
       else if (available < needed)
-        blockers.push(`${role} pool ${id} needs ${needed} concurrent slots but the compiled alias-aware cap is ${available}`);
+        blockers.push(`pool ${id} needs ${needed} concurrent slots but the compiled alias-aware cap is ${available}`);
     }
   } catch (error) {
     blockers.push(`resource policy could not compile: ${error instanceof Error ? error.message : 'unknown error'}`);
   }
 
   const assignedAccounts = new Map<string, string>();
+  const accountIds = new Set<string>();
   for (const account of qualification.capacity.accounts) {
+    if (accountIds.has(account.account))
+      blockers.push(`account ${account.account} has duplicate capacity receipts`);
+    accountIds.add(account.account);
     let needed = 0;
     for (const credential of account.credentials) {
       if (assignedAccounts.has(credential))
@@ -808,10 +830,63 @@ function sameReceiptBinding(
   return jcsCanonicalize(left) === jcsCanonicalize(right);
 }
 
+/** Authenticate tracked execution bytes, including files hidden by index flags.
+ * Git identity alone cannot qualify a dirty or differently rooted instrument. */
+function verifyQualificationSource(sourceRoot: string, expectedSha: string, runner: CommandRunner): void {
+  const git = (args: string[]) => {
+    const result = runner.run('git', ['-C', sourceRoot, ...args], {
+      env: { PATH: getEnv('PATH'), HOME: getEnv('HOME'), TMPDIR: getEnv('TMPDIR'), GIT_OPTIONAL_LOCKS: '0' },
+    });
+    if (result.status !== 0) throw new Error('Qualification source Git authority is unavailable');
+    return result.stdout;
+  };
+  if (realpathSync(git(['rev-parse', '--show-toplevel']).trim()) !== resolve(sourceRoot))
+    throw new Error('Qualification source must be the exact Git checkout root');
+  const assertHead = () => {
+    if (git(['rev-parse', '--verify', 'HEAD']).trim() !== expectedSha)
+      throw new Error('Qualification source HEAD differs from reviewed evals_sha');
+  };
+  assertHead();
+  const listing = git(['ls-tree', '-rz', '--full-tree', expectedSha]);
+  if (!listing) throw new Error('Qualification source tree is empty');
+  for (const record of listing.split('\0').filter(Boolean)) {
+    const match = /^(100644|100755|120000) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(record);
+    if (!match) throw new Error('Qualification source contains an unsupported Git entry');
+    const mode = match[1];
+    const digest = match[2];
+    const path = match[3];
+    if (!path) throw new Error('Qualification source entry has no path');
+    const pin = pinAbsoluteDir(dirname(join(sourceRoot, path)), 'qualification source');
+    try {
+      const pinnedPath = join(pin.viaPath, basename(path));
+      const stat = lstatSync(pinnedPath);
+      let bytes: Buffer;
+      if (mode === '120000') {
+        if (!stat.isSymbolicLink()) throw new Error(`Qualification source type differs: ${path}`);
+        bytes = Buffer.from(readlinkSync(pinnedPath));
+      } else {
+        if (!stat.isFile() || Boolean(stat.mode & 0o111) !== (mode === '100755'))
+          throw new Error(`Qualification source type or mode differs: ${path}`);
+        const raw = readPinnedNoFollowBytes(sourceRoot, path.split('/'), `qualification source ${path}`, true);
+        if (!raw) throw new Error(`Qualification source is missing: ${path}`);
+        bytes = raw;
+      }
+      if (createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') !== digest)
+        throw new Error(`Qualification source tracked bytes differ: ${path}`);
+    } catch (error) {
+      throw new Error(`Qualification source verification failed for ${path}`, { cause: error });
+    } finally { closePin(pin); }
+  }
+  if (git(['status', '--porcelain', '--untracked-files=all']) !== '')
+    throw new Error('Qualification source working tree is dirty');
+  assertHead();
+}
+
 export function loadPr2258ReceiptSet(
   sourceRoot: string,
   qualificationRoot: string,
   suiteKind: 'diagnostic' | 'measured',
+  runner: CommandRunner = defaultCommandRunner,
 ): Pr2258PreflightInput {
   // The approved private root supplies reviewer authority. No-follow reads and
   // hashes bind the exact reviewed bytes; they do not prove the claims' truth.
@@ -830,6 +905,8 @@ export function loadPr2258ReceiptSet(
   } catch {
     throw new Error('PR 2258 receipt-set manifest is invalid');
   }
+
+  verifyQualificationSource(sourceRoot, manifest.binding.evals_sha, runner);
 
   const capability = readReviewedJson(
     qualificationRoot,
@@ -947,6 +1024,7 @@ export function loadPr2258ReceiptSet(
     };
   }
 
+  verifyQualificationSource(sourceRoot, binding.evals_sha, runner);
   return {
     ...input,
     instrumentSha256: binding.instrument_sha256,

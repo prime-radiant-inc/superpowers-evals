@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -18,8 +19,10 @@ import {
   PR2258_INSTRUMENT_FILES,
   type Pr2258DiagnosticGo,
   type Pr2258QualificationReceipts,
+  Pr2258QualificationReceiptsSchema,
   validatePr2258Preflight,
 } from '../scripts/pr2258-preflight.ts';
+import { defaultCommandRunner } from '../src/agents/command-runner.ts';
 import { compareAdmissionOrder } from '../src/campaign/admission.ts';
 import { compileResourcePolicy } from '../src/campaign/resource-policy.ts';
 import { type Arm, ArmSchema } from '../src/contracts/campaign/arm.ts';
@@ -270,10 +273,17 @@ function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function git(root: string, args: string[]): string {
+  const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
 function writeSourceFixture(root: string): string {
   const sourceRoot = join(root, 'source-fixture');
   const declarationPaths = [
     'credentials.yaml',
+    'src/runner/index.ts',
     'suites/pr2258_parallel_diagnostic.yaml',
     'suites/pr2258_parallel_measured.yaml',
     'docs/experiments/2026-09-05-pr2258-parallel-pricing/current.json',
@@ -293,6 +303,17 @@ function writeSourceFixture(root: string): string {
         : `export const pr2258TestFixture = ${JSON.stringify(path)};\n`,
     );
   }
+  git(sourceRoot, ['init']);
+  git(sourceRoot, ['add', '.']);
+  git(sourceRoot, [
+    '-c',
+    'user.name=Fixture',
+    '-c',
+    'user.email=fixture@example.invalid',
+    'commit',
+    '-qm',
+    'Source fixture',
+  ]);
   return sourceRoot;
 }
 
@@ -307,6 +328,10 @@ function writeReceiptSet(root: string): {
   const { suite } = loadSuite('measured');
   const arms = loadArms();
   const qualification = completeReceipts(suite, arms);
+  const evalsSha = git(sourceRoot, ['rev-parse', 'HEAD']);
+  qualification.frozen_pins.evals_sha = evalsSha;
+  qualification.linux.evals_sha = evalsSha;
+  qualification.installed.evals_sha = evalsSha;
   const evidenceReceipts = [
     'codex-chronology',
     'claude-chronology',
@@ -661,7 +686,7 @@ test('unused aliases lower the actual compiled pool and block readiness', () => 
 
   expect(result.ready).toBe(false);
   expect(result.blockers).toContain(
-    'subject pool pr2258_opus_subjects needs 2 concurrent slots but the compiled alias-aware cap is 1',
+    'pool pr2258_opus_subjects needs 2 concurrent slots but the compiled alias-aware cap is 1',
   );
 });
 
@@ -828,7 +853,7 @@ test('receipt-set loader blocks when a required instrument source is absent', ()
 
     expect(() =>
       loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
-    ).toThrow(/observer instrument.*readout\.ts/i);
+    ).toThrow(/source.*readout\.ts/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -889,6 +914,128 @@ test('receipt-set loader hashes current pricing bytes instead of trusting its ma
     expect(() =>
       loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
     ).toThrow(/source pricing snapshot digest/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test.each([
+  ['subjects', 2, false],
+  ['subjects', 4, true],
+  ['subject-grader', 6, false],
+  ['subject-grader', 8, true],
+] as const)('shared %s pool capacity %s checks aggregate demand', (kind, cap, ready) => {
+  const result = preflight('diagnostic', ({ credentials }) => {
+    const names =
+      kind === 'subjects'
+        ? ['openai_responses_6astra', 'openai_responses_56sol']
+        : ['opus5_bedrock', 'sonnet5_bedrock_pr2258_grader'];
+    for (const name of names) {
+      credentials[name]!.quota_pool = 'shared-first-wave';
+      credentials[name]!.max_concurrency = cap;
+    }
+  });
+  if (kind === 'subjects') expect(result.ready).toBe(ready);
+  else {
+    expect(result.ready).toBe(false);
+    expect(result.blockers).toContain(
+      'Opus subject credential must retain max_concurrency 4',
+    );
+    if (ready)
+      expect(result.blockers).toEqual([
+        'public grader credential must pin Sonnet 5 Mantle us-east-1, its dedicated bearer name and cap 6',
+        'Opus subject credential must retain max_concurrency 4',
+      ]);
+  }
+  if (!ready)
+    expect(result.blockers).toContain(
+      `pool shared-first-wave needs ${kind === 'subjects' ? 4 : 8} concurrent slots but the compiled alias-aware cap is ${cap}`,
+    );
+});
+
+test('split rows cannot declare the same account capacity twice', () => {
+  let parsed = true;
+  const result = preflight('diagnostic', ({ receipts }) => {
+    const first = receipts.capacity.accounts.shift()!;
+    receipts.capacity.accounts.push(
+      ...first.credentials.map((credential) => ({
+        ...first,
+        credentials: [credential],
+        max_concurrency: 2,
+      })),
+    );
+    parsed = Pr2258QualificationReceiptsSchema.safeParse(receipts).success;
+  });
+  expect(result.ready).toBe(false);
+  expect(result.blockers).toContain(
+    'account openai-subject-account has duplicate capacity receipts',
+  );
+  expect(parsed).toBe(false);
+  expect(preflight('diagnostic').ready).toBe(true);
+});
+
+test.each([
+  'wrong-head',
+  'dirty-unlisted',
+  'missing-git',
+  'assume-unchanged',
+] as const)('receipt-set source authority rejects %s', (change) => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    if (change === 'missing-git')
+      rmSync(join(paths.sourceRoot, '.git'), { recursive: true });
+    else {
+      if (change === 'assume-unchanged')
+        git(paths.sourceRoot, [
+          'update-index',
+          '--assume-unchanged',
+          'src/runner/index.ts',
+        ]);
+      writeFileSync(
+        join(paths.sourceRoot, 'src/runner/index.ts'),
+        'changed executed runner bytes',
+      );
+      if (change === 'wrong-head') {
+        git(paths.sourceRoot, ['add', '.']);
+        git(paths.sourceRoot, [
+          '-c',
+          'user.name=Fixture',
+          '-c',
+          'user.email=fixture@example.invalid',
+          'commit',
+          '-qm',
+          'Different instrument',
+        ]);
+      }
+    }
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic'),
+    ).toThrow(/source/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('source mutation during receipt intake refuses qualification reuse', () => {
+  const root = mkdtempSync(join(ROOT, '.pr2258-receipts-'));
+  try {
+    const paths = writeReceiptSet(root);
+    let scans = 0;
+    const runner = {
+      run: ((command, args, options) => {
+        if (args.includes('ls-tree') && ++scans === 2)
+          writeFileSync(
+            join(paths.sourceRoot, 'src/runner/index.ts'),
+            'changed during intake',
+          );
+        return defaultCommandRunner.run(command, args, options);
+      }) satisfies typeof defaultCommandRunner.run,
+    };
+    expect(() =>
+      loadPr2258ReceiptSet(paths.sourceRoot, root, 'diagnostic', runner),
+    ).toThrow(/source/i);
+    expect(scans).toBe(2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
