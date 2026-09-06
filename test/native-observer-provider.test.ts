@@ -166,6 +166,79 @@ test('stops an active stream when a later request violates the script', async ()
   }
 });
 
+test('an explicit predicate binds dynamic request IDs while responses stay scripted', async () => {
+  let captured: unknown;
+  const first = (body: Record<string, unknown>) => {
+    const metadata = body['metadata'] as Record<string, unknown>;
+    if (typeof metadata?.['fixture_id'] !== 'string') return false;
+    captured = metadata['fixture_id'];
+    return true;
+  };
+  const next = (body: Record<string, unknown>) =>
+    (body['metadata'] as Record<string, unknown>)?.['fixture_id'] === captured;
+  const server = startNativeObserverProvider({
+    port: 0,
+    steps: [first, next, next].map((request) => ({
+      protocol: 'responses',
+      request,
+      blocks: [{ type: 'text', text: 'fixed reply' }],
+    })),
+  });
+  const request = {
+    ...bodies.responses,
+    metadata: { fixture_id: crypto.randomUUID() },
+  };
+  try {
+    for (let index = 0; index < 2; index++) {
+      const response = await post(server.url, 'responses', request);
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(
+      (
+        await post(server.url, 'responses', {
+          ...request,
+          metadata: { fixture_id: 'wrong-id' },
+        })
+      ).status,
+    ).toBe(400);
+    expect(server.records[0]?.request).toEqual(request);
+    expect(server.records[1]?.request).toEqual(request);
+    expect(server.records[2]?.chunks).toEqual([]);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a request predicate cannot bypass advertised-tool schema validation', async () => {
+  const server = startNativeObserverProvider({
+    port: 0,
+    steps: [
+      {
+        protocol: 'responses',
+        request: () => true,
+        blocks: [
+          {
+            type: 'tool',
+            name: 'fixture_note',
+            id: 'call_fixture',
+            input: { note: 'done' },
+          },
+        ],
+      },
+    ],
+  });
+  try {
+    expect(
+      (await post(server.url, 'responses', { ...bodies.responses, tools: [] }))
+        .status,
+    ).toBe(400);
+    expect(server.records[0]?.chunks).toEqual([]);
+  } finally {
+    await server.stop();
+  }
+});
+
 test('refuses unknown routes, invalid auth, malformed JSON, and exhausted scripts', async () => {
   for (const failure of ['route', 'auth', 'json', 'exhausted']) {
     const server = startNativeObserverProvider({ port: 0, steps: [] });

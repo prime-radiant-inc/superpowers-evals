@@ -2,7 +2,12 @@ import { isDeepStrictEqual } from 'node:util';
 
 export interface NativeObserverStep {
   protocol: 'messages' | 'responses';
-  request: Record<string, unknown>;
+  // Predicates are supplied by the inspected capture script, receive a copy,
+  // and must explicitly return true. They can bind observed dynamic IDs across
+  // requests; they cannot change response blocks or bypass tool validation.
+  request:
+    | Record<string, unknown>
+    | ((request: Readonly<Record<string, unknown>>) => boolean);
   blocks: (
     | { type: 'text'; text: string }
     | { type: 'tool'; id: string; name: string; input: unknown }
@@ -142,8 +147,7 @@ function validator(schema: unknown): (value: unknown) => boolean {
   };
 }
 
-function validateStep(step: NativeObserverStep) {
-  const request = step.request;
+function validateStep(step: NativeObserverStep, request: ObjectValue) {
   requireCondition(
     step.protocol === 'messages' || step.protocol === 'responses',
     'unsupported protocol',
@@ -209,8 +213,12 @@ function parts(value: string): string[] {
 
 // Wire event shapes are from the official SDKs bundled in the selected Gauntlet
 // checkout. These are protocol fixtures, not native CLI transcript evidence.
-function eventsFor(step: NativeObserverStep, sequence: number): ObjectValue[] {
-  const model = step.request['model'];
+function eventsFor(
+  step: NativeObserverStep,
+  sequence: number,
+  request: ObjectValue,
+): ObjectValue[] {
+  const model = request['model'];
   const events: ObjectValue[] = [];
   const add = (type: string, fields: ObjectValue = {}) =>
     events.push({ type, ...fields });
@@ -281,7 +289,7 @@ function eventsFor(step: NativeObserverStep, sequence: number): ObjectValue[] {
     temperature: 1,
     top_p: 1,
     tool_choice: 'auto',
-    tools: step.request['tools'] ?? [],
+    tools: request['tools'] ?? [],
     output: [],
     output_text: '',
     usage: null,
@@ -392,10 +400,21 @@ export function startNativeObserverProvider(options: Options) {
     1024 * 1024,
     'response bytes',
   );
-  const steps = structuredClone(options.steps);
-  const streams = steps.map((step, index) => {
-    validateStep(step);
-    const chunks = eventsFor(step, index + 1).flatMap((event) =>
+  const steps = options.steps.map((step) => ({
+    ...step,
+    request:
+      typeof step.request === 'function'
+        ? step.request
+        : structuredClone(step.request),
+    blocks: structuredClone(step.blocks),
+  }));
+  const compile = (
+    step: NativeObserverStep,
+    request: ObjectValue,
+    index: number,
+  ) => {
+    validateStep(step, request);
+    const chunks = eventsFor(step, index + 1, request).flatMap((event) =>
       parts(`event: ${event['type']}\ndata: ${JSON.stringify(event)}\n\n`),
     );
     requireCondition(
@@ -403,7 +422,12 @@ export function startNativeObserverProvider(options: Options) {
       'response byte limit exceeded',
     );
     return chunks;
-  });
+  };
+  const streams = steps.map((step, index) =>
+    typeof step.request === 'function'
+      ? undefined
+      : compile(step, step.request, index),
+  );
   const records: NativeObserverRecord[] = [];
   let next = 0;
   let requests = 0;
@@ -471,12 +495,25 @@ export function startNativeObserverProvider(options: Options) {
         if (failed) return refuse(409, 'fixture stopped after refusal');
         const step = steps[next];
         if (!step) return refuse(409, 'script exhausted');
-        if (
-          step.protocol !== protocol ||
-          !isDeepStrictEqual(record.request, step.request)
-        )
+        if (step.protocol !== protocol || !object(record.request))
           return refuse(400, 'unexpected request schema or body');
-        const wire = streams[next++]!;
+        let matches: boolean;
+        try {
+          matches =
+            typeof step.request === 'function'
+              ? step.request(structuredClone(record.request)) === true
+              : isDeepStrictEqual(record.request, step.request);
+        } catch {
+          return refuse(400, 'request predicate threw');
+        }
+        if (!matches) return refuse(400, 'unexpected request schema or body');
+        let wire: string[];
+        try {
+          wire = streams[next] ?? compile(step, record.request, next);
+        } catch {
+          return refuse(400, 'unsupported request or response schema');
+        }
+        next++;
         record.decision = 'accepted';
         let chunkIndex = 0;
         return new Response(
