@@ -1,17 +1,34 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  type BigIntStats,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
-import { SpawnCommandRunner } from '../../../src/agents/command-runner.ts';
+import {
+  type CommandRunner,
+  SpawnCommandRunner,
+} from '../../../src/agents/command-runner.ts';
+import {
+  assertPinnedDirectoryNamed,
+  closePin,
+  type PinnedDir,
+  pinAbsoluteDir,
+  pinChildDir,
+} from '../../../src/appliance/credential-scope.ts';
 import { startNativeObserverProvider } from './native-observer-provider.ts';
 
 const absolute = z.string().refine(isAbsolute, 'absolute path required');
@@ -96,38 +113,154 @@ export function verifyNativeCaptureBoundary(config: NativeCaptureConfig) {
 function digest(path: string) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
-function inventory(root: string, withDigests = true) {
+function sameIdentity(before: BigIntStats, after: BigIntStats) {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.mode === after.mode
+  );
+}
+function sameFile(before: BigIntStats, after: BigIntStats) {
+  return (
+    sameIdentity(before, after) &&
+    before.isFile() &&
+    after.isFile() &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  );
+}
+
+export function inventoryNativeCapture(
+  root: string,
+  withDigests = true,
+  hooks?: {
+    beforeOpen?: (path: string) => void;
+    afterReadChunk?: (path: string) => void;
+  },
+) {
   const files: { path: string; bytes: number; sha256: string }[] = [];
   let bytes = 0;
-  const visit = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      const stat = lstatSync(path);
+  const rootPin = pinAbsoluteDir(root, 'capture root');
+  const rootIdentity = fstatSync(rootPin.fd, { bigint: true });
+  const visit = (pin: PinnedDir, parts: string[]) => {
+    const beforeDirectory = fstatSync(pin.fd, { bigint: true });
+    const names = readdirSync(pin.viaPath).sort();
+    for (const name of names) {
+      const path = join(pin.viaPath, name);
+      const relativePath = [...parts, name].join('/');
+      const before = lstatSync(path, { bigint: true });
       requireCondition(
-        !stat.isSymbolicLink(),
-        `symlink in capture: ${relative(root, path)}`,
+        !before.isSymbolicLink(),
+        `symlink in capture: ${relativePath}`,
       );
-      if (stat.isDirectory()) {
-        visit(path);
-      } else if (stat.isFile()) {
-        bytes += stat.size;
-        requireCondition(bytes <= MAX_BYTES, 'capture output limit exceeded');
-        files.push({
-          path: relative(root, path),
-          bytes: stat.size,
-          sha256: withDigests ? digest(path) : '',
-        });
-      }
-      // A live tmux socket is not raw session evidence.
-      else
-        requireCondition(
-          stat.isSocket(),
-          `unsupported capture file: ${relative(root, path)}`,
+      hooks?.beforeOpen?.(relativePath);
+      if (before.isDirectory()) {
+        const child = pinChildDir(pin, name, 'capture directory')!;
+        try {
+          requireCondition(
+            sameIdentity(before, fstatSync(child.fd, { bigint: true })),
+            'capture directory changed before open',
+          );
+          visit(child, [...parts, name]);
+          assertPinnedDirectoryNamed(pin, child, name, 'capture directory');
+        } finally {
+          closePin(child);
+        }
+      } else if (before.isFile()) {
+        const fd = openSync(
+          path,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
         );
+        try {
+          requireCondition(
+            sameFile(before, fstatSync(fd, { bigint: true })),
+            'capture file changed before open',
+          );
+          requireCondition(
+            before.size <= BigInt(MAX_BYTES - bytes),
+            'capture output limit exceeded',
+          );
+          let count = 0;
+          const hash = createHash('sha256');
+          if (withDigests) {
+            const buffer = Buffer.alloc(65536);
+            while (true) {
+              const read = readSync(
+                fd,
+                buffer,
+                0,
+                Math.min(buffer.length, MAX_BYTES - bytes - count + 1),
+                count,
+              );
+              if (read === 0) break;
+              count += read;
+              requireCondition(
+                bytes + count <= MAX_BYTES,
+                'capture output limit exceeded',
+              );
+              hash.update(buffer.subarray(0, read));
+              hooks?.afterReadChunk?.(relativePath);
+              requireCondition(
+                sameFile(before, fstatSync(fd, { bigint: true })),
+                'capture file changed during read',
+              );
+            }
+            requireCondition(
+              BigInt(count) === before.size,
+              'capture file byte count changed',
+            );
+          } else {
+            count = Number(before.size);
+          }
+          requireCondition(
+            sameFile(before, fstatSync(fd, { bigint: true })) &&
+              sameFile(before, lstatSync(path, { bigint: true })),
+            'capture file replaced or changed during read',
+          );
+          bytes += count;
+          files.push({
+            path: relativePath,
+            bytes: count,
+            sha256: withDigests ? hash.digest('hex') : '',
+          });
+        } finally {
+          closeSync(fd);
+        }
+      } else {
+        // A live tmux socket is not raw session evidence.
+        requireCondition(
+          before.isSocket(),
+          `unsupported capture file: ${relativePath}`,
+        );
+      }
     }
+    const afterDirectory = fstatSync(pin.fd, { bigint: true });
+    requireCondition(
+      sameIdentity(beforeDirectory, afterDirectory) &&
+        beforeDirectory.mtimeNs === afterDirectory.mtimeNs &&
+        beforeDirectory.ctimeNs === afterDirectory.ctimeNs &&
+        JSON.stringify(names) ===
+          JSON.stringify(readdirSync(pin.viaPath).sort()),
+      'capture directory changed during inventory',
+    );
   };
-  visit(root);
-  return files;
+  try {
+    visit(rootPin, []);
+    // Rewalk every ancestor no-follow and ensure the original root is still named.
+    const current = pinAbsoluteDir(root, 'capture root');
+    try {
+      requireCondition(
+        sameIdentity(rootIdentity, fstatSync(current.fd, { bigint: true })),
+        'capture root replaced during inventory',
+      );
+    } finally {
+      closePin(current);
+    }
+    return files;
+  } finally {
+    closePin(rootPin);
+  }
 }
 
 export async function captureNativeParent(
@@ -136,6 +269,8 @@ export async function captureNativeParent(
     // Tests supply an explicit fake-native boundary; the executable CLI has no bypass.
     verifyBoundary?: (config: NativeCaptureConfig) => unknown;
     providerPort?: number;
+    runner?: CommandRunner;
+    writeReceipt?: (path: string, body: string) => void;
   } = {},
 ) {
   const config = Config.parse(rawConfig);
@@ -162,12 +297,60 @@ export async function captureNativeParent(
     join(home, '.claude'),
   ])
     mkdirSync(dir, { mode: 0o700 });
-  const write = (name: string, data: unknown) =>
-    writeFileSync(
-      join(config.output, name),
-      `${JSON.stringify(data, null, 2)}\n`,
-      { mode: 0o600 },
-    );
+  const initialPin = pinAbsoluteDir(config.output, 'capture output');
+  const outputIdentity = fstatSync(initialPin.fd, { bigint: true });
+  closePin(initialPin);
+  const receiptFailures: { file: string; error: string }[] = [];
+  const write = (name: string, data: unknown) => {
+    const body = `${JSON.stringify(data, null, 2)}\n`;
+    try {
+      const pin = pinAbsoluteDir(config.output, 'capture output');
+      try {
+        requireCondition(
+          sameIdentity(outputIdentity, fstatSync(pin.fd, { bigint: true })),
+          'capture output root replaced',
+        );
+        const path = join(pin.viaPath, name);
+        if (dependencies.writeReceipt)
+          dependencies.writeReceipt(join(config.output, name), body);
+        else {
+          const fd = openSync(
+            path,
+            constants.O_WRONLY |
+              constants.O_CREAT |
+              constants.O_NOFOLLOW |
+              constants.O_NONBLOCK,
+            0o600,
+          );
+          try {
+            requireCondition(
+              fstatSync(fd).isFile(),
+              'receipt must be a regular file',
+            );
+            ftruncateSync(fd, 0);
+            writeFileSync(fd, body);
+            requireCondition(
+              sameIdentity(
+                fstatSync(fd, { bigint: true }),
+                lstatSync(path, { bigint: true }),
+              ),
+              'receipt replaced during write',
+            );
+          } finally {
+            closeSync(fd);
+          }
+        }
+      } finally {
+        closePin(pin);
+      }
+    } catch (error) {
+      receiptFailures.push({
+        file: name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  };
   const env: Record<string, string> = {
     PATH: config.path,
     TERM: 'xterm-256color',
@@ -178,7 +361,7 @@ export async function captureNativeParent(
     TMPDIR: tmp,
     TMUX_TMPDIR: tmp,
   };
-  const runner = new SpawnCommandRunner();
+  const runner = dependencies.runner ?? new SpawnCommandRunner();
   const started = Date.now();
   const deadline = started + config.deadlineMs;
   const run = (command: string, args: string[], cleanup = false) => {
@@ -198,6 +381,23 @@ export async function captureNativeParent(
   let launched = false;
   let outcome: 'captured' | 'refused' = 'refused';
   let reason: string | undefined;
+  const errors: string[] = [];
+  const refuse = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    outcome = 'refused';
+    reason ??= message;
+    errors.push(message);
+  };
+  const attempt = <T>(action: () => T): T | undefined => {
+    try {
+      return action();
+    } catch (error) {
+      refuse(error);
+      return undefined;
+    }
+  };
+  const safeWrite = (name: string, data: unknown) =>
+    attempt(() => write(name, data));
   let cleanup = 'not-started';
   let identity:
     | {
@@ -210,7 +410,7 @@ export async function captureNativeParent(
     | undefined;
   const inputLedger: { text: string; submittedAt: string; method: string }[] =
     [];
-  let files: ReturnType<typeof inventory> = [];
+  let files: ReturnType<typeof inventoryNativeCapture> = [];
   const persist = () => {
     write('requests.json', provider?.records ?? []);
     write('inputs.json', inputLedger);
@@ -222,7 +422,7 @@ export async function captureNativeParent(
       (record) => record.decision !== 'accepted',
     );
     requireCondition(!refusal, `provider refusal: ${refusal?.decision}`);
-    inventory(config.output, false);
+    inventoryNativeCapture(config.output, false);
   };
   const pause = async (ms: number) => {
     guard();
@@ -445,51 +645,39 @@ export async function captureNativeParent(
     await pause(250);
     outcome = 'captured';
   } catch (error) {
-    reason =
-      Date.now() >= deadline
-        ? 'capture deadline exceeded'
-        : error instanceof Error
-          ? error.message
-          : String(error);
+    refuse(Date.now() >= deadline ? 'capture deadline exceeded' : error);
   } finally {
     if (launched) {
-      try {
-        // Capture even on protocol refusal, then close only this owned tmux server.
-        const last = tmux(
-          ['capture-pane', '-t', session, '-p', '-S', '-2000'],
-          true,
-        );
-        write('final-screen.json', last);
-        tmux(['send-keys', '-t', session, 'C-c'], true);
-        await Bun.sleep(100);
-        const killed = tmux(['kill-server'], true);
-        const absent = tmux(['list-sessions'], true);
-        write('cleanup.json', { killed, absent });
-        cleanup =
-          absent.status === 1 &&
-          (killed.status === 0 ||
-            /no server running|no such file/i.test(killed.stderr))
-            ? 'stopped'
-            : 'unconfirmed';
-      } catch {
-        cleanup = 'unconfirmed';
-      }
+      const last = attempt(() =>
+        tmux(['capture-pane', '-t', session, '-p', '-S', '-2000'], true),
+      );
+      if (last) safeWrite('final-screen.json', last);
+      // Each stop/verification command runs even if screen capture or storage fails.
+      attempt(() => tmux(['send-keys', '-t', session, 'C-c'], true));
+      await Bun.sleep(100);
+      const killed = attempt(() => tmux(['kill-server'], true));
+      const absent = attempt(() => tmux(['list-sessions'], true));
+      cleanup =
+        absent?.status === 1 &&
+        (killed?.status === 0 ||
+          /no server running|no such file/i.test(killed?.stderr ?? ''))
+          ? 'stopped'
+          : 'unconfirmed';
+      safeWrite('cleanup.json', { killed, absent });
     }
-    if (provider) await provider.stop();
-    persist();
+    try {
+      if (provider) await provider.stop();
+    } catch (error) {
+      refuse(error);
+    }
+    safeWrite('requests.json', provider?.records ?? []);
+    safeWrite('inputs.json', inputLedger);
     const refusedRequest = provider?.records.find(
       (record) => record.decision !== 'accepted',
     );
-    if (refusedRequest) {
-      outcome = 'refused';
-      reason = `provider refusal: ${refusedRequest.decision}`;
-    }
-    try {
-      files = inventory(config.output);
-    } catch (error) {
-      outcome = 'refused';
-      reason = error instanceof Error ? error.message : String(error);
-    }
+    if (refusedRequest) refuse(`provider refusal: ${refusedRequest.decision}`);
+    const observed = attempt(() => inventoryNativeCapture(config.output));
+    if (observed) files = observed;
     if (
       outcome === 'captured' &&
       !files.some(
@@ -498,19 +686,16 @@ export async function captureNativeParent(
           file.path.endsWith('.jsonl') &&
           file.bytes > 0,
       )
-    ) {
-      outcome = 'refused';
-      reason = 'no raw native session files captured';
-    }
-    if (launched && cleanup !== 'stopped') {
-      outcome = 'refused';
-      reason = `${reason ?? 'capture finished'}; cleanup unconfirmed`;
-    }
+    )
+      refuse('no raw native session files captured');
+    if (launched && cleanup !== 'stopped') refuse('cleanup unconfirmed');
   }
   const result = {
     outcome,
     reason,
     cleanup,
+    receiptFailures,
+    errors,
     identity,
     files,
     startedAt: new Date(started).toISOString(),
@@ -518,7 +703,9 @@ export async function captureNativeParent(
     qualification:
       'unqualified; inspect native provenance and grammar separately',
   };
-  write('capture-result.json', result);
+  safeWrite('capture-result.json', result);
+  result.outcome = outcome;
+  result.reason = reason;
   return result;
 }
 
@@ -538,6 +725,8 @@ if (import.meta.main) {
         outcome: result.outcome,
         reason: result.reason,
         cleanup: result.cleanup,
+        receiptFailures: result.receiptFailures,
+        errors: result.errors,
       })}\n`,
     );
     if (result.outcome !== 'captured') process.exitCode = 1;

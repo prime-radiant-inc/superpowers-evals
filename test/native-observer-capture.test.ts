@@ -1,14 +1,17 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +20,7 @@ import { SpawnCommandRunner } from '../src/agents/command-runner.ts';
 import { deleteProcessEnv, setProcessEnv } from '../src/env.ts';
 import {
   captureNativeParent,
+  inventoryNativeCapture,
   type NativeCaptureConfig,
 } from './linux/fixtures/native-observer-capture.ts';
 
@@ -79,7 +83,7 @@ exec '${process.execPath}' '${binary}.ts' "$@"
     expectedExecutableSha256: createHash('sha256')
       .update(readFileSync(binary))
       .digest('hex'),
-    tmux: realpathSync(tmux!),
+    tmux: tmux ? realpathSync(tmux) : '/unavailable-test-tmux',
     path: `${join(process.execPath, '..')}:/usr/bin:/bin`,
     output: join(root, 'capture'),
     imageId: `sha256:${'5'.repeat(64)}`,
@@ -260,3 +264,109 @@ localTest(
   },
   20000,
 );
+
+localTest(
+  'still kills the actual fake native process when screen capture and receipt writes fail',
+  async () => {
+    for (const failure of ['screen', 'disk'] as const) {
+      const config = fixture('stall');
+      const runner = new SpawnCommandRunner();
+      let storageUnavailable = false;
+      const result = await captureNativeParent(config, {
+        ...testBoundary,
+        runner: {
+          run(command, args, options) {
+            if (
+              failure === 'screen' &&
+              args.includes('capture-pane') &&
+              existsSync(join(config.output, 'home/observed.json'))
+            )
+              throw new Error('injected capture-pane failure');
+            return runner.run(command, args, options);
+          },
+        },
+        writeReceipt(path, body) {
+          if (
+            failure === 'disk' &&
+            existsSync(join(config.output, 'home/observed.json'))
+          )
+            storageUnavailable = true;
+          if (storageUnavailable)
+            throw Object.assign(
+              new Error('ENOSPC injected full output mount'),
+              { code: 'ENOSPC' },
+            );
+          writeFileSync(path, body, { mode: 0o600 });
+        },
+      });
+      expect(result.outcome).toBe('refused');
+      expect(result.reason).toContain(
+        failure === 'screen' ? 'capture-pane' : 'ENOSPC',
+      );
+      expect(result.cleanup).toBe('stopped');
+      const observed = JSON.parse(
+        readFileSync(join(config.output, 'home/observed.json'), 'utf8'),
+      );
+      expect(() => process.kill(observed.pid, 0)).toThrow();
+      if (failure === 'disk') {
+        expect(
+          result.receiptFailures.some((f) => f.file === 'capture-result.json'),
+        ).toBe(true);
+        expect(existsSync(join(config.output, 'capture-result.json'))).toBe(
+          false,
+        );
+      }
+    }
+  },
+  20000,
+);
+
+test('inventory rejects real leaf, directory and ancestor replacement without hashing the replacement', () => {
+  for (const replace of ['file', 'directory', 'ancestor', 'growth'] as const) {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'native-inventory-test-')),
+    );
+    roots.push(root);
+    const capture = join(root, 'capture');
+    const raw = join(capture, 'raw');
+    mkdirSync(raw, { recursive: true });
+    writeFileSync(join(raw, 'session.jsonl'), 'original');
+    const outside = join(root, 'outside');
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'session.jsonl'), 'must not be read');
+    let replaced = false;
+    expect(() =>
+      inventoryNativeCapture(capture, true, {
+        beforeOpen(path) {
+          if (
+            replaced ||
+            path !== (replace === 'directory' ? 'raw' : 'raw/session.jsonl')
+          )
+            return;
+          replaced = true;
+          if (replace === 'file') {
+            renameSync(join(raw, 'session.jsonl'), join(raw, 'saved'));
+            symlinkSync(
+              join(outside, 'session.jsonl'),
+              join(raw, 'session.jsonl'),
+            );
+          } else if (replace === 'directory') {
+            renameSync(raw, join(capture, 'saved'));
+            symlinkSync(outside, raw);
+          } else if (replace === 'ancestor') {
+            renameSync(capture, join(root, 'saved'));
+            symlinkSync(outside, capture);
+          }
+        },
+        afterReadChunk(path) {
+          if (replace === 'growth' && path === 'raw/session.jsonl')
+            appendFileSync(join(raw, 'session.jsonl'), 'growth');
+        },
+      }),
+    ).toThrow();
+    expect(replaced).toBe(true);
+    expect(readFileSync(join(outside, 'session.jsonl'), 'utf8')).toBe(
+      'must not be read',
+    );
+  }
+});
