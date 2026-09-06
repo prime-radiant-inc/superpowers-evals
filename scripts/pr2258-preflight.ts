@@ -154,8 +154,8 @@ export const Pr2258QualificationReceiptsSchema = z
     exposure: z
       .object({
         fake_provider_six_way_overlap_verified: z.boolean(),
-        maximum_start_skew_s: z.number().nonnegative(),
-        start_skew_margin_s: z.number().nonnegative(),
+        maximum_start_skew_s: z.number().nonnegative().nullable(),
+        start_skew_margin_s: z.number().nonnegative().nullable(),
         receipt_sha256: z.string().nullable(),
       })
       .strict(),
@@ -309,6 +309,7 @@ export interface Pr2258PreflightInput {
 export interface Pr2258PreflightResult {
   ready: boolean;
   blockers: string[];
+  qualification_gaps: string[];
   evidence: {
     planned_slots: number;
     global_cap: number;
@@ -347,6 +348,7 @@ export function validatePr2258Preflight(
   input: Pr2258PreflightInput,
 ): Pr2258PreflightResult {
   const blockers: string[] = [];
+  const qualificationGaps: string[] = [];
   const { suite, grader, arms, credentials, qualification } = input;
   const expectedRepetitions =
     suite.name === 'pr2258_parallel_diagnostic'
@@ -355,6 +357,8 @@ export function validatePr2258Preflight(
         ? 2
         : null;
   const measured = suite.name === 'pr2258_parallel_measured';
+  // Diagnostics collect missing native and concurrency evidence; measurements require it.
+  const qualificationChecks = measured ? blockers : qualificationGaps;
   if (expectedRepetitions === null)
     blockers.push(`unsupported PR 2258 suite name ${suite.name}`);
   if (input.globalCap !== 6)
@@ -488,7 +492,7 @@ export function validatePr2258Preflight(
     ['Claude', qualification.chronology.claude],
   ] as const) {
     if (!receipt.complete || !hasReceiptDigest(receipt.receipt_sha256))
-      blockers.push(`${label} native chronology coverage is incomplete`);
+      qualificationChecks.push(`${label} native chronology coverage is incomplete`);
   }
 
   const pins = qualification.frozen_pins;
@@ -632,9 +636,9 @@ export function validatePr2258Preflight(
       blockers.push(`model ${model} needs ${needed} concurrent calls but verified capacity is ${receipt.max_concurrency}`);
   }
   if (!qualification.capacity.fake_provider_six_way_verified)
-    blockers.push('fake-provider six-way capacity is not verified for the simultaneous subject/grader mix');
+    qualificationChecks.push('fake-provider six-way capacity is not verified for the simultaneous subject/grader mix');
   if (!hasReceiptDigest(qualification.capacity.receipt_sha256))
-    blockers.push('six-way capacity receipt is missing');
+    qualificationChecks.push('six-way capacity receipt is missing');
 
   const firstWaveBlocksByPool = new Map<string, Set<string>>();
   const addBlock = (poolId: string, blockId: string) => {
@@ -672,21 +676,21 @@ export function validatePr2258Preflight(
     }
   }
   if (!qualification.exposure.fake_provider_six_way_overlap_verified)
-    blockers.push('fake-provider six-way overlap is not verified');
+    qualificationChecks.push('fake-provider six-way overlap is not verified');
   const fakeProviderSkew = qualification.exposure.maximum_start_skew_s;
   if (typeof fakeProviderSkew !== 'number' || !Number.isFinite(fakeProviderSkew))
-    blockers.push('fake-provider maximum start skew evidence is missing');
+    qualificationChecks.push('fake-provider maximum start skew evidence is missing');
   else {
     if (fakeProviderSkew > suite.max_exposure_skew)
-      blockers.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
+      qualificationChecks.push('fake-provider six-way start skew does not satisfy the 60-second exposure bound');
     const expectedMargin = Math.max(0, suite.max_exposure_skew - fakeProviderSkew);
     if (qualification.exposure.start_skew_margin_s !== expectedMargin)
-      blockers.push(
+      qualificationChecks.push(
         `fake-provider start skew margin must be ${expectedMargin} seconds, got ${qualification.exposure.start_skew_margin_s}`,
       );
   }
   if (!hasReceiptDigest(qualification.exposure.receipt_sha256))
-    blockers.push('six-way exposure receipt is missing');
+    qualificationChecks.push('six-way exposure receipt is missing');
 
   if (measured) {
     const diagnostic = input.diagnosticGo;
@@ -775,7 +779,7 @@ export function validatePr2258Preflight(
     resource_policy: [...policy.values()],
     pricing_snapshot: suite.pricing_snapshot,
   };
-  return { ready: blockers.length === 0, blockers, evidence };
+  return { ready: blockers.length === 0, blockers, qualification_gaps: qualificationGaps, evidence };
 }
 
 function loadInput(

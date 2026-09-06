@@ -523,6 +523,7 @@ test('capability receipts make the diagnostic experiment ready before provider o
   expect(result).toEqual({
     ready: true,
     blockers: [],
+    qualification_gaps: [],
     evidence: expect.objectContaining({
       planned_slots: 6,
       global_cap: 6,
@@ -538,16 +539,16 @@ test('capability receipts make the diagnostic experiment ready before provider o
   });
 });
 
-test('diagnostic capability requires finite fake-provider skew and exact margin', () => {
-  const missingSkew = preflight('diagnostic', ({ receipts }) => {
-    Reflect.set(receipts.exposure, 'maximum_start_skew_s', null);
+test('measured capability requires finite fake-provider skew and exact margin', () => {
+  const missingSkew = preflight('measured', ({ receipts }) => {
+    receipts.exposure.maximum_start_skew_s = null;
   });
   expect(missingSkew.ready).toBe(false);
   expect(missingSkew.blockers).toContain(
     'fake-provider maximum start skew evidence is missing',
   );
 
-  const wrongMargin = preflight('diagnostic', ({ receipts }) => {
+  const wrongMargin = preflight('measured', ({ receipts }) => {
     receipts.exposure.maximum_start_skew_s = 55;
     receipts.exposure.start_skew_margin_s = 0;
   });
@@ -555,6 +556,101 @@ test('diagnostic capability requires finite fake-provider skew and exact margin'
   expect(wrongMargin.blockers).toContain(
     'fake-provider start skew margin must be 5 seconds, got 0',
   );
+});
+
+const deferredQualificationCases: {
+  name: string;
+  mutate: (receipts: Pr2258QualificationReceipts) => void;
+  gap: RegExp;
+}[] = [
+  {
+    name: 'Codex chronology',
+    mutate: (receipts) => {
+      receipts.chronology.codex = { complete: false, receipt_sha256: null };
+    },
+    gap: /Codex native chronology/,
+  },
+  {
+    name: 'Claude chronology',
+    mutate: (receipts) => {
+      receipts.chronology.claude = { complete: false, receipt_sha256: null };
+    },
+    gap: /Claude native chronology/,
+  },
+  {
+    name: 'fake capacity',
+    mutate: (receipts) => {
+      receipts.capacity.fake_provider_six_way_verified = false;
+      receipts.capacity.receipt_sha256 = null;
+    },
+    gap: /six-way capacity/,
+  },
+  {
+    name: 'fake overlap',
+    mutate: (receipts) => {
+      receipts.exposure.fake_provider_six_way_overlap_verified = false;
+      receipts.exposure.receipt_sha256 = null;
+    },
+    gap: /six-way overlap/,
+  },
+  {
+    name: 'unknown skew',
+    mutate: (receipts) => {
+      receipts.exposure.maximum_start_skew_s = null;
+      receipts.exposure.start_skew_margin_s = null;
+    },
+    gap: /start skew evidence is missing/,
+  },
+  {
+    name: 'excessive observed skew',
+    mutate: (receipts) => {
+      receipts.exposure.maximum_start_skew_s = 61;
+      receipts.exposure.start_skew_margin_s = 0;
+    },
+    gap: /start skew does not satisfy/,
+  },
+  {
+    name: 'incorrect skew margin',
+    mutate: (receipts) => {
+      receipts.exposure.maximum_start_skew_s = 55;
+      receipts.exposure.start_skew_margin_s = 0;
+    },
+    gap: /start skew margin/,
+  },
+];
+
+test.each(
+  deferredQualificationCases,
+)('$name remains visible for diagnostics and blocks measurements', ({
+  mutate,
+  gap,
+}) => {
+  const diagnostic = preflight('diagnostic', ({ receipts }) =>
+    mutate(receipts),
+  );
+  expect(diagnostic.ready).toBe(true);
+  expect(diagnostic.blockers).toEqual([]);
+  expect(diagnostic.qualification_gaps).toEqual(
+    expect.arrayContaining([expect.stringMatching(gap)]),
+  );
+
+  const measured = preflight('measured', ({ receipts }) => mutate(receipts));
+  expect(measured.ready).toBe(false);
+  expect(measured.blockers).toEqual(
+    expect.arrayContaining([expect.stringMatching(gap)]),
+  );
+});
+
+test('receipt schema preserves unknown fake-provider skew without inventing zero', () => {
+  const { suite } = loadSuite('diagnostic');
+  const receipts = completeReceipts(suite, loadArms());
+  receipts.exposure.fake_provider_six_way_overlap_verified = false;
+  receipts.exposure.receipt_sha256 = null;
+  receipts.exposure.maximum_start_skew_s = null;
+  receipts.exposure.start_skew_margin_s = null;
+  const parsed = Pr2258QualificationReceiptsSchema.parse(receipts);
+  expect(parsed.exposure.maximum_start_skew_s).toBeNull();
+  expect(parsed.exposure.start_skew_margin_s).toBeNull();
 });
 
 test('measured experiment blocks without a diagnostic GO receipt', () => {
@@ -650,11 +746,15 @@ test('missing qualification evidence stays an explicit no-go', () => {
     expect.arrayContaining([
       expect.stringMatching(/grader bearer.*distinct/i),
       expect.stringMatching(/Claude runtime.*unsupported/i),
-      expect.stringMatching(/Claude native chronology/i),
       expect.stringMatching(/pricing accounting probe.*incomplete/i),
       expect.stringMatching(/Linux qualification/i),
       expect.stringMatching(/installed qualification/i),
       expect.stringMatching(/projection rehearsal/i),
+    ]),
+  );
+  expect(result.qualification_gaps).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(/Claude native chronology/i),
       expect.stringMatching(/six-way capacity/i),
       expect.stringMatching(/fake-provider six-way overlap/i),
     ]),
