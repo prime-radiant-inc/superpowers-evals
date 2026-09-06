@@ -63,9 +63,23 @@ try {
     );
   } else if (
     command?.startsWith('observer-') &&
-    (args.length === 1 || args.length === 2)
+    (args.length === 1 ||
+      args.length === 2 ||
+      (command === 'observer-read' &&
+        (args.length === 3 ||
+          (args.length === 4 && args[2] === 'receipt-content'))))
   ) {
-    console.log(JSON.stringify(runObserverCommand(command, arg(0), args[1])));
+    console.log(
+      JSON.stringify(
+        runObserverCommand(
+          command,
+          arg(0),
+          args[1],
+          args[2] === 'receipt-content' ? args[3] : args[2],
+          args[2] === 'receipt-content' ? 'receipt-content' : undefined,
+        ),
+      ),
+    );
   } else if (command === 'snapshot' && args.length === 1) {
     console.log(JSON.stringify(captureInput(resolve(arg(0)))));
   } else if (command === 'index' && args.length === 1) {
@@ -81,7 +95,7 @@ try {
       score.status === 'pass' ? 0 : score.status === 'fail' ? 1 : 127;
   } else {
     throw new Error(
-      'Usage: brainstorming-evidence.ts install RUNNER_BINDING_PATH | observer-index WORKDIR_BASE64 | observer-receipts WORKDIR_BASE64 [CURSOR_BASE64] | observer-read WORKDIR_BASE64 PATH_BASE64 | observer-write-review WORKDIR_BASE64 CONTENT_BASE64 | snapshot WORKDIR | index BUNDLE_DIR | score BUNDLE_DIR | readout --campaign-dir PATH --results-root PATH [--review-set PATH]',
+      'Usage: brainstorming-evidence.ts install RUNNER_BINDING_PATH | observer-index WORKDIR_BASE64 [CURSOR_BASE64] | observer-receipts WORKDIR_BASE64 [CURSOR_BASE64] | observer-read WORKDIR_BASE64 PATH_BASE64 [receipt-content] [CURSOR_BASE64] | observer-write-review WORKDIR_BASE64 CONTENT_BASE64 | snapshot WORKDIR | index BUNDLE_DIR | score BUNDLE_DIR | readout --campaign-dir PATH --results-root PATH [--review-set PATH]',
     );
   }
 } catch (error) {

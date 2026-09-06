@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { z } from 'zod';
 import {
   closePin,
   pinAbsoluteDir,
@@ -21,6 +22,7 @@ import {
   readObserverNode,
   validateObserverBinding,
 } from './observer/binding.ts';
+import { RawPrefixSchema } from './observer/contracts.ts';
 import {
   captureFinalState,
   type FinalState,
@@ -127,9 +129,14 @@ The shared shell accepts only these exact observer commands. Substitute canonica
 
 - List authenticated receipt IDs and paths (at most 16 entries and 32 KiB of serialized UTF-8 per page): ${observerCommand(workdir, 'observer-receipts')}
   If next_cursor is non-null, append it as one single-quoted base64 argument to that same command. Read the returned receipt path with observer-read and cite its observation_id.
-- Index the bound source: ${observerCommand(workdir, 'observer-index')}
-- Read an artifact or private receipt: ${observerCommand(workdir, 'observer-read', 'PATH_BASE64')}
+- Index the bound source as bounded JSON byte chunks: ${observerCommand(workdir, 'observer-index')}
+- Read an artifact or exact private receipt bytes: ${observerCommand(workdir, 'observer-read', 'PATH_BASE64')}
+- Read the saved document revision inside an authenticated receipt: ${observerCommand(workdir, 'observer-read', 'PATH_BASE64', undefined, 'receipt-content')}
 - Save the complete V2 actor review once to private evidence/review.json: ${observerCommand(workdir, 'observer-write-review', 'CONTENT_BASE64')}
+
+Index and read return offset, bytes, sha256, content_utf8, content_base64 and next_cursor. Read content_utf8 directly in offset order until next_cursor is null. These character-aligned text chunks expose all index JSON, physical payloads, document text and receipt metadata without a shell decoder. content_base64 preserves the identical raw bytes for machine verification; concatenate separately decoded chunks and verify total bytes and sha256. Binary members have null content_utf8. Each serialized response is at most 32 KiB. One physical call/result can span chunks: do not classify partial payloads or omit later chunks.
+For index continuation, append next_cursor as one single-quoted base64 argument to observer-index. For read continuation, append next_cursor after the unchanged single-quoted PATH_BASE64 argument and, when selected, the literal single-quoted receipt-content view. Use this view to inspect a saved approval revision directly as text; the live artifact may already differ. Cursors cannot switch path, view, receipt identity or content. Index cursors authenticate the original raw prefix even if new records arrive; after the subject stops, request a fresh index and review its complete final prefix. File cursors require unchanged authenticated bytes and path; on a refused continuation restart the read and never combine revisions. No other argument forms are supported.
+
 
 Receipts live in ${join(dirname(workdir), 'brainstorming-evidence')}. Each V2 receipt records observation_id, artifact_path, content_base64, bytes, sha256 and source_prefix. Select observations after presentation and before your reply. Equal document bytes at different observations have distinct IDs. A deleted file has no invented receipt.
 A capture failure blocks input. Wait for a complete stable write, retry, or stop using Escape/Ctrl+C. Never bypass the guard or edit subject artifacts through another process. Read BRAINSTORMING-ANNOTATIONS.md for the complete V2 actor-review schema. Copy source_prefixes from the final complete indexes; use physical {source_id,line,block} anchors, observation_id receipts, and result_anchors for every canonical call result. Classify every canonical call and retain explicit uncertainty; a spawn acknowledgment does not prove a child has finished. Child user messages cannot approve parent work. Do not invent parent authority or native qualification.
@@ -269,6 +276,8 @@ export function observerCommand(
     | 'observer-read'
     | 'observer-write-review',
   argument?: string,
+  cursor?: string,
+  view?: 'receipt-content',
 ): string {
   return [
     process.execPath,
@@ -276,6 +285,8 @@ export function observerCommand(
     operation,
     Buffer.from(workdir).toString('base64'),
     ...(argument === undefined ? [] : [argument]),
+    ...(view === undefined ? [] : [view]),
+    ...(cursor === undefined ? [] : [cursor]),
   ]
     .map(quote)
     .join(' ');
@@ -305,14 +316,30 @@ export function guardedInputCapture(workdir: string, request: unknown) {
       command === observerCommand(workdir, 'observer-index') ||
       command === observerCommand(workdir, 'observer-receipts') ||
       (
-        ['observer-read', 'observer-write-review', 'observer-receipts'] as const
+        [
+          'observer-index',
+          'observer-read',
+          'observer-write-review',
+          'observer-receipts',
+        ] as const
       ).some((operation) => {
         const prefix = `${observerCommand(workdir, operation)} `;
         if (!command.startsWith(prefix)) return false;
         const rest = command.slice(prefix.length);
+        const arguments_ = rest.split(' ');
+        if (
+          operation === 'observer-read' &&
+          arguments_[1] === quote('receipt-content')
+        )
+          arguments_.splice(1, 1);
         return (
-          /^'[A-Za-z0-9+/]*={0,2}'$/.test(rest) &&
-          canonicalBase64(rest.slice(1, -1))
+          (arguments_.length === 1 ||
+            (operation === 'observer-read' && arguments_.length === 2)) &&
+          arguments_.every(
+            (value) =>
+              /^'[A-Za-z0-9+/]*={0,2}'$/.test(value) &&
+              canonicalBase64(value.slice(1, -1)),
+          )
         );
       });
     if (!allowed)
@@ -440,29 +467,144 @@ function listObservedReceipts(
   }
 }
 
+const ObserverCursorSchema = z
+  .object({
+    operation: z.enum(['observer-index', 'observer-read']),
+    authority_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    offset: z.number().int().safe().positive(),
+    prefix: RawPrefixSchema.nullable(),
+  })
+  .strict();
+type ObserverCursor = z.infer<typeof ObserverCursorSchema>;
+const digestBytes = (bytes: Uint8Array | string) =>
+  createHash('sha256').update(bytes).digest('hex');
+function readObserverCursor(
+  encoded: string | undefined,
+): ObserverCursor | undefined {
+  if (encoded === undefined) return undefined;
+  if (!canonicalBase64(encoded))
+    throw new Error('Observer cursor must be canonical base64.');
+  return ObserverCursorSchema.parse(
+    JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')),
+  );
+}
+
+/** Transport chunks preserve every byte, even when one physical entry is large.
+ * Continuations must reauthenticate the same content and source authority. */
+function observerPage(
+  raw: Buffer,
+  identity: Omit<ObserverCursor, 'offset' | 'content_sha256'>,
+  cursor?: ObserverCursor,
+  member?: { path: string; view: 'raw' | 'receipt-content' },
+) {
+  const sha256 = digestBytes(raw);
+  if (
+    cursor &&
+    (cursor.operation !== identity.operation ||
+      cursor.authority_sha256 !== identity.authority_sha256 ||
+      cursor.content_sha256 !== sha256 ||
+      cursor.offset >= raw.length ||
+      JSON.stringify(cursor.prefix) !== JSON.stringify(identity.prefix))
+  )
+    throw new Error(
+      'Observer continuation differs from authenticated source content.',
+    );
+  const offset = cursor?.offset ?? 0;
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let readable = true;
+  try {
+    decoder.decode(raw);
+  } catch {
+    readable = false;
+  }
+  const boundary = (end: number) => {
+    if (readable)
+      while (
+        end > offset &&
+        end < raw.length &&
+        ((raw[end] ?? 0) & 0xc0) === 0x80
+      )
+        end--;
+    return end;
+  };
+  const pageFor = (end: number) => ({
+    ...member,
+    bytes: raw.length,
+    sha256,
+    offset,
+    content_base64: raw.subarray(offset, end).toString('base64'),
+    content_utf8: readable ? decoder.decode(raw.subarray(offset, end)) : null,
+    next_cursor:
+      end < raw.length
+        ? Buffer.from(
+            JSON.stringify({
+              ...identity,
+              content_sha256: sha256,
+              offset: end,
+            }),
+          ).toString('base64')
+        : null,
+  });
+  let end = boundary(Math.min(raw.length, offset + 12 * 1024));
+  let page = pageFor(end);
+  while (Buffer.byteLength(`${JSON.stringify(page)}\n`, 'utf8') > 32 * 1024) {
+    end = boundary(offset + Math.floor((end - offset) / 2));
+    if (end <= offset)
+      throw new Error(
+        'Observer page envelope exceeds the transport byte limit; no evidence was truncated.',
+      );
+    page = pageFor(end);
+  }
+  return page;
+}
+
 export function runObserverCommand(
   operation: string,
   encodedWorkdir: string,
   argument?: string,
+  continuation?: string,
+  view?: 'receipt-content',
 ): unknown {
   if (!canonicalBase64(encodedWorkdir))
     throw new Error('Observer workdir must be canonical base64.');
+  if (
+    (continuation !== undefined || view !== undefined) &&
+    operation !== 'observer-read'
+  )
+    throw new Error('Only observer-read accepts a path and continuation.');
   const workdir = Buffer.from(encodedWorkdir, 'base64').toString('utf8');
   const binding = readBinding(workdir);
   const evidence = join(dirname(workdir), 'brainstorming-evidence');
   if (operation === 'observer-receipts')
     return listObservedReceipts(workdir, evidence, argument);
-  if (operation === 'observer-index' && argument === undefined) {
+  if (operation === 'observer-index') {
+    const cursor = readObserverCursor(argument);
     const observation = readInputObservation(workdir);
     const parent = observation.binding.sources.find(
       (entry) =>
         entry.source.source_id === observation.binding.parent_source_id,
     );
     if (!parent) throw new Error('No bound parent is available to review.');
-    return indexBoundObserverSource(
+    const raw = Buffer.from(observation.raw_base64, 'base64');
+    if (cursor) {
+      if (cursor.operation !== 'observer-index' || cursor.prefix === null)
+        throw new Error('Index continuation requires a bound source prefix.');
+      verifyRawPrefix(parent.source, raw, cursor.prefix);
+    }
+    const index = indexBoundObserverSource(
       observation.binding,
       parent.source,
-      Buffer.from(observation.raw_base64, 'base64'),
+      cursor ? raw.subarray(0, cursor.prefix?.bytes) : raw,
+    );
+    return observerPage(
+      Buffer.from(JSON.stringify(index)),
+      {
+        operation: 'observer-index',
+        authority_sha256: digestBytes(JSON.stringify(observation.binding)),
+        prefix: index.prefix,
+      },
+      cursor,
     );
   }
   if (argument === undefined || !canonicalBase64(argument))
@@ -491,19 +633,30 @@ export function runObserverCommand(
       throw new Error(
         'Observer read must remain within artifacts or private evidence/context.',
       );
+    let receiptSha256: string | null = null;
+    if (
+      view !== undefined &&
+      !(root === evidence && basename(path).startsWith('capture-'))
+    )
+      throw new Error(
+        'Receipt-content view requires an authenticated capture receipt.',
+      );
     const raw =
       root === evidence && basename(path).startsWith('capture-')
         ? (() => {
             if (dirname(path) !== evidence)
               throw new Error('Receipt must be an owned top-level capture.');
             const observation = readInputObservation(workdir);
-            const { raw } = readObservedReceipt(
+            const { raw, receipt } = readObservedReceipt(
               evidence,
               basename(path),
               observation,
             );
             verifyFinalState(observation.binding.roots, observation.inventory);
-            return raw;
+            receiptSha256 = digestBytes(raw);
+            return view === 'receipt-content'
+              ? Buffer.from(receipt.content_base64, 'base64')
+              : raw;
           })()
         : readPinnedNoFollowBytes(
             root,
@@ -511,7 +664,24 @@ export function runObserverCommand(
             'observer read',
             true,
           );
-    return { path, content_base64: raw?.toString('base64') };
+    if (!raw) throw new Error('Observer read is missing.');
+    return observerPage(
+      raw,
+      {
+        operation: 'observer-read',
+        authority_sha256: digestBytes(
+          JSON.stringify({
+            binding,
+            path,
+            view: view ?? 'raw',
+            receipt_sha256: receiptSha256,
+          }),
+        ),
+        prefix: null,
+      },
+      readObserverCursor(continuation),
+      { path, view: view ?? 'raw' },
+    );
   }
   throw new Error('Observer command is not supported.');
 }

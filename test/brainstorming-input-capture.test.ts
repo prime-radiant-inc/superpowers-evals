@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
@@ -16,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   captureInput,
+  guardedInputCapture,
   installInputCapture,
   observerCommand,
   publishInputCapture,
@@ -266,9 +268,12 @@ test('private observer commands read/index and write review bytes without home a
   captureInput(f.workdir);
   const wd = Buffer.from(f.workdir).toString('base64');
   const encode = (value: string) => Buffer.from(value).toString('base64');
-  expect(runObserverCommand('observer-index', wd)).toMatchObject({
-    schema_version: 2,
-  });
+  const indexed = runObserverCommand('observer-index', wd) as {
+    content_base64: string;
+  };
+  expect(
+    JSON.parse(Buffer.from(indexed.content_base64, 'base64').toString()),
+  ).toMatchObject({ schema_version: 2 });
   expect(runObserverCommand('observer-read', wd, encode(f.spec))).toMatchObject(
     { content_base64: encode('Learning React') },
   );
@@ -446,4 +451,285 @@ test('one schema-valid oversized receipt refuses instead of truncating or skippi
       Buffer.from(f.workdir).toString('base64'),
     ),
   ).toThrow('exceeds the receipt page byte limit');
+});
+
+interface EvidencePage {
+  offset: number;
+  bytes: number;
+  sha256: string;
+  content_base64: string;
+  content_utf8: string | null;
+  next_cursor: string | null;
+}
+const encodeObserver = (value: string) => Buffer.from(value).toString('base64');
+
+test('bounded index and document pages preserve oversized physical payloads and exact bytes', () => {
+  const f = fixture();
+  const payload = 'α漢🙂'.repeat(12000);
+  const document = Buffer.from(`Learning React\n${payload}`);
+  writeFileSync(
+    f.log,
+    f.raw +
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          call_id: 'large-call',
+          name: 'functions.exec',
+          arguments: JSON.stringify({ command: payload }),
+        },
+      }) +
+      '\n',
+  );
+  writeFileSync(f.spec, document);
+  const captured = captureInput(f.workdir);
+  const receipt = captured.receipts.find(
+    (receipt) => receipt.artifact_path === 'spec.md',
+  )!;
+  const receiptPath = join(f.evidence, `${receipt.name}.json`);
+  for (const path of [undefined, f.spec, receiptPath]) {
+    const operation = path ? 'observer-read' : 'observer-index';
+    let cursor: string | undefined;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let digest = '';
+    do {
+      const page = runObserverCommand(
+        operation,
+        encodeObserver(f.workdir),
+        path ? encodeObserver(path) : cursor,
+        path ? cursor : undefined,
+      ) as EvidencePage;
+      expect(
+        Buffer.byteLength(`${JSON.stringify(page)}\n`),
+      ).toBeLessThanOrEqual(32 * 1024);
+      expect(page.offset).toBe(total);
+      const chunk = Buffer.from(page.content_base64, 'base64');
+      expect(Buffer.from(page.content_utf8!)).toEqual(chunk);
+      expect(chunk.length).toBeGreaterThan(0);
+      chunks.push(chunk);
+      total += chunk.length;
+      digest = page.sha256;
+      cursor = page.next_cursor ?? undefined;
+      if (!cursor) expect(total).toBe(page.bytes);
+      expect(chunks.length).toBeLessThan(100);
+    } while (cursor);
+    expect(chunks.length).toBeGreaterThan(1);
+    const bytes = Buffer.concat(chunks);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(digest);
+    if (path) expect(bytes).toEqual(readFileSync(path));
+    else
+      expect(
+        JSON.parse(bytes.toString()).entries.find(
+          (entry: { kind: string }) => entry.kind === 'call',
+        ).payload.arguments,
+      ).toBe(JSON.stringify({ command: payload }));
+  }
+});
+
+test('index continuation authenticates the original prefix across later append and rejects rewritten sources', () => {
+  const f = fixture();
+  const text = 'review '.repeat(16000);
+  writeFileSync(
+    f.log,
+    f.raw +
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text }],
+        },
+      }) +
+      '\n',
+  );
+  captureInput(f.workdir);
+  const first = runObserverCommand(
+    'observer-index',
+    encodeObserver(f.workdir),
+  ) as EvidencePage;
+  expect(first.next_cursor).toBeString();
+  appendFileSync(
+    f.log,
+    `${JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'later suffix' }],
+      },
+    })}\n`,
+  );
+  const second = runObserverCommand(
+    'observer-index',
+    encodeObserver(f.workdir),
+    first.next_cursor!,
+  ) as EvidencePage;
+  expect(second.sha256).toBe(first.sha256);
+  expect(second.bytes).toBe(first.bytes);
+  writeFileSync(
+    f.log,
+    readFileSync(f.log, 'utf8').replace('review ', 'REVIEW '),
+  );
+  expect(() =>
+    runObserverCommand(
+      'observer-index',
+      encodeObserver(f.workdir),
+      first.next_cursor!,
+    ),
+  ).toThrow();
+});
+
+test('read continuation rejects changed bytes, another path, and forged cursor digest', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  writeFileSync(f.spec, 'Large document '.repeat(6000));
+  captureInput(f.workdir);
+  const first = runObserverCommand(
+    'observer-read',
+    encodeObserver(f.workdir),
+    encodeObserver(f.spec),
+  ) as EvidencePage;
+  expect(first.next_cursor).toBeString();
+  const other = join(f.workdir, 'other.md');
+  writeFileSync(other, readFileSync(f.spec));
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(other),
+      first.next_cursor!,
+    ),
+  ).toThrow();
+  const forged = JSON.parse(
+    Buffer.from(first.next_cursor!, 'base64').toString(),
+  );
+  forged.content_sha256 = '0'.repeat(64);
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(f.spec),
+      encodeObserver(JSON.stringify(forged)),
+    ),
+  ).toThrow();
+  writeFileSync(f.spec, 'Different document '.repeat(6000));
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(f.spec),
+      first.next_cursor!,
+    ),
+  ).toThrow();
+});
+
+test('continuation guard permits only exact command arity without shell composition', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  writeFileSync(f.spec, 'Spec');
+  const encoded = encodeObserver(f.spec);
+  const read = observerCommand(f.workdir, 'observer-read', encoded, encoded);
+  const index = observerCommand(f.workdir, 'observer-index', encoded);
+  const saved = observerCommand(
+    f.workdir,
+    'observer-read',
+    encoded,
+    encoded,
+    'receipt-content',
+  );
+  for (const command of [read, index, saved]) {
+    expect(() =>
+      guardedInputCapture(f.workdir, { name: 'bash', args: { command } }),
+    ).not.toThrow();
+    for (const suffix of [` '${encoded}'`, '; true', '\ntrue'])
+      expect(() =>
+        guardedInputCapture(f.workdir, {
+          name: 'bash',
+          args: { command: command + suffix },
+        }),
+      ).toThrow();
+  }
+});
+
+test('readable pages bound escaped control text and preserve the saved receipt revision', () => {
+  const f = fixture();
+  writeFileSync(f.log, f.raw);
+  const saved = `saved revision 漢🙂\n${'\u0001'.repeat(70000)}`;
+  writeFileSync(f.spec, saved);
+  const captured = captureInput(f.workdir);
+  const receipt = captured.receipts.find(
+    (receipt) => receipt.artifact_path === 'spec.md',
+  )!;
+  const receiptPath = join(f.evidence, `${receipt.name}.json`);
+  const rawPage = runObserverCommand(
+    'observer-read',
+    encodeObserver(f.workdir),
+    encodeObserver(receiptPath),
+  ) as EvidencePage;
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(receiptPath),
+      rawPage.next_cursor!,
+      'receipt-content',
+    ),
+  ).toThrow();
+  const savedPage = runObserverCommand(
+    'observer-read',
+    encodeObserver(f.workdir),
+    encodeObserver(receiptPath),
+    undefined,
+    'receipt-content',
+  ) as EvidencePage;
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(receiptPath),
+      savedPage.next_cursor!,
+    ),
+  ).toThrow();
+  writeFileSync(f.spec, 'a later revision');
+  let cursor: string | undefined;
+  let restored = '';
+  do {
+    const page = runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(receiptPath),
+      cursor,
+      'receipt-content',
+    ) as EvidencePage;
+    expect(page.content_utf8).toBeString();
+    expect(Buffer.byteLength(`${JSON.stringify(page)}\n`)).toBeLessThanOrEqual(
+      32 * 1024,
+    );
+    expect(page.offset).toBe(Buffer.byteLength(restored));
+    restored += page.content_utf8;
+    cursor = page.next_cursor ?? undefined;
+  } while (cursor);
+  expect(restored).toBe(saved);
+  const changedReceipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+  changedReceipt.artifact_path = 'other.md';
+  writeFileSync(receiptPath, JSON.stringify(changedReceipt));
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(receiptPath),
+      savedPage.next_cursor!,
+      'receipt-content',
+    ),
+  ).toThrow();
+  expect(() =>
+    runObserverCommand(
+      'observer-read',
+      encodeObserver(f.workdir),
+      encodeObserver(f.spec),
+      undefined,
+      'receipt-content',
+    ),
+  ).toThrow();
 });

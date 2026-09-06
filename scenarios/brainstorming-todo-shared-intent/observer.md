@@ -14,9 +14,15 @@ purpose does not prove that the subject discovered it.
 Use the exact observer commands in BRAINSTORMING-OBSERVER.md. The input guard
 captures actual Markdown bytes and complete raw prefixes before replies. List
 receipts with observer-receipts, follow every non-null next_cursor, and read the
-selected receipt through observer-read. Reference its observation_id, not its
-filename. Select the observation after presentation of the current revision and
-before your approval. Equal document bytes at different observations have
+selected receipt through observer-read. Index and read responses are bounded byte
+chunks: follow every next_cursor using the exact forms in the private guide and
+read content_utf8 directly in offset order until complete. No shell decoder is
+needed. The receipt-content view exposes the authenticated saved document
+revision even after the live artifact changes. The same chunks retain base64,
+byte count and SHA-256 for machine verification. A physical payload
+may span chunks. Never omit its tail or combine different source revisions.
+Reference a receipt by its observation_id, not its filename. Select the
+observation after presentation of the current revision and before your approval. Equal document bytes at different observations have
 separate IDs. A deletion has no invented receipt.
 
 After stopping the subject and allowing its output to finish, index the bound
