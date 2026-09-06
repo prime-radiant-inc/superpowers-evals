@@ -96,6 +96,7 @@ function fixture() {
     schema_version: 2 as const,
     observation_id: 'observation-1',
     source_prefix: createRawPrefix(source, raw),
+    supporting_prefixes: [],
     artifact_path: 'design.bin',
     bytes: content.length,
     sha256: digest(content),
@@ -117,6 +118,7 @@ function fixture() {
       sha256: digest(bytes),
     })),
     sources: [{ source_id: 'parent', path: 'parent.jsonl' }],
+    supporting_files: [],
     terminal_artifacts: [
       { root_id: 'documents', relative_path: 'design.bin', path: 'design.bin' },
     ],
@@ -355,6 +357,7 @@ function producerFixture() {
       schema_version: 2,
       reviewer: 'contract fixture',
       stop_reason: 'endpoint',
+      supporting_prefixes: [],
       source_prefixes: [createRawPrefix(source, raw)],
       events: [],
       actions: [],
@@ -619,4 +622,88 @@ describe('authenticated artifact directory inventory', () => {
     f.save();
     expect(() => readObserverBundle(f.bundleDir)).toThrow();
   });
+});
+
+test('freezes every trace member as authenticated support without treating it as a transcript', () => {
+  const f = fixture();
+  f.binding.phase = 'bound';
+  f.binding.cli_version = '0.146.0';
+  f.binding.dialect = 'codex-response-items-0.146.0';
+  f.binding.sources[0]!.source.expected_cli_version = '0.146.0';
+  const trace = join(f.binding.home, '.codex/rollout-traces');
+  mkdirSync(join(trace, 'session/payloads'), { recursive: true });
+  for (const [name, bytes] of [
+    ['session/manifest.json', '{}'],
+    ['session/raw.jsonl', '{}\n'],
+    ['session/payloads/1.json', '{"payload":true}'],
+    ['session/extra.bin', 'opaque'],
+  ])
+    writeFileSync(join(trace, name!), bytes!);
+  f.binding.roots.push({ id: 'trace', kind: 'tool_trace', path: trace });
+  const evidence = join(f.dir, 'evidence');
+  mkdirSync(evidence);
+  const frozen = freezeObserverBundle(f.binding, evidence);
+  expect(
+    frozen.supporting_files.map((ref) => ref.relative_path).sort(),
+  ).toEqual([
+    'session/extra.bin',
+    'session/manifest.json',
+    'session/payloads/1.json',
+    'session/raw.jsonl',
+  ]);
+  expect(frozen.sources).toHaveLength(1);
+  rmSync(f.binding.home, { recursive: true });
+  rmSync(f.binding.workdir, { recursive: true });
+  expect(
+    readObserverBundle(join(evidence, 'bundle')).supporting_files,
+  ).toHaveLength(4);
+  const support = frozen.supporting_files[0]!;
+  writeFileSync(join(evidence, 'bundle', support.path), 'mutated');
+  expect(() => readObserverBundle(join(evidence, 'bundle'))).toThrow();
+});
+
+test.each([
+  'missing',
+  'pruned-reference',
+  'forged-member',
+  'symlink',
+  'unlisted',
+])('portable bundle refuses %s supporting evidence', (mutation) => {
+  const f = fixture();
+  f.binding.phase = 'bound';
+  f.binding.cli_version = '0.146.0';
+  f.binding.dialect = 'codex-response-items-0.146.0';
+  f.binding.sources[0]!.source.expected_cli_version = '0.146.0';
+  const trace = join(f.binding.home, '.codex/rollout-traces');
+  mkdirSync(trace, { recursive: true });
+  writeFileSync(join(trace, 'payload.bin'), 'private trace');
+  f.binding.roots.push({ id: 'trace', kind: 'tool_trace', path: trace });
+  const evidence = join(f.dir, 'evidence');
+  mkdirSync(evidence);
+  const bundle = freezeObserverBundle(f.binding, evidence);
+  const bundleDir = join(evidence, 'bundle');
+  const ref = bundle.supporting_files[0]!;
+  if (mutation === 'missing') rmSync(join(bundleDir, ref.path));
+  if (mutation === 'pruned-reference') {
+    bundle.supporting_files = [];
+    bundle.files = bundle.files.filter((file) => file.path !== ref.path);
+    rmSync(join(bundleDir, ref.path));
+  }
+  if (mutation === 'forged-member') {
+    writeFileSync(join(bundleDir, ref.path), 'forged');
+    const file = bundle.files.find((file) => file.path === ref.path)!;
+    file.bytes = 6;
+    file.sha256 = digest(Buffer.from('forged'));
+  }
+  if (mutation === 'symlink') {
+    rmSync(join(bundleDir, ref.path));
+    symlinkSync(join(trace, 'payload.bin'), join(bundleDir, ref.path));
+  }
+  if (mutation === 'unlisted')
+    writeFileSync(join(bundleDir, 'unlisted'), 'private trace');
+  writeFileSync(
+    join(bundleDir, 'observer-bundle.json'),
+    JSON.stringify(bundle),
+  );
+  expect(() => readObserverBundle(bundleDir)).toThrow();
 });

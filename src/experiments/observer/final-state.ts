@@ -12,7 +12,7 @@ import {
 
 export interface FinalStateRoot {
   id: string;
-  kind: 'transcripts' | 'artifacts';
+  kind: 'transcripts' | 'artifacts' | 'tool_trace';
   path: string;
 }
 
@@ -64,7 +64,7 @@ const NonemptyRelativePathSchema = RelativePathSchema.refine(
 const FinalStateRootSchema: z.ZodType<FinalStateRoot> = z
   .object({
     id: NonemptyStringSchema,
-    kind: z.enum(['transcripts', 'artifacts']),
+    kind: z.enum(['transcripts', 'artifacts', 'tool_trace']),
     path: z.string().refine(isAbsolute),
   })
   .strict();
@@ -72,7 +72,7 @@ const FinalStateRootSchema: z.ZodType<FinalStateRoot> = z
 const FinalStateRootDescriptionSchema = z
   .object({
     id: NonemptyStringSchema,
-    kind: z.enum(['transcripts', 'artifacts']),
+    kind: z.enum(['transcripts', 'artifacts', 'tool_trace']),
   })
   .strict();
 
@@ -407,7 +407,7 @@ function observeRoot(root: FinalStateRoot): FinalStateNode[] {
       }
       if (child.isDirectory()) {
         visit(childParts, child);
-      } else if (root.kind === 'artifacts' || name.endsWith('.jsonl')) {
+      } else if (root.kind !== 'transcripts' || name.endsWith('.jsonl')) {
         nodes.push(
           readFileNode(root, childParts, child, rootIdentity, pin.viaPath),
         );

@@ -26,6 +26,7 @@ import {
   indexObserverSource,
   type ObserverBinding,
 } from './binding.ts';
+import type { ObserverSupportingFile } from './contracts.ts';
 import {
   type RawAnchor,
   RawAnchorSchema,
@@ -35,7 +36,9 @@ import { createRawPrefix, verifyRawPrefix } from './raw.ts';
 import {
   type ActorReview,
   type ArtifactReceipt,
+  SupportingPrefixSchema,
   validateArtifactReceipt,
+  verifySupportingPrefixes,
 } from './review.ts';
 
 const CallCoverageSchema = z
@@ -75,6 +78,7 @@ export const IndependentReviewSchema = z
     reviewer: z.string().min(1),
     reviewed_at: TimestampSchema,
     source_prefixes: z.array(RawPrefixSchema),
+    supporting_prefixes: z.array(SupportingPrefixSchema),
     calls: z.array(CallCoverageSchema),
     judgments: z.array(JudgmentSchema),
     strict_status: z.enum(['pass', 'fail', 'indeterminate']).nullable(),
@@ -171,6 +175,7 @@ export interface IndependentReviewEvidence {
   bundle_digest: string;
   binding: ObserverBinding;
   raw_sources: { source_id: string; bytes: Uint8Array }[];
+  supporting_files: readonly ObserverSupportingFile[];
   actor_review: ActorReview;
   receipts: ArtifactReceipt[];
 }
@@ -220,6 +225,11 @@ export function assessIndependentReviews(
     result.reviews.push(record);
     try {
       const review = IndependentReviewSchema.parse(rawReview);
+      verifySupportingPrefixes(
+        evidence.supporting_files,
+        review.supporting_prefixes,
+        true,
+      );
       if (seenReviewers.has(review.reviewer))
         result.conflicts.push(
           `Duplicate reviewer submission: ${review.reviewer}`,
@@ -261,8 +271,13 @@ export function assessIndependentReviews(
                 evidence.binding,
                 bound.source,
                 raw.bytes,
+                evidence.supporting_files,
               )
-            : indexObserverSource(bound.source, raw.bytes)
+            : indexObserverSource(
+                bound.source,
+                raw.bytes,
+                evidence.supporting_files,
+              )
         ).entries;
       });
       if (review.source_prefixes.length !== evidence.binding.sources.length)
@@ -381,6 +396,11 @@ export function assessIndependentReviews(
             );
             if (!source || !raw) throw new Error('Receipt source is missing.');
             verifyRawPrefix(source.source, raw.bytes, receipt.source_prefix);
+            verifySupportingPrefixes(
+              evidence.supporting_files,
+              receipt.supporting_prefixes,
+              false,
+            );
           }
         }
       }

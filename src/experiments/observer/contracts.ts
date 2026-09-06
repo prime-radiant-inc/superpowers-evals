@@ -8,6 +8,12 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export interface ObserverSupportingFile {
+  root_id: string;
+  relative_path: string;
+  bytes: Uint8Array;
+}
+
 export interface RawSource {
   source_id: string;
   runtime: 'codex' | 'claude';

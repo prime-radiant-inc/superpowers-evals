@@ -112,6 +112,7 @@ import {
 } from '../experiments/brainstorming-input-capture.ts';
 import {
   discoverObserverSources,
+  type ObserverBinding,
   observerDialectForBuild,
   observerRequiredForScenario,
   validateObserverBinding,
@@ -1010,6 +1011,7 @@ export function buildContextSubstitutions(args: {
   readonly launchAgentPath: string;
   readonly runHomeDir: string;
   readonly family: string;
+  readonly observerBinding?: ObserverBinding | undefined;
   readonly superpowers?: SuperpowersSpec | undefined;
 }): Record<string, string> {
   const spec = args.superpowers;
@@ -1028,6 +1030,22 @@ export function buildContextSubstitutions(args: {
     // splices $QUORUM_HOME_ENV into its `exec env …` line.
     ...homeEnvSubstitutions(args.runHomeDir),
   };
+  if (args.observerBinding !== undefined) {
+    const binding = validateObserverBinding(args.observerBinding);
+    if (
+      binding.home !== args.runHomeDir ||
+      binding.launch_cwd !== args.launchCwd ||
+      binding.runtime !== args.family
+    )
+      throw new RunnerError(
+        'Observer launcher conflicts with its bound subject.',
+        'setup',
+      );
+    const trace = binding.roots.find((root) => root.kind === 'tool_trace');
+    if (trace)
+      substitutions['$QUORUM_HOME_ENV'] +=
+        ` CODEX_ROLLOUT_TRACE_ROOT=${shellSingleQuote(trace.path)}`;
+  }
   // $SUPERPOWERS_ROOT: absent under none mode (a surviving raw reference
   // there is an instrument bug — the fail-loud forbiddenPlaceholders rule
   // catches it); the threaded root under root mode; the ambient root under
@@ -1488,6 +1506,12 @@ export function prepareObserverAfterSetup(args: {
     runtime === 'codex' ? '.codex/sessions' : '.claude/projects',
   );
   mkdirSync(transcripts, { recursive: true, mode: 0o700 });
+  const traceRoot =
+    runtime === 'codex' && supported.cli_version === '0.146.0'
+      ? join(home, '.codex/rollout-traces')
+      : null;
+  if (traceRoot !== null)
+    mkdirSync(traceRoot, { recursive: true, mode: 0o700 });
   const binding = validateObserverBinding({
     schema_version: 2,
     run_id: basename(args.runDir),
@@ -1501,6 +1525,9 @@ export function prepareObserverAfterSetup(args: {
     roots: [
       { id: 'transcripts', kind: 'transcripts', path: transcripts },
       { id: 'artifacts', kind: 'artifacts', path: workdir },
+      ...(traceRoot === null
+        ? []
+        : [{ id: 'tool-trace', kind: 'tool_trace', path: traceRoot }]),
     ],
     phase: 'unbound',
     parent_source_id: null,
@@ -1943,11 +1970,28 @@ async function runInnerBody(
     'context',
     'launch-agent',
   );
+  let observerBinding: ObserverBinding | undefined;
+  if (observerRequiredForScenario(basename(a.scenarioDir))) {
+    const path = observerBindingPath(workdir);
+    const raw = readPinnedNoFollowFile(
+      dirname(path),
+      [basename(path)],
+      'observer runner binding',
+      true,
+    );
+    if (raw === null)
+      throw new RunnerError(
+        'Observer binding is missing before launch.',
+        'setup',
+      );
+    observerBinding = validateObserverBinding(JSON.parse(raw));
+  }
   const substitutions = buildContextSubstitutions({
     launchCwd,
     launchAgentPath,
     runHomeDir,
     family,
+    observerBinding,
     superpowers: a.superpowers,
   });
   // Provision-supplied substitutions. For LOCAL claude these are the auth

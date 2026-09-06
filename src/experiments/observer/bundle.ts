@@ -31,6 +31,7 @@ import {
   readObserverNode,
   validateObserverBinding,
 } from './binding.ts';
+import type { ObserverSupportingFile } from './contracts.ts';
 import {
   ArtifactDirectorySchema,
   captureArtifactDirectories,
@@ -42,7 +43,12 @@ import {
   verifyFinalState,
 } from './final-state.ts';
 import { verifyRawPrefix, verifyReviewedSuffix } from './raw.ts';
-import { validateActorReview, validateArtifactReceipt } from './review.ts';
+import {
+  createSupportingPrefixes,
+  validateActorReview,
+  validateArtifactReceipt,
+  verifySupportingPrefixes,
+} from './review.ts';
 import {
   type StrictScore,
   StrictScoreSchema,
@@ -55,6 +61,7 @@ export interface ObserverBundle {
   artifact_directories: FinalStateNode[];
   files: { path: string; bytes: number; sha256: string }[];
   sources: { source_id: string; path: string }[];
+  supporting_files: { root_id: string; relative_path: string; path: string }[];
   terminal_artifacts: {
     root_id: string;
     relative_path: string;
@@ -100,6 +107,7 @@ export const ObserverBundleSchema: z.ZodType<
     files: z.array(ArtifactRefSchema).min(1),
     sources: z.array(SourceRefSchema).min(1),
     terminal_artifacts: z.array(TerminalArtifactRefSchema),
+    supporting_files: z.array(TerminalArtifactRefSchema),
     receipts: z.array(RelativeArtifactPathSchema),
     actor_review: RelativeArtifactPathSchema.nullable(),
     score: RelativeArtifactPathSchema.nullable(),
@@ -123,6 +131,7 @@ export const ObserverBundleSchema: z.ZodType<
       issue('Bundle members must be unique and cannot include the envelope.');
     const references = [
       ...bundle.sources.map((source) => source.path),
+      ...bundle.supporting_files.map((file) => file.path),
       ...bundle.terminal_artifacts.map((artifact) => artifact.path),
       ...bundle.receipts,
       ...[bundle.actor_review, bundle.score].filter(
@@ -239,13 +248,19 @@ export const ObserverBundleSchema: z.ZodType<
         );
       covered.add(nodeKey);
     }
-    for (const artifact of bundle.terminal_artifacts) {
+    for (const artifact of [
+      ...bundle.terminal_artifacts,
+      ...bundle.supporting_files,
+    ]) {
       const nodeKey = key(artifact.root_id, artifact.relative_path);
       const node = nodes.get(nodeKey);
       const file = files.get(artifact.path);
       if (
         covered.has(nodeKey) ||
-        roots.get(artifact.root_id) !== 'artifacts' ||
+        roots.get(artifact.root_id) !==
+          (bundle.supporting_files.includes(artifact)
+            ? 'tool_trace'
+            : 'artifacts') ||
         !node ||
         !file ||
         node.bytes !== file.bytes ||
@@ -355,6 +370,14 @@ export function readObserverBundle(bundleDir: string): ObserverBundle {
     if (!source || !ref)
       throw new Error('Receipt source is outside the binding.');
     verifyRawPrefix(source.source, contentAt(ref.path), receipt.source_prefix);
+    verifySupportingPrefixes(
+      bundle.supporting_files.map((ref) => ({
+        ...ref,
+        bytes: contentAt(ref.path),
+      })),
+      receipt.supporting_prefixes,
+      false,
+    );
   }
   if (
     !readMember(bundleDir, OBSERVER_BUNDLE_FILENAME).equals(envelope) ||
@@ -387,6 +410,7 @@ export function freezeObserverBundle(
       files: [],
       sources: [],
       terminal_artifacts: [],
+      supporting_files: [],
       receipts: [],
       actor_review: null,
       score: null,
@@ -416,6 +440,15 @@ export function freezeObserverBundle(
         'artifacts'
       )
         bundle.terminal_artifacts.push({
+          root_id: node.root_id,
+          relative_path: node.path,
+          path,
+        });
+      else if (
+        binding.roots.find((root) => root.id === node.root_id)?.kind ===
+        'tool_trace'
+      )
+        bundle.supporting_files.push({
           root_id: node.root_id,
           relative_path: node.path,
           path,
@@ -481,6 +514,10 @@ export function freezeObserverBundle(
         const score = scoreObserverEvidence({
           binding: bundle.binding,
           raw_sources,
+          supporting_files: bundle.supporting_files.map((ref) => ({
+            ...ref,
+            bytes: readMember(stage, ref.path),
+          })),
           review,
           receipts: bundle.receipts.map((path) =>
             validateArtifactReceipt(
@@ -605,8 +642,10 @@ function authenticatedMember(
 /** Index portable frozen sources. The original runtime paths remain provenance only. */
 export function indexObserverBundle(bundleDir: string) {
   const bundle = readObserverBundle(bundleDir);
+  const supportingFiles = readBundleSupportingFiles(bundleDir, bundle);
   return {
     schema_version: 2,
+    supporting_prefixes: createSupportingPrefixes(supportingFiles),
     sources: bundle.sources.map((ref) => {
       const bound = bundle.binding.sources.find(
         (source) => source.source.source_id === ref.source_id,
@@ -614,8 +653,25 @@ export function indexObserverBundle(bundleDir: string) {
       if (!bound) throw new Error('Bundle source is not bound.');
       const bytes = authenticatedMember(bundleDir, bundle, ref.path);
       return bound.parent_link === null
-        ? indexBoundObserverSource(bundle.binding, bound.source, bytes)
-        : indexObserverSource(bound.source, bytes);
+        ? indexBoundObserverSource(
+            bundle.binding,
+            bound.source,
+            bytes,
+            supportingFiles,
+          )
+        : indexObserverSource(bound.source, bytes, supportingFiles);
     }),
   };
+}
+
+/** Member bytes are authenticated on consumption; provenance paths are never opened. */
+export function readBundleSupportingFiles(
+  bundleDir: string,
+  bundle: ObserverBundle,
+): ObserverSupportingFile[] {
+  return bundle.supporting_files.map((ref) => ({
+    root_id: ref.root_id,
+    relative_path: ref.relative_path,
+    bytes: authenticatedMember(bundleDir, bundle, ref.path),
+  }));
 }

@@ -20,6 +20,7 @@ import {
 import { indexCodexTranscript } from './codex.ts';
 import {
   ObserverEvidenceError,
+  type ObserverSupportingFile,
   type RawAnchor,
   RawAnchorSchema,
   type RawIndex,
@@ -29,6 +30,7 @@ import {
 import type { FinalStateRoot } from './final-state.ts';
 import {
   captureFinalState,
+  type FinalState,
   type FinalStateNode,
   verifyFinalState,
 } from './final-state.ts';
@@ -66,7 +68,7 @@ const DecimalSchema = z.string().regex(/^\d+$/);
 const RootSchema = z
   .object({
     id: NameSchema,
-    kind: z.enum(['transcripts', 'artifacts']),
+    kind: z.enum(['transcripts', 'artifacts', 'tool_trace']),
     path: AbsoluteRuntimePathSchema,
   })
   .strict();
@@ -125,6 +127,19 @@ export const ObserverBindingSchema: z.ZodType<ObserverBinding> = z
       binding.workdir.startsWith(`${binding.home}/`)
     )
       issue('Subject home and artifact workdir must be separate.');
+    const traceRoots = binding.roots.filter(
+      (root) => root.kind === 'tool_trace',
+    );
+    if (
+      traceRoots.length > 1 ||
+      traceRoots.some(
+        (root) =>
+          binding.runtime !== 'codex' ||
+          binding.cli_version !== '0.146.0' ||
+          root.path !== `${binding.home}/.codex/rollout-traces`,
+      )
+    )
+      issue('Tool traces require the exact private Codex 0.146 trace root.');
     const paths = binding.roots.map((root) => root.path);
     for (const [index, root] of binding.roots.entries()) {
       if (
@@ -314,9 +329,10 @@ export function readObserverNode(
 export function indexObserverSource(
   source: RawSource,
   raw: Uint8Array,
+  supportingFiles: readonly ObserverSupportingFile[] = [],
 ): RawIndex {
   return source.runtime === 'codex'
-    ? indexCodexTranscript(source, raw)
+    ? indexCodexTranscript(source, raw, supportingFiles)
     : indexClaudeTranscript(source, raw);
 }
 
@@ -325,6 +341,7 @@ export function indexBoundObserverSource(
   binding: ObserverBinding,
   source: RawSource,
   raw: Uint8Array,
+  supportingFiles: readonly ObserverSupportingFile[] = [],
 ): RawIndex {
   requireObserverDialect(binding);
   if (
@@ -336,7 +353,17 @@ export function indexBoundObserverSource(
       'identity_conflict',
       'Raw source conflicts with runner binding.',
     );
-  const index = indexObserverSource(source, raw);
+  const traceRoots = new Set(
+    binding.roots
+      .filter((root) => root.kind === 'tool_trace')
+      .map((root) => root.id),
+  );
+  if (supportingFiles.some((file) => !traceRoots.has(file.root_id)))
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Supporting bytes must belong to the bound tool trace root.',
+    );
+  const index = indexObserverSource(source, raw, supportingFiles);
   if (binding.runtime === 'claude') {
     const parent = inspectedClaudeParentIdentity(raw);
     if (
@@ -453,7 +480,12 @@ export function discoverObserverSources(
         'Source has no canonical session identity.',
       );
     const source = { ...placeholder, expected_session_id: id };
-    indexBoundObserverSource(binding, source, raw);
+    indexBoundObserverSource(
+      binding,
+      source,
+      raw,
+      readObserverSupportingFiles(binding, inventory),
+    );
     candidates.push({
       source,
       root_id: node.root_id,
@@ -489,4 +521,23 @@ export function discoverObserverSources(
     parent_source_id: parent.source.source_id,
     sources: candidates,
   });
+}
+
+/** Read only the complete pinned supporting inventory, never paths from native payloads. */
+export function readObserverSupportingFiles(
+  binding: ObserverBinding,
+  inventory: FinalState,
+): ObserverSupportingFile[] {
+  const roots = new Set(
+    binding.roots
+      .filter((root) => root.kind === 'tool_trace')
+      .map((root) => root.id),
+  );
+  return inventory.nodes
+    .filter((node) => node.kind === 'file' && roots.has(node.root_id))
+    .map((node) => ({
+      root_id: node.root_id,
+      relative_path: node.path,
+      bytes: readObserverNode(binding, node),
+    }));
 }

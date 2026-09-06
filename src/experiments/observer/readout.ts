@@ -17,6 +17,7 @@ import { parseAttemptManifest } from '../../runner/manifest.ts';
 import {
   OBSERVER_BUNDLE_FILENAME,
   OBSERVER_BUNDLE_RELATIVE_DIR,
+  readBundleSupportingFiles,
   readObserverBundle,
 } from './bundle.ts';
 import {
@@ -193,6 +194,10 @@ function readPublishedObserver(
   );
   const replay = scoreObserverEvidence({
     raw_sources,
+    supporting_files: readBundleSupportingFiles(
+      join(runDir, OBSERVER_BUNDLE_RELATIVE_DIR),
+      bundle,
+    ),
     binding: bundle.binding,
     receipts,
     review: actor_review,
@@ -210,6 +215,10 @@ function readPublishedObserver(
     bundle_digest: envelopeRef.sha256,
     binding: bundle.binding,
     raw_sources,
+    supporting_files: readBundleSupportingFiles(
+      join(runDir, OBSERVER_BUNDLE_RELATIVE_DIR),
+      bundle,
+    ),
     receipts,
     actor_review,
   };

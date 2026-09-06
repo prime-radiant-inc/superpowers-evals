@@ -344,3 +344,58 @@ test('bound replay rejects later metadata that changes parent authority', () => 
     ),
   ).toThrow();
 });
+
+test('binds tool trace roots only to the private Codex 0.146 home and never as a source', () => {
+  const value = binding();
+  value.phase = 'unbound';
+  value.parent_source_id = null;
+  value.sources = [];
+  value.cli_version = '0.146.0';
+  value.dialect = 'codex-response-items-0.146.0';
+  value.roots.push({
+    id: 'trace',
+    kind: 'tool_trace',
+    path: `${value.home}/.codex/rollout-traces`,
+  });
+  expect(() => validateObserverBinding(value)).not.toThrow();
+  for (const path of [
+    '/elsewhere/traces',
+    `${value.home}/other`,
+    `${value.home}/.codex/rollout-traces/nested`,
+  ]) {
+    expect(() =>
+      validateObserverBinding({
+        ...value,
+        roots: value.roots.map((root) =>
+          root.id === 'trace' ? { ...root, path } : root,
+        ),
+      }),
+    ).toThrow();
+  }
+  expect(() =>
+    validateObserverBinding({ ...value, cli_version: '0.144.3' }),
+  ).toThrow();
+  expect(() =>
+    validateObserverBinding({ ...value, runtime: 'claude' }),
+  ).toThrow();
+});
+
+test('bound indexing rejects supporting bytes outside the declared trace root', () => {
+  const f = acquisitionFixture();
+  writeFileSync(f.path, f.raw);
+  const bound = acquisition.discoverObserverSources(f.candidate);
+  expect(() =>
+    acquisition.indexBoundObserverSource(
+      bound,
+      bound.sources[0]!.source,
+      Buffer.from(f.raw),
+      [
+        {
+          root_id: 'unbound',
+          relative_path: 'manifest.json',
+          bytes: Buffer.from('{}'),
+        },
+      ],
+    ),
+  ).toThrow();
+});

@@ -76,6 +76,14 @@ test.each([
       binding.roots.find((root: { id: string }) => root.id === 'transcripts')
         .path,
     ).toBe(join(f.args.home, transcriptDir!));
+    const trace = binding.roots.find(
+      (root: { kind: string }) => root.kind === 'tool_trace',
+    );
+    expect(trace?.path ?? null).toBe(
+      runtime === 'codex' && version === '0.146.0'
+        ? join(f.args.home, '.codex/rollout-traces')
+        : null,
+    );
     f.assertProbeCleaned();
   } finally {
     f.cleanup();

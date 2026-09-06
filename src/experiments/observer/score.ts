@@ -5,6 +5,7 @@ import {
   type ObserverBinding,
   validateObserverBinding,
 } from './binding.ts';
+import type { ObserverSupportingFile } from './contracts.ts';
 import {
   ObserverEvidenceError,
   type RawAnchor,
@@ -18,6 +19,7 @@ import {
   ArtifactReceiptSchema,
   type ReviewAction,
   type ReviewEvent,
+  verifySupportingPrefixes,
 } from './review.ts';
 
 export interface StrictScore {
@@ -82,6 +84,7 @@ function before(left: RawAnchor, right: RawAnchor): boolean {
 
 export function scoreObserverEvidence(args: {
   raw_sources: { source_id: string; bytes: Uint8Array }[];
+  supporting_files: readonly ObserverSupportingFile[];
   binding: ObserverBinding;
   receipts: ArtifactReceipt[];
   review: ActorReview;
@@ -110,6 +113,11 @@ export function scoreObserverEvidence(args: {
     const parsedReview = ActorReviewSchema.safeParse(args.review);
     if (!parsedReview.success) refuse('invalid_review');
     const review = parsedReview.data;
+    verifySupportingPrefixes(
+      args.supporting_files,
+      review.supporting_prefixes,
+      true,
+    );
     const rawSources = new Map(
       args.raw_sources.map((source) => [source.source_id, source.bytes]),
     );
@@ -135,8 +143,13 @@ export function scoreObserverEvidence(args: {
       // unqualified native links cannot supply approvals or chronology.
       const index =
         parent_link === null
-          ? indexBoundObserverSource(binding, source, raw)
-          : indexObserverSource(source, raw);
+          ? indexBoundObserverSource(
+              binding,
+              source,
+              raw,
+              args.supporting_files,
+            )
+          : indexObserverSource(source, raw, args.supporting_files);
       if (parent_link !== null)
         evidenceError('causally_unplaced_descendant', parent_link.call);
       if (
@@ -222,6 +235,11 @@ export function scoreObserverEvidence(args: {
       const raw = rawSources.get(receipt.source_prefix.source_id);
       if (!source || !raw) refuse('receipt_source_mismatch');
       verifyRawPrefix(source, raw, receipt.source_prefix);
+      verifySupportingPrefixes(
+        args.supporting_files,
+        receipt.supporting_prefixes,
+        false,
+      );
       receipts.set(receipt.observation_id, receipt);
     }
     const eventKeys = new Set<string>();

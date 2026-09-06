@@ -20,9 +20,13 @@ import {
   indexBoundObserverSource,
   type ObserverBinding,
   readObserverNode,
+  readObserverSupportingFiles,
   validateObserverBinding,
 } from './observer/binding.ts';
-import { RawPrefixSchema } from './observer/contracts.ts';
+import {
+  type ObserverSupportingFile,
+  RawPrefixSchema,
+} from './observer/contracts.ts';
 import {
   captureFinalState,
   type FinalState,
@@ -31,8 +35,10 @@ import {
 import { verifyRawPrefix } from './observer/raw.ts';
 import {
   type ArtifactReceipt,
+  createSupportingPrefixes,
   validateActorReview,
   validateArtifactReceipt,
+  verifySupportingPrefixes,
 } from './observer/review.ts';
 
 function statePath(workdir: string): string {
@@ -135,11 +141,11 @@ The shared shell accepts only these exact observer commands. Substitute canonica
 - Save the complete V2 actor review once to private evidence/review.json: ${observerCommand(workdir, 'observer-write-review', 'CONTENT_BASE64')}
 
 Index and read return offset, bytes, sha256, content_utf8, content_base64 and next_cursor. Read content_utf8 directly in offset order until next_cursor is null. These character-aligned text chunks expose all index JSON, physical payloads, document text and receipt metadata without a shell decoder. content_base64 preserves the identical raw bytes for machine verification; concatenate separately decoded chunks and verify total bytes and sha256. Binary members have null content_utf8. Each serialized response is at most 32 KiB. One physical call/result can span chunks: do not classify partial payloads or omit later chunks.
-For index continuation, append next_cursor as one single-quoted base64 argument to observer-index. For read continuation, append next_cursor after the unchanged single-quoted PATH_BASE64 argument and, when selected, the literal single-quoted receipt-content view. Use this view to inspect a saved approval revision directly as text; the live artifact may already differ. Cursors cannot switch path, view, receipt identity or content. Index cursors authenticate the original raw prefix even if new records arrive; after the subject stops, request a fresh index and review its complete final prefix. File cursors require unchanged authenticated bytes and path; on a refused continuation restart the read and never combine revisions. No other argument forms are supported.
+For index continuation, append next_cursor as one single-quoted base64 argument to observer-index. For read continuation, append next_cursor after the unchanged single-quoted PATH_BASE64 argument and, when selected, the literal single-quoted receipt-content view. Use this view to inspect a saved approval revision directly as text; the live artifact may already differ. Cursors cannot switch path, view, receipt identity or content. Index cursors authenticate the original raw prefix even if new records arrive; a changed tool trace snapshot refuses continuation and requires a fresh index; after the subject stops, request a fresh index and review its complete final prefix. File cursors require unchanged authenticated bytes and path; on a refused continuation restart the read and never combine revisions. No other argument forms are supported.
 
 
-Receipts live in ${join(dirname(workdir), 'brainstorming-evidence')}. Each V2 receipt records observation_id, artifact_path, content_base64, bytes, sha256 and source_prefix. Select observations after presentation and before your reply. Equal document bytes at different observations have distinct IDs. A deleted file has no invented receipt.
-A capture failure blocks input. Wait for a complete stable write, retry, or stop using Escape/Ctrl+C. Never bypass the guard or edit subject artifacts through another process. Read BRAINSTORMING-ANNOTATIONS.md for the complete V2 actor-review schema. Copy source_prefixes from the final complete indexes; use physical {source_id,line,block} anchors, observation_id receipts, and result_anchors for every canonical call result. Classify every canonical call and retain explicit uncertainty; a spawn acknowledgment does not prove a child has finished. Child user messages cannot approve parent work. Do not invent parent authority or native qualification.
+Receipts live in ${join(dirname(workdir), 'brainstorming-evidence')}. Each V2 receipt records observation_id, artifact_path, content_base64, bytes, sha256 and source_prefix plus supporting_prefixes for tool trace members. Select observations after presentation and before your reply. Equal document bytes at different observations have distinct IDs. A deleted file has no invented receipt.
+A capture failure blocks input. Wait for a complete stable write, retry, or stop using Escape/Ctrl+C. Never bypass the guard or edit subject artifacts through another process. Read BRAINSTORMING-ANNOTATIONS.md for the complete V2 actor-review schema. Copy source_prefixes and supporting_prefixes from the final complete indexes; use physical {source_id,line,block} anchors, observation_id receipts, and result_anchors for every canonical call result. Classify every canonical call and retain explicit uncertainty; a spawn acknowledgment does not prove a child has finished. Child user messages cannot approve parent work. Do not invent parent authority or native qualification.
 `,
     { flag: 'wx', mode: 0o600 },
   );
@@ -150,6 +156,7 @@ export interface InputObservation {
   inventory: FinalState;
   raw_log: string | null;
   raw_base64: string;
+  supporting_files: ObserverSupportingFile[];
   documents: Record<string, string>;
 }
 export function readInputObservation(workdir: string): InputObservation {
@@ -167,6 +174,7 @@ export function readInputObservation(workdir: string): InputObservation {
     throw new Error(
       'Capture requires a parent source after startup inventory changes.',
     );
+  const supporting_files = readObserverSupportingFiles(binding, inventory);
   const documents: Record<string, string> = {};
   for (const node of artifactInventory(inventory)) {
     if (node.kind === 'file' && /\.md$/i.test(node.path))
@@ -191,7 +199,7 @@ export function readInputObservation(workdir: string): InputObservation {
     )
       throw new Error('Bound parent identity changed during capture.');
     const raw = readObserverNode(binding, node);
-    indexBoundObserverSource(binding, parent.source, raw);
+    indexBoundObserverSource(binding, parent.source, raw, supporting_files);
     rawLog = join(root.path, parent.relative_path);
     rawBase64 = raw.toString('base64');
   }
@@ -201,6 +209,7 @@ export function readInputObservation(workdir: string): InputObservation {
     inventory,
     raw_log: rawLog,
     raw_base64: rawBase64,
+    supporting_files,
     documents,
   };
 }
@@ -230,6 +239,7 @@ export function publishInputCapture(
     after.binding,
     parent.source,
     Buffer.from(after.raw_base64, 'base64'),
+    after.supporting_files,
   ).prefix;
   for (const [artifactPath, contentBase64] of Object.entries(after.documents)) {
     const content = Buffer.from(contentBase64, 'base64');
@@ -238,6 +248,7 @@ export function publishInputCapture(
       schema_version: 2,
       observation_id: id,
       source_prefix: prefix,
+      supporting_prefixes: createSupportingPrefixes(after.supporting_files),
       artifact_path: artifactPath,
       bytes: content.length,
       sha256: createHash('sha256').update(content).digest('hex'),
@@ -383,6 +394,11 @@ function readObservedReceipt(
     Buffer.from(observation.raw_base64, 'base64'),
     receipt.source_prefix,
   );
+  verifySupportingPrefixes(
+    observation.supporting_files,
+    receipt.supporting_prefixes,
+    false,
+  );
   return { raw, receipt };
 }
 function listObservedReceipts(
@@ -420,6 +436,7 @@ function listObservedReceipts(
         observation_id: receipt.observation_id,
         artifact_path: receipt.artifact_path,
         source_prefix: receipt.source_prefix,
+        supporting_prefixes: receipt.supporting_prefixes,
         bytes: receipt.bytes,
         sha256: receipt.sha256,
         file_bytes: raw.length,
@@ -596,12 +613,25 @@ export function runObserverCommand(
       observation.binding,
       parent.source,
       cursor ? raw.subarray(0, cursor.prefix?.bytes) : raw,
+      observation.supporting_files,
     );
     return observerPage(
-      Buffer.from(JSON.stringify(index)),
+      Buffer.from(
+        JSON.stringify({
+          ...index,
+          supporting_prefixes: createSupportingPrefixes(
+            observation.supporting_files,
+          ),
+        }),
+      ),
       {
         operation: 'observer-index',
-        authority_sha256: digestBytes(JSON.stringify(observation.binding)),
+        authority_sha256: digestBytes(
+          JSON.stringify([
+            observation.binding,
+            createSupportingPrefixes(observation.supporting_files),
+          ]),
+        ),
         prefix: index.prefix,
       },
       cursor,
