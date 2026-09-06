@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { readPinnedNoFollowBytes } from '../../appliance/credential-scope.ts';
 import {
   type CampaignIdentity,
   CampaignIdentitySchema,
@@ -11,13 +13,23 @@ import {
   type Experiment,
   ExperimentSchema,
 } from '../../contracts/campaign/experiment.ts';
+import { indexClaudeTranscript } from './claude.ts';
+import { indexCodexTranscript } from './codex.ts';
 import {
+  ObserverEvidenceError,
   type RawAnchor,
   RawAnchorSchema,
+  type RawIndex,
   type RawSource,
   RawSourceSchema,
 } from './contracts.ts';
 import type { FinalStateRoot } from './final-state.ts';
+import {
+  captureFinalState,
+  type FinalStateNode,
+  verifyFinalState,
+} from './final-state.ts';
+import { parseCompleteJsonl } from './raw.ts';
 
 export interface ObserverBinding {
   schema_version: 2;
@@ -232,4 +244,158 @@ export function observerRequiredForAttempt(
       'Observer attempt lineage is outside the qualified primary-only scope.',
     );
   return true;
+}
+
+/** Inspected source grammar, not native runtime or provider qualification. */
+export const OBSERVER_DIALECTS = {
+  codex: { dialect: 'codex-response-items-0.144.3', cli_version: '0.144.3' },
+  claude: null,
+} as const;
+
+export function requireObserverDialect(binding: ObserverBinding): void {
+  const supported = OBSERVER_DIALECTS[binding.runtime];
+  if (
+    !supported ||
+    binding.dialect !== supported.dialect ||
+    binding.cli_version !== supported.cli_version
+  )
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Observer dialect/build lacks inspected parent provenance.',
+    );
+}
+
+export function readObserverNode(
+  binding: ObserverBinding,
+  node: FinalStateNode,
+): Buffer {
+  const root = binding.roots.find((entry) => entry.id === node.root_id);
+  if (!root || node.kind !== 'file')
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Observer source is not an inventoried file.',
+    );
+  const raw = readPinnedNoFollowBytes(
+    root.path,
+    node.path.split('/'),
+    'observer source',
+    true,
+  );
+  if (
+    raw === null ||
+    raw.length !== node.bytes ||
+    createHash('sha256').update(raw).digest('hex') !== node.sha256
+  )
+    throw new ObserverEvidenceError(
+      'prefix_mismatch',
+      'Observer source changed during capture.',
+    );
+  return raw;
+}
+
+export function indexObserverSource(
+  source: RawSource,
+  raw: Uint8Array,
+): RawIndex {
+  return source.runtime === 'codex'
+    ? indexCodexTranscript(source, raw)
+    : indexClaudeTranscript(source, raw);
+}
+
+/** Startup may have no source. Once selected, the parent path and inode are immutable. */
+export function discoverObserverSources(
+  input: ObserverBinding,
+): ObserverBinding {
+  const binding = validateObserverBinding(input);
+  if (binding.phase === 'finalized')
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Finalized observer cannot discover live sources.',
+    );
+  const inventory = captureFinalState(binding.roots);
+  const transcriptRoots = new Set(
+    binding.roots
+      .filter((root) => root.kind === 'transcripts')
+      .map((root) => root.id),
+  );
+  const nodes = inventory.nodes.filter(
+    (node) => node.kind === 'file' && transcriptRoots.has(node.root_id),
+  );
+  if (nodes.length === 0 && binding.phase === 'unbound') return binding;
+  requireObserverDialect(binding);
+  const candidates: ObserverBinding['sources'] = [];
+  for (const node of nodes) {
+    const raw = readObserverNode(binding, node);
+    const placeholder: RawSource = {
+      source_id: `${node.root_id}:${node.path}`,
+      runtime: binding.runtime,
+      expected_session_id: 'unresolved',
+      expected_cwd: binding.launch_cwd,
+      expected_cli_version: binding.cli_version,
+    };
+    const rows = parseCompleteJsonl(placeholder, raw);
+    const header = rows[0]?.value;
+    const payload = header?.['payload'];
+    if (
+      header?.['type'] !== 'session_meta' ||
+      !payload ||
+      typeof payload !== 'object' ||
+      Array.isArray(payload)
+    )
+      throw new ObserverEvidenceError(
+        'invalid_source',
+        'Parent source lacks canonical session metadata.',
+      );
+    const id = payload['id'] ?? payload['session_id'];
+    if (typeof id !== 'string' || !id)
+      throw new ObserverEvidenceError(
+        'invalid_source',
+        'Source has no canonical session identity.',
+      );
+    const source = { ...placeholder, expected_session_id: id };
+    const index = indexObserverSource(source, raw);
+    if (
+      index.identity.conversation !== 'parent' ||
+      payload['originator'] !== 'codex-tui' ||
+      payload['thread_source'] !== 'user'
+    )
+      throw new ObserverEvidenceError(
+        'invalid_source',
+        'Source lacks inspected parent or descendant-link provenance.',
+      );
+    candidates.push({
+      source,
+      root_id: node.root_id,
+      relative_path: node.path,
+      device: node.device,
+      inode: node.inode,
+      parent_link: null,
+    });
+  }
+  if (candidates.length !== 1)
+    throw new ObserverEvidenceError(
+      'identity_conflict',
+      'Capture requires exactly one unchanged parent source.',
+    );
+  const parent = candidates[0];
+  if (!parent)
+    throw new ObserverEvidenceError(
+      'invalid_source',
+      'Capture requires its bound parent source.',
+    );
+  if (
+    binding.phase === 'bound' &&
+    JSON.stringify(binding.sources) !== JSON.stringify(candidates)
+  )
+    throw new ObserverEvidenceError(
+      'identity_conflict',
+      'Bound source identity or inventory changed.',
+    );
+  verifyFinalState(binding.roots, inventory);
+  return validateObserverBinding({
+    ...binding,
+    phase: 'bound',
+    parent_source_id: parent.source.source_id,
+    sources: candidates,
+  });
 }

@@ -1,4 +1,16 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import * as acquisition from '../src/experiments/observer/binding.ts';
 import {
   type ObserverBinding,
   observerRequiredForAttempt,
@@ -212,4 +224,88 @@ describe('frozen observer requirement', () => {
       }),
     ).toBe(false);
   });
+});
+
+const temporaryRoots: string[] = [];
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0))
+    rmSync(root, { recursive: true, force: true });
+});
+function acquisitionFixture() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'observer-discover-')));
+  temporaryRoots.push(root);
+  const workdir = join(root, 'staging/run/coding-agent-workdir');
+  const home = join(root, 'home');
+  const transcripts = join(home, '.codex/sessions');
+  const launch = join(workdir, 'nested');
+  mkdirSync(launch, { recursive: true });
+  mkdirSync(transcripts, { recursive: true });
+  const candidate: ObserverBinding = {
+    schema_version: 2,
+    run_id: 'run',
+    campaign: null,
+    runtime: 'codex',
+    dialect: 'codex-response-items-0.144.3',
+    cli_version: '0.144.3',
+    home,
+    workdir,
+    launch_cwd: launch,
+    roots: [
+      { id: 'transcripts', kind: 'transcripts', path: transcripts },
+      { id: 'artifacts', kind: 'artifacts', path: workdir },
+    ],
+    phase: 'unbound',
+    parent_source_id: null,
+    sources: [],
+  };
+  const raw =
+    JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        id: 'main',
+        cwd: launch,
+        cli_version: '0.144.3',
+        originator: 'codex-tui',
+        source: 'cli',
+        thread_source: 'user',
+      },
+    }) + '\n';
+  const path = join(transcripts, 'main.jsonl');
+  return { candidate, path, raw, transcripts };
+}
+test('discovers a pinned parent using actual nested launch cwd and campaign home', () => {
+  const f = acquisitionFixture();
+  expect(acquisition.discoverObserverSources(f.candidate)).toEqual(f.candidate);
+  writeFileSync(f.path, f.raw);
+  const bound = acquisition.discoverObserverSources(f.candidate);
+  expect(bound.phase).toBe('bound');
+  expect(bound.sources[0]?.source.expected_session_id).toBe('main');
+  expect(bound.sources[0]?.source.expected_cwd).toBe(f.candidate.launch_cwd);
+});
+test('refuses ambiguous, missing, replaced and unqualified parents', () => {
+  const f = acquisitionFixture();
+  writeFileSync(f.path, f.raw);
+  const bound = acquisition.discoverObserverSources(f.candidate);
+  const second = join(f.transcripts, 'second.jsonl');
+  writeFileSync(second, f.raw);
+  expect(() => acquisition.discoverObserverSources(bound)).toThrow();
+  rmSync(second);
+  rmSync(f.path);
+  expect(() => acquisition.discoverObserverSources(bound)).toThrow();
+  writeFileSync(second, f.raw);
+  renameSync(second, f.path);
+  expect(() => acquisition.discoverObserverSources(bound)).toThrow();
+  expect(() =>
+    acquisition.discoverObserverSources({ ...f.candidate, dialect: 'unknown' }),
+  ).toThrow();
+});
+test('refuses unresolved parent authority, partial JSONL and source symlinks', () => {
+  const f = acquisitionFixture();
+  writeFileSync(f.path, f.raw.replace('"source":"cli"', '"source":"exec"'));
+  expect(() => acquisition.discoverObserverSources(f.candidate)).toThrow();
+  writeFileSync(f.path, f.raw + '{');
+  expect(() => acquisition.discoverObserverSources(f.candidate)).toThrow();
+  rmSync(f.path);
+  symlinkSync(join(f.candidate.workdir, 'missing'), f.path);
+  expect(() => acquisition.discoverObserverSources(f.candidate)).toThrow();
 });
