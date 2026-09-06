@@ -387,3 +387,20 @@ private capture command now exports through the running container's mount
 namespace and requires its completion file before accepting the exported bytes.
 This is an operational plumbing correction, not a scoring or production runtime
 change; the original failed receipt is retained.
+
+Native captures exposed additional startup assumptions before any subject input:
+Codex creates temporary launcher symlinks, and Claude sends a `HEAD /` health
+probe. The capture helper originally refused both. Codex symlink inventory is
+now metadata-only without dereferencing; focused capture tests passed. A later
+Codex attempt showed live HOME writes racing the helper's immutable inventory
+and an unseeded directory-trust prompt. These are capture-helper defects being
+corrected; no native grammar or successful diagnostic is claimed from them.
+All created capture/probe containers were absent after cleanup verification.
+
+Diagnostic preflight now reports missing native chronology and fake parallel
+proof as explicit gaps. Scoped review required retaining known timing violations
+as blockers; that correction remains tracked separately until integrated.
+The subject credential channels are present; the dedicated Mantle grader bearer
+is absent from the selected blessed bundle. Only names/presence and inequality
+booleans were inspected; no secret values are recorded here. Drew was asked for
+an existing secret-store reference while independent source work continues.
