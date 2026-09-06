@@ -392,6 +392,61 @@ test('aborting a real HTTP stream latches refusal and stops further chunks', asy
   }
 });
 
+test('closing the HTTP reader after its terminal SSE event preserves the next scripted turn', async () => {
+  for (const protocol of ['responses', 'messages'] as const) {
+    const server = startNativeObserverProvider({
+      port: 0,
+      steps: [1, 2].map((turn) => ({
+        protocol,
+        request: bodies[protocol],
+        blocks: [{ type: 'text', text: `turn ${turn}` }],
+      })),
+    });
+    try {
+      const abort = new AbortController();
+      const response = await post(
+        server.url,
+        protocol,
+        bodies[protocol],
+        abort.signal,
+      );
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      let completed = false;
+      while (!completed) {
+        const chunk = await reader.read();
+        expect(chunk.done).toBe(false);
+        pending += decoder.decode(chunk.value, { stream: true });
+        const events = pending.split('\n\n');
+        pending = events.pop()!;
+        for (const event of events) {
+          const data = event
+            .split('\n')
+            .find((line) => line.startsWith('data: '));
+          if (!data) continue;
+          const parsed = JSON.parse(data.slice(6));
+          completed ||=
+            parsed.type ===
+            (protocol === 'responses' ? 'response.completed' : 'message_stop');
+        }
+      }
+      await reader.cancel();
+      abort.abort();
+      await Bun.sleep(10);
+      const next = await post(server.url, protocol, bodies[protocol]);
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(server.records.map((record) => record.decision)).toEqual([
+        'accepted',
+        'accepted',
+      ]);
+    } finally {
+      await server.stop();
+    }
+  }
+});
+
 test('an explicit predicate binds dynamic request IDs while responses stay scripted', async () => {
   let captured: unknown;
   const first = (body: Record<string, unknown>) => {

@@ -567,6 +567,9 @@ export function startNativeObserverProvider(options: Options) {
               await Bun.sleep(1);
             },
             cancel() {
+              // Native clients may close after the terminal SSE event instead
+              // of waiting for EOF. All fixture bytes have already been sent.
+              if (record.chunks.length === wire.length) return;
               failed = true;
               record.decision = 'stream cancelled';
             },
