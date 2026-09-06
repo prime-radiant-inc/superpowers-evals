@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startFakeProvider } from './linux/fixtures/fake-provider.ts';
+import {
+  fakeProviderHandler,
+  startFakeProvider,
+} from './linux/fixtures/fake-provider.ts';
 
 const nodeRequire = createRequire(import.meta.url);
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -62,6 +65,7 @@ interface ProviderRecord {
   readonly model: string | null;
   readonly conversation_fingerprint: string;
   readonly turn: number;
+  readonly launcher_path: string | null;
 }
 
 interface AnthropicClient {
@@ -628,6 +632,82 @@ async function withProvider<T>(
     rmSync(directory, { recursive: true, force: true });
   }
 }
+
+test('holds all six final responses until the completion gate is released', async () => {
+  const gate = Promise.withResolvers<void>();
+  const directory = mkdtempSync(join(tmpdir(), 'fake-provider-gate-'));
+  const recordPath = join(directory, 'requests.ndjson');
+  const transport = {
+    usesSdk: false,
+    send: async (body: MessagesRequest) => {
+      const response = await fakeProviderHandler(
+        new Request('http://fixture/v1/messages', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+        recordPath,
+        gate.promise,
+      );
+      return parseToolResponse(await response.json());
+    },
+  };
+  const conversations = Array.from({ length: 6 }, (_, index) =>
+    makeConversation(`held-${index}`),
+  );
+  let responses: Promise<ToolResponse[]> | undefined;
+  try {
+    for (let turn = 0; turn < 3; turn += 1) {
+      await Promise.all(
+        conversations.map((conversation) =>
+          sendConversationTurn(conversation, transport),
+        ),
+      );
+    }
+    let completed = 0;
+    responses = Promise.all(
+      conversations.map(async (conversation) => {
+        const response = await sendConversationTurn(conversation, transport);
+        completed += 1;
+        return response;
+      }),
+    );
+    const deadline = Date.now() + 5_000;
+    while (
+      readRecords(recordPath).filter((record) => record.turn === 4).length < 6
+    ) {
+      if (Date.now() > deadline) throw new Error('missing gated requests');
+      await Bun.sleep(1);
+    }
+    await Bun.sleep(1);
+    expect(completed).toBe(0);
+    const finalRequests = readRecords(recordPath).filter(
+      (record) => record.turn === 4,
+    );
+    expect(
+      new Set(finalRequests.map((record) => record.conversation_fingerprint))
+        .size,
+    ).toBe(6);
+    expect(
+      new Set(finalRequests.map((record) => record.launcher_path)),
+    ).toEqual(
+      new Set(conversations.map((conversation) => conversation.launcherPath)),
+    );
+    gate.resolve();
+    const finals = await responses;
+    expect(completed).toBe(6);
+    for (const response of finals) {
+      expect(response.content[0].name).toBe('report_result');
+      expect(response.content[0].input['status']).toBe('pass');
+    }
+  } finally {
+    gate.resolve();
+    try {
+      await responses;
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
 
 test('keeps two interleaved conversations on their own four-turn scripts', async () => {
   await withProvider(async (provider, recordPath) => {

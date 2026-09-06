@@ -5,6 +5,7 @@ export interface FakeProviderOptions {
   readonly bind: string;
   readonly port: number;
   readonly recordPath: string;
+  readonly completionGate?: Promise<void>;
 }
 
 export interface FakeProvider {
@@ -319,6 +320,7 @@ function recordRequest(
     },
     model: typeof body['model'] === 'string' ? body['model'] : null,
     conversation_fingerprint: conversationFingerprint(body),
+    launcher_path: launcherPathFrom(body) ?? null,
     turn: inferredTurn(body) ?? 0,
   };
   appendFileSync(recordPath, `${JSON.stringify(record)}\n`, 'utf8');
@@ -327,6 +329,7 @@ function recordRequest(
 export async function fakeProviderHandler(
   request: Request,
   recordPath: string,
+  completionGate?: Promise<void>,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (request.method !== 'POST' || url.pathname !== '/v1/messages') {
@@ -341,15 +344,21 @@ export async function fakeProviderHandler(
   }
   const body = isJsonObject(parsed) ? parsed : {};
   recordRequest(request, body, recordPath);
+  // Keep the ordinary four-turn rehearsal alive until its isolation witnesses exist.
+  if (inferredTurn(body) === 4 && toolsFrom(body)?.includes('report_result')) {
+    await completionGate;
+  }
   return responseFor(body);
 }
 
 export function startFakeProvider(options: FakeProviderOptions): FakeProvider {
   mkdirSync(dirname(options.recordPath), { recursive: true });
   const server = Bun.serve({
-    fetch: (request) => fakeProviderHandler(request, options.recordPath),
+    fetch: (request) =>
+      fakeProviderHandler(request, options.recordPath, options.completionGate),
     hostname: options.bind,
     port: options.port,
+    ...(options.completionGate === undefined ? {} : { idleTimeout: 120 }),
   });
   return {
     url: server.url,

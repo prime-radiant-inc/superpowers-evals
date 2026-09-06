@@ -110,6 +110,8 @@ interface DockerFixture {
 interface FixtureOptions {
   readonly mode: FixtureMode;
   readonly n: number;
+  readonly threePairs?: boolean;
+  readonly completionGate?: Promise<void>;
 }
 
 function runProcess(
@@ -378,10 +380,17 @@ function _withEnvironment<T>(
 
 function writeFakeScenario(
   root: string,
-  mode: FixtureMode,
-  n: number,
+  options: FixtureOptions,
   graderBaseUrl: string,
 ): void {
+  const { mode, n } = options;
+  const capacity = options.threePairs ? 6 : 2;
+  const armNames = options.threePairs
+    ? ['alpha', 'bravo', 'charlie'].flatMap((pair) => [
+        `fake_${pair}_base`,
+        `fake_${pair}_head`,
+      ])
+    : ['fake_subject'];
   for (const directory of [
     'arms',
     'coding-agents',
@@ -508,7 +517,7 @@ function writeFakeScenario(
       '  api: anthropic',
       '  auth: api-key',
       `  api_key_env: ${SUBJECT_ENV}`,
-      '  max_concurrency: 2',
+      `  max_concurrency: ${capacity}`,
       '  os_support: [linux]',
       'fake_grader:',
       '  model: claude-fake-grader-0',
@@ -517,25 +526,27 @@ function writeFakeScenario(
       '  auth: api-key',
       `  api_key_env: ${GRADER_ENV}`,
       `  base_url: '${graderBaseUrl}'`,
-      '  max_concurrency: 2',
+      `  max_concurrency: ${capacity}`,
       '  os_support: [linux]',
       '',
     ].join('\n'),
     { mode: 0o644 },
   );
-  writeFileSync(
-    join(root, 'arms', 'fake.yaml'),
-    [
-      'schema_version: 1',
-      'name: fake_subject',
-      'agent: fake',
-      'credential: fake_subject',
-      'superpowers: none',
-      'os: linux',
-      '',
-    ].join('\n'),
-    { mode: 0o644 },
-  );
+  for (const armName of armNames) {
+    writeFileSync(
+      join(root, 'arms', `${armName}.yaml`),
+      [
+        'schema_version: 1',
+        `name: ${armName}`,
+        'agent: fake',
+        'credential: fake_subject',
+        'superpowers: none',
+        'os: linux',
+        '',
+      ].join('\n'),
+      { mode: 0o644 },
+    );
+  }
   writeFileSync(
     join(root, 'suites', `${SCENARIO}.yaml`),
     [
@@ -546,9 +557,18 @@ function writeFakeScenario(
       'attempt_bounds: {max_attempts: 1, max_time_s: 120}',
       'grader: { credential: fake_grader, model: claude-fake-grader-0 }',
       'comparisons:',
-      '  - arm: fake_subject',
-      `    scenarios: [${SCENARIO}]`,
-      `    n: ${n}`,
+      ...(options.threePairs
+        ? ['alpha', 'bravo', 'charlie'].flatMap((pair) => [
+            `  - baseline: fake_${pair}_base`,
+            `    treatment: fake_${pair}_head`,
+            `    scenarios: [${SCENARIO}]`,
+            `    n: ${n}`,
+          ])
+        : [
+            '  - arm: fake_subject',
+            `    scenarios: [${SCENARIO}]`,
+            `    n: ${n}`,
+          ]),
       '',
     ].join('\n'),
     { mode: 0o644 },
@@ -693,6 +713,9 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
       bind: '0.0.0.0',
       port: 0,
       recordPath: providerRecord,
+      ...(options.completionGate === undefined
+        ? {}
+        : { completionGate: options.completionGate }),
     });
     const graderBaseUrl = `http://${gateway}:${provider.url.port}`;
     const bundleDir = join(tempDir, 'bundle');
@@ -714,7 +737,7 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
     checkout = createSyntheticCheckout({
       scenarioName: SCENARIO,
       configure: (root: string) =>
-        writeFakeScenario(root, options.mode, options.n, graderBaseUrl),
+        writeFakeScenario(root, options, graderBaseUrl),
     });
 
     const gauntletRoot = process.env['GAUNTLET_ROOT'];
@@ -782,7 +805,7 @@ async function createFixture(options: FixtureOptions): Promise<DockerFixture> {
         'register',
         join(checkout.root, 'suites', `${SCENARIO}.yaml`),
         '--global-cap',
-        '2',
+        options.threePairs ? '6' : '2',
         '--json',
       ],
       {
@@ -1008,6 +1031,7 @@ interface ProviderRecord {
   readonly headers: Record<string, string | null>;
   readonly conversation_fingerprint: string;
   readonly turn: number;
+  readonly launcher_path: string | null;
 }
 
 function providerRecords(fixture: DockerFixture): ProviderRecord[] {
@@ -1377,60 +1401,198 @@ it('retains mode-0600 logs after a SIGKILL without leaving a running agent', asy
   );
 }, 180_000);
 
-it('gives parallel attempts the same tmux path and separate backing mounts', async () => {
-  const fixture = await createFixture({ mode: 'hold', n: 2 });
+it('keeps six attempts across three pairs alive with isolated homes, tmux and outputs', async () => {
+  const gate = Promise.withResolvers<void>();
+  const fixture = await createFixture({
+    mode: 'hold',
+    n: 1,
+    threePairs: true,
+    completionGate: gate.promise,
+  });
   let run: Promise<number> | null = null;
   await withFailureDiagnostics(
     fixture,
     async () => {
       run = runCampaign(fixture);
-      const ids = await runningContainers(fixture.campaignId, 2);
+      const ids = await runningContainers(fixture.campaignId, 6);
       fixture.captureContainers(ids);
-      const inspected = ids.map((id) => dockerInspect(id));
-      const tmuxTmpdirs = inspected.map(
-        (container) =>
-          (container.Config?.Env ?? []).find((entry) =>
-            entry.startsWith('TMUX_TMPDIR='),
-          ) ?? '',
+      expect(new Set(ids).size).toBe(6);
+      expect(new Set(containerIdsForCampaign(fixture.campaignId))).toEqual(
+        new Set(ids),
       );
-      expect(tmuxTmpdirs).toEqual([
-        'TMUX_TMPDIR=/run/quorum/attempt',
-        'TMUX_TMPDIR=/run/quorum/attempt',
-      ]);
-      const attemptBackingSources = inspected.map((container) => {
-        const mount = (container.Mounts ?? []).find(
-          (candidate) =>
-            typeof candidate.Destination === 'string' &&
-            candidate.Destination.startsWith(
-              `${join(fixture.campaignDir, 'attempts')}${sep}`,
-            ),
+
+      const projection = readProjection(fixture.campaignDir);
+      const slots = projection.experiment.planned_slots;
+      expect(slots).toHaveLength(6);
+      expect(new Set(slots.map((slot) => slot.arm))).toEqual(
+        new Set(
+          ['alpha', 'bravo', 'charlie'].flatMap((pair) => [
+            `fake_${pair}_base`,
+            `fake_${pair}_head`,
+          ]),
+        ),
+      );
+      expect(projection.attempts.size).toBe(6);
+      expect(projection.blocks.size).toBe(3);
+      for (const block of projection.blocks.values()) {
+        const pairSlots = slots.filter(
+          (slot) => slot.primary_block_id === block.activation.primary_block_id,
         );
-        return mount?.Source;
-      });
+        expect(pairSlots).toHaveLength(2);
+        expect(new Set(pairSlots.map((slot) => slot.comparison_id)).size).toBe(
+          1,
+        );
+        expect(block.activation.attempts).toHaveLength(2);
+      }
+      expect(new Set(slots.map((slot) => slot.comparison_id)).size).toBe(3);
       expect(
-        attemptBackingSources.every((source) => source !== undefined),
+        new Set(
+          [...projection.attempts.values()].map(
+            (attempt) => attempt.container_id,
+          ),
+        ),
+      ).toEqual(new Set(ids));
+      const roots = [...projection.attempts.keys()].map((attemptId) =>
+        join(fixture.campaignDir, 'attempts', attemptId),
+      );
+
+      await waitFor(
+        'six exact subject witnesses and gated final requests',
+        () => {
+          const finals = providerRecords(fixture).filter(
+            (record) => record.turn === 4,
+          );
+          const evidence = subjectEvidenceFiles(fixture);
+          return roots.every(
+            (root) =>
+              finals.filter((record) =>
+                record.launcher_path?.startsWith(`${root}${sep}`),
+              ).length === 1 &&
+              evidence.filter(
+                (path) => path === join(root, 'subject-evidence', 'env.txt'),
+              ).length === 1,
+          )
+            ? true
+            : undefined;
+        },
+      );
+      assertProviderRecords(fixture, 6);
+      assertSubjectIsolation(fixture);
+      const subjectHomes = subjectEvidenceFiles(fixture).map((path) => {
+        const env = new Map(
+          readFileSync(path, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => {
+              const separator = line.indexOf('=');
+              return [line.slice(0, separator), line.slice(separator + 1)];
+            }),
+        );
+        const home = env.get('HOME');
+        expect(home?.startsWith(`${dirname(dirname(path))}${sep}`)).toBe(true);
+        return home;
+      });
+      expect(new Set(subjectHomes).size).toBe(6);
+
+      const inspected = ids.map((id) => dockerInspect(id));
+      expect(
+        inspected.every((container) => container.State?.Running === true),
       ).toBe(true);
-      expect(new Set(attemptBackingSources).size).toBe(2);
+      const attemptHomes = new Set<string>();
+      const outputRoots = new Set<string>();
+      for (const container of inspected) {
+        assertContainerMountAudit(fixture, container);
+        const attemptId = container.Config!.Labels!['quorum.attempt_id']!;
+        const attempt = projection.attempts.get(attemptId)!;
+        expect(attempt.container_id).toBe(container.Id ?? null);
+        expect(attempt.stopped).toBeNull();
+        const env = container.Config?.Env ?? [];
+        expect(env).toContain('TMUX_TMPDIR=/run/quorum/attempt');
+        expect(env).toContain(
+          `HOME=${attempt.intent.runtime_spec.public_env.HOME}`,
+        );
+        attemptHomes.add(attempt.intent.runtime_spec.public_env.HOME);
+        outputRoots.add(attempt.intent.output_root);
+        const root = join(fixture.campaignDir, 'attempts', attemptId);
+        expect(container.Mounts).toContainEqual(
+          expect.objectContaining({
+            Source: root,
+            Destination: root,
+            RW: true,
+          }),
+        );
+        expect(container.Mounts).toContainEqual(
+          expect.objectContaining({
+            Type: 'tmpfs',
+            Destination: '/run/quorum/attempt',
+          }),
+        );
+      }
+      expect(attemptHomes.size).toBe(6);
+      expect(outputRoots.size).toBe(6);
       expect(
         new Set(
           inspected.map((container) =>
             mountNamespaceIdentity(container.State?.Pid),
           ),
         ).size,
-      ).toBe(2);
-      expect(
-        inspected.every((container) =>
-          (container.Mounts ?? []).some(
-            (mount) => mount.Destination === '/run/quorum/attempt',
-          ),
-        ),
-      ).toBe(true);
-      stopContainers(ids);
+      ).toBe(6);
+      expect(publishedRunDirs(fixture.checkout.root)).toHaveLength(0);
+      expect(readProjection(fixture.campaignDir).ended).toBeNull();
+
+      gate.resolve();
       expect(await run).toBe(0);
+      for (const id of ids) {
+        expect(dockerInspect(id).State).toMatchObject({
+          Running: false,
+          Pid: 0,
+          ExitCode: 0,
+        });
+      }
+      expect(publishedRunDirs(fixture.checkout.root)).toHaveLength(6);
+      assertAttemptLogsPrivate(fixture);
+      assertFullJournal(fixture, ids);
+      assertNoCredentialValuesInControlArtifacts(fixture, inspected);
     },
-    async () => awaitRunAndCleanup(run, fixture.cleanup),
+    async () => {
+      const errors: unknown[] = [];
+      await attemptCleanup(errors, async () => {
+        if (readProjection(fixture.campaignDir).ended === null) {
+          await fixture.runtime.cancel({
+            campaignSelector: fixture.campaignId,
+            json: true,
+          });
+        }
+      });
+      // Capture partial starts too; only this fresh campaign's exact IDs are stopped.
+      await attemptCleanup(errors, async () => {
+        const ids = containerIdsForCampaign(fixture.campaignId);
+        fixture.captureContainers(ids);
+        for (const id of ids) {
+          await attemptCleanup(errors, () => stopContainers([id]));
+        }
+      });
+      gate.resolve();
+      await attemptCleanup(errors, () =>
+        awaitRunAndCleanup(run, async () => {
+          await attemptCleanup(errors, () =>
+            fixture.captureContainers(
+              containerIdsForCampaign(fixture.campaignId),
+            ),
+          );
+          await fixture.cleanup();
+        }),
+      );
+      await attemptCleanup(errors, () => {
+        expect(containerIdsForCampaign(fixture.campaignId)).toEqual([]);
+        expect(existsSync(fixture.tempDir)).toBe(false);
+        expect(existsSync(fixture.checkout.root)).toBe(false);
+      });
+      if (errors.length > 0)
+        throw new AggregateError(errors, 'six-attempt cleanup failed');
+    },
   );
-}, 180_000);
+}, 240_000);
 
 import {
   CommandClientTimeoutError,
