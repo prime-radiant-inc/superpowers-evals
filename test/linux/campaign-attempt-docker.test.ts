@@ -77,6 +77,8 @@ interface DockerContainer {
     readonly ExitCode?: number;
     readonly OOMKilled?: boolean;
     readonly Pid?: number;
+    readonly StartedAt?: string;
+    readonly FinishedAt?: string;
   };
 }
 
@@ -1494,6 +1496,7 @@ it('keeps six attempts across three pairs alive with isolated homes, tmux and ou
       });
       expect(new Set(subjectHomes).size).toBe(6);
 
+      const overlapObservedAt = Date.now();
       const inspected = ids.map((id) => dockerInspect(id));
       expect(
         inspected.every((container) => container.State?.Running === true),
@@ -1543,7 +1546,14 @@ it('keeps six attempts across three pairs alive with isolated homes, tmux and ou
       gate.resolve();
       expect(await run).toBe(0);
       for (const id of ids) {
-        expect(dockerInspect(id).State).toMatchObject({
+        const stopped = dockerInspect(id).State;
+        expect(Date.parse(stopped?.StartedAt ?? '')).toBeLessThanOrEqual(
+          overlapObservedAt,
+        );
+        expect(Date.parse(stopped?.FinishedAt ?? '')).toBeGreaterThanOrEqual(
+          overlapObservedAt,
+        );
+        expect(stopped).toMatchObject({
           Running: false,
           Pid: 0,
           ExitCode: 0,
