@@ -35,12 +35,15 @@ quoted in the plan are earlier receipts, not reruns or operational proof.
 
 ## Execution state
 
-Task 1 is complete. Tasks 2, 3 and 6 have source implementations under review
-and correction; Tasks 4 and 5 are implementing against their stable contracts.
-A test-only native-provider fixture is preparing Task 8; qualification has not
-started. Tasks 7 and 9–11 remain pending. Source implementation/review remains authorized. Linux
-qualification, installed changes/credential issuance and provider execution each
-await their concrete packet and applicable authorization. No new spending,
+Tasks 1, 5 and 6 have reviewed source implementations integrated. Tasks 2 and 3
+have reviewed source slices, with native parent/descendant qualification still
+incomplete. Task 4 and the native capture driver have integrated corrections
+that passed scoped re-review. Task 7's first full check found one credential test
+fixture omission, now fixed and reviewed. The six-concurrent Linux rehearsal
+is being prepared as source; no Linux or native qualification has run.
+Tasks 9–11 remain pending. Source implementation/review remains authorized.
+Linux qualification, installed changes/credential issuance and provider execution
+each await their concrete packet and applicable authorization. No new spending,
 provider request, Docker run, installed change, push or merge occurred here.
 
 For each completed task append its commit, test command/results, review and fix
@@ -205,3 +208,40 @@ All source is now assembled for Task 7 checks; Task 4 and driver reviews remain
 pending. Native parent/child grammar, actual Linux shutdown, installed projections
 and provider execution are still open. No provider call or native session was
 started during source preparation.
+
+## Integrated check and review corrections
+
+At `507b9164`, `bun run check` with the pinned local Gauntlet checkout passed
+lint and typecheck, then reported **3,908 core passes, 13 skips and one failure**
+(21,208 assertions, 262 files). The exhaustive credential delivery test lacked
+its new dedicated grader entry. Reviewed correction `48721462`, integrated as
+`50c3052a`, adds the exact named environment route; its 96 focused tests passed.
+The dashboard stage did not run after that core failure. Separate scenario
+validation passed. The complete check must be rerun on settled integrated source.
+
+Twelve skipped tests require real Linux/Docker qualification; the remaining skip
+is a Windows PowerShell override test outside this Linux campaign's scope.
+Cross-repository Gauntlet and SDK tests ran with the pinned local checkout.
+
+Task 4 review reproduced a real Git fixture publication failure: the original
+content-scoped inventory omitted empty `.git` and `node_modules` directories.
+Correction `b818648b`, integrated as `0cfd9c2c`, adds a required authenticated
+complete artifact directory-only inventory. Worker reports 273 focused passes
+plus 42 final-state passes after an additional A/B regression; typecheck and
+scoped lint passed. Scoped re-review approved with no open or new findings.
+
+Execution ruling 6: preserve the existing content exclusions while separately
+authenticating every artifact directory, including excluded trees. Otherwise
+real Git fixtures cannot pass the existing strict publisher. If wrong, directory
+metadata or race handling could authorize changed evidence; real scenario setup,
+late additions/deletions/replacements and no-follow tests cover this decision.
+This extends the earlier verified-directory publication ruling without a new
+ordinary manifest schema or compatibility reader.
+
+Native capture driver review found cleanup could be skipped after screen/storage
+failure and inventory reads could follow replacement paths. Correction
+`eff471fe`, integrated as `3c4044e8`, separates bounded cleanup attempts and uses
+pinned descriptor reads. Worker reports 30 passes and 395 assertions, including
+actual fake-native PID cleanup and filesystem replacement/growth regressions;
+typecheck and scoped lint passed. Scoped re-review approved with no open or new findings. These tests
+use generated fake binaries, never installed native subjects.
