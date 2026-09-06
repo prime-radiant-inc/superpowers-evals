@@ -13,7 +13,10 @@ import {
   type Experiment,
   ExperimentSchema,
 } from '../../contracts/campaign/experiment.ts';
-import { indexClaudeTranscript } from './claude.ts';
+import {
+  indexClaudeTranscript,
+  inspectedClaudeParentIdentity,
+} from './claude.ts';
 import { indexCodexTranscript } from './codex.ts';
 import {
   ObserverEvidenceError,
@@ -256,6 +259,8 @@ export function observerDialectForBuild(
   runtime: ObserverBinding['runtime'],
   cliVersion: string,
 ): { dialect: string; cli_version: string } | null {
+  if (runtime === 'claude' && cliVersion === '2.1.209')
+    return { dialect: 'claude-jsonl-2.1.209', cli_version: '2.1.209' };
   if (runtime === 'codex' && cliVersion === '0.146.0')
     return { dialect: 'codex-response-items-0.146.0', cli_version: '0.146.0' };
   const supported = OBSERVER_DIALECTS[runtime];
@@ -332,6 +337,21 @@ export function indexBoundObserverSource(
       'Raw source conflicts with runner binding.',
     );
   const index = indexObserverSource(source, raw);
+  if (binding.runtime === 'claude') {
+    const parent = inspectedClaudeParentIdentity(raw);
+    if (
+      !parent ||
+      parent.session_id !== source.expected_session_id ||
+      parent.cwd !== source.expected_cwd ||
+      parent.cli_version !== source.expected_cli_version ||
+      index.identity.conversation !== 'parent'
+    )
+      throw new ObserverEvidenceError(
+        'invalid_source',
+        'Source lacks inspected Claude parent provenance.',
+      );
+    return index;
+  }
   const header = parseCompleteJsonl(source, raw)[0]?.value;
   const payload = header?.['payload'];
   if (
@@ -398,20 +418,35 @@ export function discoverObserverSources(
       expected_cwd: binding.launch_cwd,
       expected_cli_version: binding.cli_version,
     };
-    const rows = parseCompleteJsonl(placeholder, raw);
-    const header = rows[0]?.value;
-    const payload = header?.['payload'];
-    if (
-      header?.['type'] !== 'session_meta' ||
-      !payload ||
-      typeof payload !== 'object' ||
-      Array.isArray(payload)
-    )
-      throw new ObserverEvidenceError(
-        'invalid_source',
-        'Parent source lacks canonical session metadata.',
-      );
-    const id = payload['id'] ?? payload['session_id'];
+    let id: unknown;
+    if (binding.runtime === 'claude') {
+      const parent = inspectedClaudeParentIdentity(raw);
+      if (parent === null) {
+        if (binding.phase !== 'unbound' || nodes.length !== 1)
+          throw new ObserverEvidenceError(
+            'identity_conflict',
+            'Capture requires exactly one unchanged parent source.',
+          );
+        verifyFinalState(binding.roots, inventory);
+        return binding;
+      }
+      id = parent.session_id;
+    } else {
+      const rows = parseCompleteJsonl(placeholder, raw);
+      const header = rows[0]?.value;
+      const payload = header?.['payload'];
+      if (
+        header?.['type'] !== 'session_meta' ||
+        !payload ||
+        typeof payload !== 'object' ||
+        Array.isArray(payload)
+      )
+        throw new ObserverEvidenceError(
+          'invalid_source',
+          'Parent source lacks canonical session metadata.',
+        );
+      id = payload['id'] ?? payload['session_id'];
+    }
     if (typeof id !== 'string' || !id)
       throw new ObserverEvidenceError(
         'invalid_source',
