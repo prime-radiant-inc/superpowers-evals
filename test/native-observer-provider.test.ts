@@ -55,6 +55,102 @@ async function post(
   });
 }
 
+test('text-only replies leave the native advertised tool catalog opaque', async () => {
+  const request = {
+    ...bodies.responses,
+    tools: [
+      { type: 'namespace', name: 'native_namespace', tools: [] },
+      { type: 'web_search', external_web_access: true },
+      { type: 'function', name: 'unused_function', parameters: { allOf: [] } },
+    ],
+  };
+  const server = startNativeObserverProvider({
+    port: 0,
+    steps: [
+      {
+        protocol: 'responses',
+        request: () => true,
+        blocks: [{ type: 'text', text: 'text only' }],
+      },
+    ],
+  });
+  try {
+    const response = await post(server.url, 'responses', request);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('response.completed');
+    expect(server.records[0]?.decision).toBe('accepted');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('only emitted tools require an unambiguous supported catalog entry and valid arguments', async () => {
+  for (const selected of [
+    bodies.responses.tools,
+    [...bodies.responses.tools, ...bodies.responses.tools],
+    [{ type: 'namespace', name: 'fixture_note', tools: [] }],
+  ]) {
+    const request = {
+      ...bodies.responses,
+      tools: [{ type: 'web_search' }, ...selected],
+    };
+    const server = startNativeObserverProvider({
+      port: 0,
+      steps: [
+        {
+          protocol: 'responses',
+          request: () => true,
+          blocks: [
+            {
+              type: 'tool',
+              id: 'call_fixture',
+              name: 'fixture_note',
+              input: { note: 'done' },
+            },
+          ],
+        },
+      ],
+    });
+    try {
+      const response = await post(server.url, 'responses', request);
+      expect(response.status).toBe(
+        selected === bodies.responses.tools ? 200 : 400,
+      );
+      await response.text();
+      if (response.status !== 200)
+        expect(server.records[0]?.chunks).toEqual([]);
+    } finally {
+      await server.stop();
+    }
+  }
+});
+
+test('accepts only the observed Claude beta query alongside the plain messages route', async () => {
+  for (const route of [
+    'messages?beta=true',
+    'messages?beta=false',
+    'messages?beta=true&extra=1',
+  ]) {
+    const server = startNativeObserverProvider({
+      port: 0,
+      steps: [
+        {
+          protocol: 'messages',
+          request: bodies.messages,
+          blocks: [{ type: 'text', text: 'beta response' }],
+        },
+      ],
+    });
+    try {
+      const response = await post(server.url, route, bodies.messages);
+      expect(response.status).toBe(route === 'messages?beta=true' ? 200 : 404);
+      await response.text();
+    } finally {
+      await server.stop();
+    }
+  }
+});
+
 test('records an unauthenticated HEAD / health probe without consuming a scripted response', async () => {
   const server = startNativeObserverProvider({
     port: 0,

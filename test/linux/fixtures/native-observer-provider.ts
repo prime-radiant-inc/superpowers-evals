@@ -172,24 +172,6 @@ function validateStep(step: ResolvedStep, request: ObjectValue) {
   );
   const tools = request['tools'] ?? [];
   requireCondition(Array.isArray(tools), 'expected tool catalog');
-  const catalog = new Map<string, (value: unknown) => boolean>();
-  for (const tool of tools) {
-    requireCondition(
-      object(tool) && typeof tool['name'] === 'string',
-      'unsupported tool catalog entry',
-    );
-    requireCondition(
-      step.protocol !== 'responses' || tool['type'] === 'function',
-      'only JSON function tools are supported',
-    );
-    requireCondition(!catalog.has(tool['name']), 'duplicate tool name');
-    catalog.set(
-      tool['name'],
-      validator(
-        tool[step.protocol === 'messages' ? 'input_schema' : 'parameters'],
-      ),
-    );
-  }
   requireCondition(
     Array.isArray(step.blocks) && step.blocks.length > 0,
     'expected nonempty response blocks',
@@ -207,8 +189,25 @@ function validateStep(step: ResolvedStep, request: ObjectValue) {
         'invalid or duplicate call id',
       );
       ids.add(block.id);
+      // A text response does not use the native tool catalog. Validate only
+      // emitted calls, requiring one supported entry for the selected name.
+      const matches = tools.filter(
+        (tool): tool is ObjectValue =>
+          object(tool) && tool['name'] === block.name,
+      );
       requireCondition(
-        catalog.get(block.name)?.(block.input),
+        typeof block.name === 'string' && matches.length === 1,
+        'unadvertised or ambiguous tool name',
+      );
+      const tool = matches[0]!;
+      requireCondition(
+        step.protocol !== 'responses' || tool['type'] === 'function',
+        'only JSON function tools are supported',
+      );
+      requireCondition(
+        validator(
+          tool[step.protocol === 'messages' ? 'input_schema' : 'parameters'],
+        )(block.input),
         'unadvertised tool or invalid tool arguments',
       );
     }
@@ -469,7 +468,7 @@ export function startNativeObserverProvider(options: Options) {
       const url = new URL(request.url);
       const path = url.pathname + url.search;
       const protocol =
-        path === '/v1/messages'
+        path === '/v1/messages' || path === '/v1/messages?beta=true'
           ? 'messages'
           : path === '/v1/responses'
             ? 'responses'
