@@ -162,7 +162,7 @@ function validateRoots(roots: readonly FinalStateRoot[]): FinalStateRoot[] {
   return parsed.data.sort((left, right) => compareText(left.id, right.id));
 }
 
-function validateState(candidate: FinalState): FinalState {
+export function validateFinalState(candidate: unknown): FinalState {
   const parsed = FinalStateSchema.safeParse(candidate);
   if (!parsed.success) invalidState();
 
@@ -436,7 +436,7 @@ function observeRoot(root: FinalStateRoot): FinalStateNode[] {
 }
 
 function observeRoots(roots: readonly FinalStateRoot[]): FinalState {
-  return validateState({
+  return validateFinalState({
     schema_version: 2,
     roots: roots.map(({ id, kind }) => ({ id, kind })),
     nodes: roots.flatMap(observeRoot),
@@ -468,7 +468,7 @@ export function verifyFinalState(
   roots: readonly FinalStateRoot[],
   candidate: FinalState,
 ): void {
-  const expected = validateState(candidate);
+  const expected = validateFinalState(candidate);
   const rootDescriptions = validateRoots(roots).map(({ id, kind }) => ({
     id,
     kind,
