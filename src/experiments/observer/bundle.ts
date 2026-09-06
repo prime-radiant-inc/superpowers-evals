@@ -37,7 +37,11 @@ import {
 } from './final-state.ts';
 import { verifyRawPrefix, verifyReviewedSuffix } from './raw.ts';
 import { validateActorReview, validateArtifactReceipt } from './review.ts';
-import { scoreObserverEvidence } from './score.ts';
+import {
+  type StrictScore,
+  StrictScoreSchema,
+  scoreObserverEvidence,
+} from './score.ts';
 export interface ObserverBundle {
   schema_version: 2;
   binding: ObserverBinding;
@@ -485,4 +489,14 @@ export function verifyObserverCandidate(
   )
     throw new Error('Observer candidate differs from runner binding.');
   verifyFinalState(binding.roots, bundle.final_state);
+}
+
+/** Consume the recorded strict score only; live paths and reduction are never consulted. */
+export function readObserverScore(bundleDir: string): StrictScore {
+  const bundle = readObserverBundle(bundleDir);
+  if (bundle.score === null)
+    throw new Error('Observer strict score is unavailable.');
+  return StrictScoreSchema.parse(
+    parseJson(readMember(bundleDir, bundle.score)),
+  );
 }

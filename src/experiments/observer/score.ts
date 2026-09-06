@@ -1,10 +1,15 @@
+import { z } from 'zod';
 import {
   indexBoundObserverSource,
   indexObserverSource,
   type ObserverBinding,
   validateObserverBinding,
 } from './binding.ts';
-import { ObserverEvidenceError, type RawAnchor } from './contracts.ts';
+import {
+  ObserverEvidenceError,
+  type RawAnchor,
+  RawAnchorSchema,
+} from './contracts.ts';
 import { verifyRawPrefix, verifyReviewedSuffix } from './raw.ts';
 import {
   type ActorReview,
@@ -31,6 +36,27 @@ export interface StrictScore {
   completed: boolean | null;
   evidence_errors: { code: string; anchor: RawAnchor | null }[];
 }
+
+export const StrictScoreSchema: z.ZodType<StrictScore> = z
+  .object({
+    schema_version: z.literal(2),
+    status: z.enum(['pass', 'fail', 'indeterminate']),
+    purpose_discovered: z.boolean().nullable(),
+    last_stage: z
+      .enum(['none', 'understanding', 'design', 'spec', 'plan', 'execution'])
+      .nullable(),
+    first_violation: z
+      .object({ anchor: RawAnchorSchema, reason: z.string().min(1) })
+      .strict()
+      .nullable(),
+    completed: z.boolean().nullable(),
+    evidence_errors: z.array(
+      z
+        .object({ code: z.string().min(1), anchor: RawAnchorSchema.nullable() })
+        .strict(),
+    ),
+  })
+  .strict();
 
 class ScoreEvidenceError extends Error {
   readonly code: string;

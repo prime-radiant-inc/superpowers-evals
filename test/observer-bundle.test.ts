@@ -22,6 +22,7 @@ import {
   freezeObserverBundle,
   type ObserverBundle,
   readObserverBundle,
+  readObserverScore,
   verifyObserverCandidate,
 } from '../src/experiments/observer/bundle.ts';
 import { captureFinalState } from '../src/experiments/observer/final-state.ts';
@@ -465,4 +466,13 @@ test('interrupted freeze cannot be resumed or substituted through a symlink', ()
     expect(() => freezeObserverBundle(f.binding, f.evidenceDir)).toThrow();
     expect(existsSync(f.candidate)).toBe(false);
   }
+});
+
+test('saved score reads authenticate frozen bytes without reading changed original sources', () => {
+  const f = producerFixture();
+  freezeObserverBundle(f.binding, f.evidenceDir);
+  appendFileSync(join(f.binding.roots[0]!.path, 'parent.jsonl'), '{}\n');
+  expect(readObserverScore(f.candidate).status).toBe('fail');
+  writeFileSync(join(f.candidate, 'score.json'), '{"status":"pass"}');
+  expect(() => readObserverScore(f.candidate)).toThrow();
 });

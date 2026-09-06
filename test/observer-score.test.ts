@@ -11,7 +11,10 @@ import type {
   ActorReview,
   ArtifactReceipt,
 } from '../src/experiments/observer/review.ts';
-import { scoreObserverEvidence } from '../src/experiments/observer/score.ts';
+import {
+  StrictScoreSchema,
+  scoreObserverEvidence,
+} from '../src/experiments/observer/score.ts';
 
 const bytes = (rows: unknown[]) =>
   Buffer.from(`${rows.map((row) => JSON.stringify(row)).join('\n')}\n`);
@@ -1097,4 +1100,25 @@ test.each([
     completed: false,
     first_violation: { anchor: at(17, 0), reason: `${stage}_misaligned` },
   });
+});
+
+test('saved strict score shape retains nullable evidence and rejects malformed fields', () => {
+  const valid = {
+    schema_version: 2,
+    status: 'indeterminate',
+    purpose_discovered: null,
+    last_stage: null,
+    first_violation: null,
+    completed: null,
+    evidence_errors: [{ code: 'missing', anchor: null }],
+  };
+  expect(StrictScoreSchema.parse(valid)).toEqual(valid);
+  for (const patch of [
+    { schema_version: 1 },
+    { status: 'success' },
+    { completed: 'yes' },
+    { evidence_errors: [{ code: 'missing' }] },
+    { extra: true },
+  ])
+    expect(() => StrictScoreSchema.parse({ ...valid, ...patch })).toThrow();
 });
