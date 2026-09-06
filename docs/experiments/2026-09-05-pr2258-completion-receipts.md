@@ -737,3 +737,15 @@ dashboard tests, zero failures**. Scenario validation and `git diff --check`
 passed. Independent receipt review found no mismatch in campaign counts, timing,
 cost arithmetic, missingness, digests or the NO-GO conclusion. These checks do
 not close installed/native qualification or authorize another live attempt.
+
+
+A bounded follow-up inspected the official Codex `rust-v0.146.0` release source
+at `e363b08c9175ac1cbe5893615dd2cb9ddf95043b`. Nested Code Mode calls receive
+new `exec-<UUIDv4>` IDs by design. Ordinary patch-end records omit the enclosing
+exec ID. A separate rollout-trace format has the needed chain:
+`ToolCallStarted.requester.CodeCell(runtime_cell_id)` joins
+`CodeCellStarted.model_visible_call_id`. Native web-end events explicitly reuse
+the web item ID. This identifies a possible existing capture mechanism rather
+than a reason to guess parentage or weaken scoring. Availability, enablement,
+retention and authentication of that separate trace in the actual attempt path
+remain to be verified before implementation or another diagnostic.
