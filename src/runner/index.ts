@@ -515,6 +515,11 @@ export interface RunScenarioArgs {
    *  lives beside staging so publication can exclude it; ordinary runs keep
    *  their legacy run-dir-relative home. */
   readonly campaignAttemptDir?: string | undefined;
+  /** Root for the check phases' sink. Campaign containers pass their
+   *  exec-capable scratch because the attempt TMPDIR tmpfs is noexec, so
+   *  binaries a check builds under it cannot run; ordinary runs use the OS
+   *  tmpdir. */
+  readonly checkScratchRoot?: string | undefined;
 }
 
 export interface RunScenarioResult {
@@ -1675,6 +1680,7 @@ async function runInnerBody(
     configDir,
     codingAgent: a.codingAgent,
     superpowers: a.superpowers,
+    scratchRoot: a.checkScratchRoot,
   });
   if (pre.exitCode !== 0) {
     return compose({
@@ -2300,6 +2306,7 @@ async function runInnerBody(
     configDir,
     codingAgent: a.codingAgent,
     superpowers: a.superpowers,
+    scratchRoot: a.checkScratchRoot,
   });
   if (post.exitCode !== 0) {
     return compose({

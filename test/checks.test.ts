@@ -807,3 +807,60 @@ test('the phase sink is removed even when a check leaves a read-only tree in its
     removeTree(sinkRoot);
   }
 });
+
+// A campaign container's TMPDIR is the attempt scratch tmpfs, mounted noexec,
+// so a check that builds and runs a binary under TMPDIR (go test) fails on
+// permissions. The caller therefore roots the sink at an exec-capable path
+// (PRI-3097).
+test('runPhase roots its sink at scratchRoot when given', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'README.md'), '# fixture\n');
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'scratch-')));
+  const checksSh = checksShWith(
+    'pre() {\n' +
+      `  command-succeeds 'case "$TMPDIR" in ${scratch}/sink-*/tmp) exit 0;; *) echo "TMPDIR=$TMPDIR" >&2; exit 1;; esac'\n` +
+      '  file-exists README.md\n' +
+      '}\npost() { :; }\n',
+  );
+  try {
+    const rooted = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+      scratchRoot: scratch,
+    });
+    expect(rooted.exitCode).toBe(0);
+    expect(rooted.records).toHaveLength(2);
+    expect(rooted.records[0]).toMatchObject({
+      check: 'command-succeeds',
+      passed: true,
+    });
+    expect(rooted.records[1]).toMatchObject({
+      check: 'file-exists',
+      passed: true,
+    });
+    // The sink is the phase's own scratch: it must not outlive the phase.
+    expect(readdirSync(scratch)).toEqual([]);
+
+    // Without the argument the sink stays under the OS tmpdir, so the same
+    // pattern must NOT match — the proof that scratchRoot is what moved it.
+    const defaulted = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+    });
+    expect(defaulted.records[0]).toMatchObject({
+      check: 'command-succeeds',
+      passed: false,
+    });
+    expect(defaulted.records[1]).toMatchObject({
+      check: 'file-exists',
+      passed: true,
+    });
+  } finally {
+    removeTree(scratch);
+    removeTree(workdir);
+  }
+});

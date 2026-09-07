@@ -24,6 +24,7 @@ import {
   type CampaignIdentity,
   CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
+import { CHECK_SCRATCH_DIR } from '../contracts/campaign/execution.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
 import {
   type EffortLevel,
@@ -312,7 +313,7 @@ export async function executeRunCommand(
           ? { gauntletBin: resolve(opts.gauntletBin) }
           : {}),
         ...(campaignIdentity !== undefined
-          ? { campaign: campaignIdentity }
+          ? { campaign: campaignIdentity, checkScratchRoot: CHECK_SCRATCH_DIR }
           : {}),
         ...(campaignIdentity !== undefined &&
         getEnv('QUORUM_ATTEMPT_DIR') !== undefined

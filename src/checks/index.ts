@@ -65,6 +65,12 @@ export interface RunPhaseArgs {
    */
   readonly codingAgent?: string;
   /**
+   * Root for the phase's sink (records, HOME, TMPDIR of the check subprocess);
+   * defaults to the OS tmpdir. Campaign containers pass an exec-capable root
+   * because their TMPDIR tmpfs is mounted noexec.
+   */
+  readonly scratchRoot?: string | undefined;
+  /**
    * Optional: the run's superpowers spec, applied after the allowlist read —
    * root overrides SUPERPOWERS_ROOT, none strips it; undefined keeps the
    * legacy ambient projection untouched.
@@ -93,7 +99,7 @@ export interface RunPhaseResult {
  * given the filesystem; throws only on an unrecoverable spawn failure.
  */
 export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
-  const sinkDir = mkdtempSync(join(tmpdir(), 'sink-'));
+  const sinkDir = mkdtempSync(join(args.scratchRoot ?? tmpdir(), 'sink-'));
   const sink = join(sinkDir, 'records.jsonl');
 
   // Checks may execute source produced by the evaluated agent, so this process

@@ -18,6 +18,7 @@ import { publishAttempt } from '../src/campaign/attempt-publish.ts';
 import { readAttemptEvidence } from '../src/campaign/report-evidence.ts';
 import { extractManifest, writeManifest } from '../src/check/manifest.ts';
 import type { CampaignIdentity } from '../src/contracts/campaign/campaign.ts';
+import { CHECK_SCRATCH_DIR } from '../src/contracts/campaign/execution.ts';
 import { runScenario } from '../src/runner/index.ts';
 import { parseAttemptManifest } from '../src/runner/manifest.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
@@ -62,7 +63,11 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   writeFileSync(
     join(scenarioDir, 'checks.sh'),
     'pre() {\n  file-exists present.txt\n}\n' +
-      'post() {\n  file-contains present.txt fixture\n}\n',
+      'post() {\n  file-contains present.txt fixture\n' +
+      // The attempt scratch tmpfs is mounted noexec, so the check phase's sink
+      // must land on the container's exec-capable /tmp instead (PRI-3097).
+      `  command-succeeds 'case "$TMPDIR" in ${CHECK_SCRATCH_DIR}/sink-*/tmp) exit 0;; *) echo "TMPDIR=$TMPDIR" >&2; exit 1;; esac'\n` +
+      '}\n',
   );
   writeManifest(scenarioDir, extractManifest(join(scenarioDir, 'checks.sh')));
 
@@ -86,6 +91,7 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       outRoot: stagingRoot,
       campaign: identity,
       campaignAttemptDir,
+      checkScratchRoot: CHECK_SCRATCH_DIR,
     });
     expect(runResult.verdict.final).toBe('pass');
     expect(existsSync(join(runResult.runDir, 'home'))).toBe(false);
@@ -151,6 +157,11 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       }),
       expect.objectContaining({
         check: 'file-contains',
+        phase: 'post',
+        passed: true,
+      }),
+      expect.objectContaining({
+        check: 'command-succeeds',
         phase: 'post',
         passed: true,
       }),

@@ -19,6 +19,7 @@ import {
   type AttemptRuntime,
   type AttemptRuntimeSpec,
   type BoundExecution,
+  CHECK_SCRATCH_DIR,
   ContainerIdSchema,
   type OwnedRuntimeObservation,
   type PreparedExecution,
@@ -233,7 +234,7 @@ function runtimeCommand(spec: AttemptRuntimeSpec): string[] {
 function runtimeTmpfs(spec: AttemptRuntimeSpec): Record<string, string> {
   return {
     [ATTEMPT_RUNTIME_DIR]: `rw,noexec,nosuid,size=${spec.tmpfs_bytes}`,
-    '/tmp': `rw,size=${spec.tmpfs_bytes}`,
+    [CHECK_SCRATCH_DIR]: `rw,size=${spec.tmpfs_bytes}`,
   };
 }
 function parseEnvironment(entries: unknown): Record<string, string> {
