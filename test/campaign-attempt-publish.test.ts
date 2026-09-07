@@ -440,6 +440,82 @@ test('publish rejects every unlisted artifact, including a home marker', () => {
   }
 });
 
+test('publish tolerates empty placeholder directories beside listed files', () => {
+  // Gauntlet leaves screenshots/ and artifacts/ under its results dir; git
+  // leaves refs/tags, objects/pack and objects/info. Their parents are listed
+  // through real files; the leaves are empty and carry no evidence bytes.
+  const paths = staged('run-pub-17', {
+    files: [
+      { path: 'verdict.json', body: '{"final":"pass"}\n' },
+      { path: 'gauntlet-agent/results/r1/run.jsonl', body: '{"event":"x"}\n' },
+      { path: 'coding-agent-workdir/.git/refs/heads/main', body: 'abc\n' },
+    ],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-17');
+  mkdirSync(join(runDir, 'gauntlet-agent', 'results', 'r1', 'screenshots'));
+  mkdirSync(join(runDir, 'gauntlet-agent', 'results', 'r1', 'artifacts'));
+  mkdirSync(join(runDir, 'coding-agent-workdir', '.git', 'refs', 'tags'));
+  try {
+    const published = publishAttempt({
+      ...paths,
+      expectedAttemptId: expectedAttemptId(),
+    });
+    expect(published.runId).toBe('run-pub-17');
+    expect(
+      existsSync(join(paths.resultsRoot, 'run-pub-17', 'verdict.json')),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          paths.resultsRoot,
+          'run-pub-17',
+          'gauntlet-agent',
+          'results',
+          'r1',
+          'screenshots',
+        ),
+      ),
+    ).toBe(true);
+    expect(existsSync(join(paths.attemptDir, 'staging', 'run-pub-17'))).toBe(
+      false,
+    );
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish still rejects an unlisted directory that holds anything', () => {
+  const paths = staged('run-pub-18');
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-18');
+  mkdirSync(join(runDir, 'scratch', 'nested'), { recursive: true });
+  writeFileSync(join(runDir, 'scratch', 'nested', 'marker'), 'no\n');
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(/unlisted artifact refused: scratch/);
+    expect(existsSync(runDir)).toBe(true);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-18'))).toBe(false);
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish still rejects an unlisted symlink even when it points at an empty directory', () => {
+  const paths = staged('run-pub-19');
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-19');
+  const outside = mkdtempSync(join(tmpdir(), 'empty-target-'));
+  symlinkSync(outside, join(runDir, 'linked'));
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(/unlisted artifact refused: linked/);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-19'))).toBe(false);
+  } finally {
+    clean(paths);
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('publish requires the explicit expected attempt id', () => {
   const paths = staged('run-pub-10');
   try {

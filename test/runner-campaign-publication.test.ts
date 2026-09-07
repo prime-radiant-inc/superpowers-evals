@@ -53,7 +53,7 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   );
   writeFileSync(
     join(scenarioDir, 'setup.sh'),
-    '#!/usr/bin/env bash\nprintf fixture > present.txt\n',
+    '#!/usr/bin/env bash\nprintf fixture > present.txt\nmkdir -p scratch-empty\n',
   );
   chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
   writeFileSync(
