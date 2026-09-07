@@ -7,20 +7,22 @@
 
 ## Resume here
 
-Drew wants a simpler, modular eval product and has agreed to explore
-consolidating Superpowers Evals and smevals. The initial architecture and
-smevals investigations are complete. We are now discussing the desired
-authoring and execution experience; implementation has not started.
+Drew wants a simpler, modular eval product and has agreed to consolidate
+around smevals with a replaceable runner owning each complete live harness
+interaction. The initial architecture and smevals investigations are complete.
+We are now refining the execution experience; implementation has not started.
 
-The six requirements below come directly from Drew. The component choices
-and first milestone are proposals. No existing implementation, language,
-or orchestration policy is a constraint on the new design.
+The six requirements and product/runner boundary below are agreed with Drew.
+Specific component implementations and the first milestone remain proposals.
+No existing implementation, language, or orchestration policy is a constraint
+on the new design.
 
 **Authoring clarified:** Drew wants to define basically none of the exchange.
 Use the current prose scenario brief and acceptance criteria as the starting
 point; the driver conducts the conversation. No authored turn sequence or
-mandatory reply/persona schema. Next, discuss the complete single-scenario
-execution boundary and target configuration using that authoring model.
+mandatory reply/persona schema. The complete interaction is one smevals run;
+the core does not manage individual exchanges. Next, discuss where the first
+useful version executes and how target configuration reaches that runner.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -53,7 +55,8 @@ no component should dictate the whole product.
 | Real end-user interaction for Superpowers tests | Agreed requirement; exact interaction controls need design. |
 | Author defines basically none of the exchange | Explicit clarification from Drew; preserve the current prose-brief authoring model. |
 | Modular components and replaceable layers | Agreed direction. |
-| Centralize efforts around one eval product in smevals | Working direction following the team investigation and Drew's agreement to brainstorm it. |
+| Centralize efforts around one eval product in smevals | Agreed direction. |
+| One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
 | Keep one working document through brainstorming | Requested by Drew to preserve context across compaction. |
 | Specific schemas, command syntax, packaging, deployment, and migration | Open; not approved. |
@@ -129,7 +132,20 @@ Conversational approvals, native question-tool dialogs, and harness tool
 permission prompts are separate behaviors. The intended interaction mode
 must be explicit; a bypass flag should not silently redefine the test.
 
-## Candidate component boundaries
+## Agreed product boundary and candidate implementations
+
+smevals owns scenario/config selection, scheduling, result collection,
+grader invocation, and standard reporting. A replaceable interactive Runner
+reads the prose brief, prepares the workspace, drives the real coding harness,
+handles the whole conversation, and returns execution evidence. Superpowers
+scenarios and checkers describe and evaluate the behavior under test.
+
+Harness-specific dialog handling and Superpowers workflow knowledge belong
+inside workers/checkers rather than the smevals scheduler or core authoring
+schema. smevals can remain a general-purpose eval product: direct model-call
+evals use simpler runners through the same whole-run boundary. Improvements
+to configuration delivery, target selection, supervision, and error/report
+semantics are shared execution capabilities.
 
 The team recommends using smevals' Runner and Checker executable boundaries
 as the starting point. Files and structured input/output can connect Python
@@ -205,12 +221,12 @@ goal after the initial slice.
 Discuss these in the order that helps the design; they are questions, not
 separate process gates or implementation tasks.
 
-1. **Single-scenario execution:** Given a prose story, fixture, and checks,
-   what does the runner own from setup through completion and evidence capture?
+1. **Execution experience:** Where should the first useful version run, and
+   what progress, cancellation, and concurrency controls does Drew need?
 2. **Targets:** Which settings must be independently selectable, and what
    should unsupported combinations look like before execution?
-3. **Execution experience:** Where should the first useful version run, and
-   what progress, cancellation, and concurrency controls does Drew need?
+3. **Single-scenario lifecycle:** Specify the input, setup, evidence capture,
+   termination, and result details within the agreed whole-run boundary.
 4. **Evaluation/report:** What is the minimum useful result, what evidence
    supports it, and which expected outcomes require deterministic or LLM checks?
 5. **Interfaces and reuse:** Derive the Runner/Checker and internal harness
@@ -264,3 +280,7 @@ implementation or operational claims.
   authoring guide, scaffold, setup/checks, and ordinary and targeted stories.
   Established prose brief plus acceptance criteria as the authoring baseline;
   removed authored dialogue mechanics as the default design question.
+- **2026-09-07:** Drew agreed that this remains a good fit for smevals at the
+  whole-run extension boundary. smevals owns scheduling, results, grading
+  invocation, and reporting; a replaceable runner owns the complete live
+  harness interaction. Specific runner implementations remain open.
