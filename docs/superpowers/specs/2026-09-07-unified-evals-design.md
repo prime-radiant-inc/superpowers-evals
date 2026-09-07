@@ -24,9 +24,11 @@ mandatory reply/persona schema. The complete interaction is one smevals run;
 the core does not manage individual exchanges. Most live execution will use
 the existing appliance for its shared credentials and Mantle/Bedrock access.
 Drew confirms there are no old Quorum workloads to support. The new product
-has no Quorum coexistence or backward-compatibility requirement. Next, refine
-target configuration and the execution/report experience; deployment details
-remain open.
+has no Quorum coexistence or backward-compatibility requirement. We are now
+discussing credentials and target configuration. Bot recommends reusing
+existing auth sources and harness delivery code while separating the public
+target/model definition from connection/auth configuration. This separation
+and its selection UI/schema are proposals; execution/report details remain open.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -63,6 +65,7 @@ no component should dictate the whole product.
 | One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
 | Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
 | Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
+| Reuse auth delivery while separating target and connection configuration | Bot's recommendation after source inspection; not yet an agreed schema/design. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
 | Keep one working document through brainstorming | Requested by Drew to preserve context across compaction. |
 | Specific schemas, command syntax, packaging, deployment, and scenario reuse | Open; not approved. |
@@ -219,6 +222,105 @@ on the user's context, the runbook, and the earlier investigation. No new
 live health, credential, quota, or capacity check was performed for this
 discussion.
 
+## Proposed target and credential model
+
+**Recommendation:** Reuse the appliance's existing credential sources and
+the useful harness-specific delivery code. Replace the public configuration
+concept that makes a credential define the model being tested. No new secret
+manager or provider-authentication service is proposed.
+
+### What the current system combines
+
+`credentials.yaml` is a committable registry of references and metadata, not
+the secret bundle. Its `Credential` record combines model, API/endpoint,
+auth method and source, harness eligibility, region/provider quirks, and
+capacity settings. The file's opening comment and the August platform design
+explicitly identify model-to-credential coupling as a deliberate compromise.
+
+That compromise helped keep the requested model consistent across launch
+and reporting. The new model must preserve that consistency without forcing
+one named credential record per model. Resolve one complete run configuration,
+apply precedence once, and give the worker and report the same non-secret
+effective settings. Keep exact provider request identifiers and observed
+model identities distinct; do not rewrite request IDs using display-name rules.
+
+### Small proposed separation
+
+| Concept | Responsibility |
+|---|---|
+| Target | What is tested: harness, exact model, connection reference, effort/settings, and Superpowers selection. |
+| Connection | How the selected model is reached: API/protocol, endpoint or region, provider settings, and reference to appliance-managed authentication. |
+| Resource limits | Named shared capacity and optional launch spacing consumed by resolved work; independent of the secret's name. |
+
+These are configuration responsibilities, not three new services. A named
+target can remain convenient to select while several targets share one
+connection/auth source. The author-facing choice between target presets and
+ad hoc harness/model selections remains open. Ordinary scenarios do not
+contain credentials or provider setup.
+
+The coding agent, simulated user, and any model-based grader have explicit
+model/access selections. Those roles may intentionally share a connection;
+separate roles do not automatically require different keys or accounts.
+Each process receives its selected auth/routing configuration. An API-only
+grader need not have a coding harness or Superpowers settings.
+
+### Reuse the delivery work, change its surrounding contract
+
+Keep or extract the family/auth delivery mappings, selected environment and
+OAuth-file projection, private auth-file writers, isolated HOME/XDG setup,
+and harness-specific configuration generation. Codex subscription and custom
+provider setup, Pi's provider-scoped native login, and Claude's API-key,
+setup-token and Mantle paths contain useful implemented behavior. Replacing
+these with generic API-key injection would lose supported modes.
+
+Accept resolved target/connection information and an explicit credential
+source at the extracted boundary, instead of loading Quorum's registry and
+coding-agent YAML from an evals-root argument. Keep secret values in private
+execution state outside task/config/report artifacts. Retain endpoint and
+reference validation, and reject unsupported harness/auth/protocol combinations
+before launch; a connection's existence does not imply universal compatibility.
+
+The inspected Claude/Mantle route explicitly uses the selected bearer and
+region. This source audit establishes neither live IAM/IMDS readiness nor a
+need to obtain a new bearer. Preserve the available route and verify its
+actual source during integration. Native OAuth also remains in scope:
+`prepareAttemptStage` rejects OAuth as a V2 campaign restriction, despite
+the underlying delivery map supporting it. That restriction does not carry
+into the new product.
+
+Do not import the appliance's fixed staging/active/recovery generation
+lifecycle, campaign authority, route-attestation policy, or registry-wide
+constraints as a credential subsystem. Reuse appropriate file/projection
+primitives inside the new worker lifecycle, with private per-run destinations.
+
+### Quota identity is not credential identity
+
+Current direct execution groups by endpoint/name plus API; the campaign pool
+derivation additionally includes model unless explicitly overridden. Neither
+derivation alone expresses every provider's shared limits. Multiple models
+can use one credential with different limits, and multiple credentials can
+share an account-wide limit. Use explicit resource groups, allowing a run to
+consume more than one where needed. Include user-actor/grader usage when they
+share those resources. One authoritative definition per group avoids
+reconciling repeated limits across credential aliases. Automatic key rotation
+or campaign reservation algorithms are not required by this proposal.
+
+Source inspection on 2026-09-07 covered the public registry/schema,
+resolution, scope projection, Claude/Codex/Pi provisioning, and both quota
+derivations. Existing contract tests were read, not rerun. No secret bundle,
+native auth file, environment values, remote host, or live provider was read
+or exercised. Useful source pointers:
+
+- [Credential schema](../../../src/contracts/credential.ts)
+- [Delivery selection](../../../src/credentials/scope.ts)
+- [Auth resolution and direct limiter](../../../src/credentials/resolve.ts)
+- [Appliance material projection](../../../src/appliance/credential-scope.ts)
+- [Claude provisioning](../../../src/agents/index.ts)
+- [Codex provisioning](../../../src/agents/codex.ts)
+- [Pi provisioning](../../../src/agents/pi.ts)
+- [Campaign pool derivation](../../../src/contracts/campaign/pool.ts)
+- [Campaign-only projection restrictions](../../../src/campaign/attempt-projection.ts)
+
 ## Findings that constrain the design
 
 - Main smevals drops nested task values and most config fields before
@@ -274,8 +376,8 @@ goal after the initial slice.
 Discuss these in the order that helps the design; they are questions, not
 separate process gates or implementation tasks.
 
-1. **Targets:** Which settings must be independently selectable, and what
-   should unsupported combinations look like before execution?
+1. **Targets and connections:** Agree the credential separation above, choose
+   how users select targets, and specify resolution/compatibility behavior.
 2. **Execution experience:** What progress, cancellation, and concurrency
    controls does Drew need for appliance execution?
 3. **Single-scenario lifecycle:** Specify the input, setup, evidence capture,
@@ -348,3 +450,9 @@ implementation or operational claims.
   are no old Quorum workloads. Removed coexistence, backward compatibility,
   and old-workload migration requirements. The appliance and useful code can
   be reused while replacing Quorum as a product.
+- **2026-09-07:** Drew asked whether to port or replace the credential system.
+  Inspected its schema, history, resolution, quota semantics, and actual
+  harness delivery with two focused peer audits. Bot recommends reusing auth
+  sources and delivery implementations while separating targets, connections,
+  and resource limits. The configuration design remains a proposal; no secret
+  material or live authentication was inspected.
