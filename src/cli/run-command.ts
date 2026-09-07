@@ -17,10 +17,19 @@ import {
   realProcessIdentityProbe,
 } from '../campaign/locks.ts';
 import {
+  agentRuntimeFamily,
+  loadAgentConfigForValidation,
+} from '../contracts/agent-config.ts';
+import {
   type CampaignIdentity,
   CampaignIdentitySchema,
 } from '../contracts/campaign/campaign.ts';
 import type { CredentialLabels } from '../contracts/credential.ts';
+import {
+  type EffortLevel,
+  EffortLevelSchema,
+  effortRefusal,
+} from '../contracts/effort.ts';
 import { EXIT_CODE_BY_FINAL } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
@@ -48,6 +57,9 @@ export interface RunCommandOptions {
   readonly credential?: string;
   readonly credentialsFile?: string;
   readonly graderModel?: string;
+  // Harness effort level for the coding agent. Validated against the
+  // resolved agent family at this boundary; adapters deliver it natively.
+  readonly effort?: string;
   // Snapshot-local gauntlet wrapper: exposed on both the public `run` command
   // and the run-child parser (the campaign child enters through the
   // snapshot's public run; R-SPN-9 threading).
@@ -222,6 +234,33 @@ export async function executeRunCommand(
         'setup',
       );
     }
+    // Effort is a harness property: refuse a level the resolved agent family
+    // cannot honor before any run dir, lock, or provider token exists. The
+    // Windows target has no effort delivery (claude-windows launches through
+    // the guest's launch.cmd, which the env-file path does not reach).
+    let effort: EffortLevel | undefined;
+    if (opts.effort !== undefined) {
+      const family = agentRuntimeFamily(
+        loadAgentConfigForValidation(
+          resolve(opts.codingAgentsDir),
+          opts.codingAgent,
+        ),
+      );
+      const refusal = effortRefusal(family, opts.effort);
+      if (refusal !== null) {
+        throw new RunnerError(
+          `--effort ${opts.effort} refused: ${refusal}`,
+          'setup',
+        );
+      }
+      if (opts.os === 'windows') {
+        throw new RunnerError(
+          '--effort is unsupported on the windows target',
+          'setup',
+        );
+      }
+      effort = EffortLevelSchema.parse(opts.effort);
+    }
     // R-SPN-4 (Decision D-8): parse the identity at the CLI boundary — a
     // malformed block fails loud here, before any run dir or provider token.
     campaignIdentity =
@@ -268,6 +307,7 @@ export async function executeRunCommand(
             }
           : {}),
         graderModel: opts.graderModel,
+        ...(effort !== undefined ? { effort } : {}),
         ...(opts.gauntletBin !== undefined
           ? { gauntletBin: resolve(opts.gauntletBin) }
           : {}),

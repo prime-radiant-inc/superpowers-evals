@@ -112,6 +112,10 @@ export const FinalVerdictSchema = z.object({
       gauntlet_version: z.string().nullable(),
       // Optional: verdicts predating 2026-08-04 lack it.
       host_platform: z.string().optional(),
+      // The effort level the run REQUESTED (arm `effort` / `--effort`), or
+      // null when none. Not proof of the effective level; that lives in the
+      // raw session log. Optional: verdicts predating 2026-09-06 lack it.
+      effort: z.string().nullable().optional(),
     })
     .optional(),
   // Campaign identity sub-block (parent Identity): stamped by the runner

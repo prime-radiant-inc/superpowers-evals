@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import type { Credential } from '../contracts/credential.ts';
+import type { EffortLevel } from '../contracts/effort.ts';
 import type { OsTarget } from '../contracts/os-target.ts';
 import {
   type ApiKeyResolution,
@@ -47,6 +48,10 @@ export interface RunHome {
    *  already-materialized root. Adapters consume it through
    *  resolveSuperpowersRoot(home) — never getEnv directly. */
   readonly superpowers?: import('./superpowers.ts').SuperpowersSpec | undefined;
+  /** The run's requested harness effort level. Undefined = the harness
+   *  default. Claude delivers it via the run-scoped env file; Codex via the
+   *  generated config's root `model_reasoning_effort`. */
+  readonly effort?: EffortLevel | undefined;
 }
 
 // Runner-side ergonomics: the spec type re-exported beside the RunHome field

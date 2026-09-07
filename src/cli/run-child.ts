@@ -19,6 +19,7 @@ program
   .option('--credential <name>')
   .requiredOption('--credentials-file <path>')
   .option('--grader-model <id>')
+  .option('--effort <level>')
   .option('--gauntlet-bin <path>')
   .option(
     '--campaign-identity <json>',

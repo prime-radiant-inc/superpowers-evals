@@ -156,6 +156,10 @@ program
     'Gauntlet-Agent (grader) model (default: claude-sonnet-5)',
   )
   .option(
+    '--effort <level>',
+    'coding-agent effort level (codex: minimal|low|medium|high|xhigh; claude: low|medium|high|xhigh|max)',
+  )
+  .option(
     '--gauntlet-bin <path>',
     'snapshot-local gauntlet wrapper (campaign children)',
   )

@@ -81,6 +81,7 @@ import {
 import type { CampaignIdentity } from '../contracts/campaign/campaign.ts';
 import type { CheckManifest } from '../contracts/check-manifest.ts';
 import type { Credential } from '../contracts/credential.ts';
+import type { EffortLevel } from '../contracts/effort.ts';
 import { loadOsTarget } from '../contracts/os-target.ts';
 import type {
   CheckRecord,
@@ -456,6 +457,9 @@ export interface RunScenarioArgs {
   readonly credential?: string | undefined;
   // Gauntlet-Agent (grader) model override. When undefined, GRADER_MODEL.
   readonly graderModel?: string | undefined;
+  // Harness effort level for the coding agent (arm-level in campaigns, or
+  // `quorum run --effort`). Adapters deliver it; provenance records it.
+  readonly effort?: EffortLevel | undefined;
   // Explicit credentials source path. When omitted, runScenario snapshots the
   // repository's canonical credentials.yaml (or an empty registry only when
   // that canonical default is absent).
@@ -1228,7 +1232,7 @@ export async function runScenario(
     ...(selectedCredentialLabels !== undefined
       ? { labels: selectedCredentialLabels }
       : {}),
-    provenance,
+    provenance: { ...provenance, effort: a.effort ?? null },
     ...(a.campaign !== undefined ? { campaign: a.campaign } : {}),
   };
   writeFileSync(
@@ -1591,6 +1595,8 @@ async function runInnerBody(
     // The run's superpowers spec, threaded to every adapter (undefined =
     // legacy ambient behavior; explicit modes never fall back to host env).
     superpowers: a.superpowers,
+    // The requested effort level, delivered by the adapter that knows how.
+    effort: a.effort,
   };
   // copilot is special-cased: it mints a per-run session id, threads it through
   // provisionCopilot, and returns the rich CopilotProvisioning record the runner
