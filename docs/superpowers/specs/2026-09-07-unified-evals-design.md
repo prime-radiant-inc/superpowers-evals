@@ -21,11 +21,12 @@ on the new design.
 Use the current prose scenario brief and acceptance criteria as the starting
 point; the driver conducts the conversation. No authored turn sequence or
 mandatory reply/persona schema. The complete interaction is one smevals run;
-the core does not manage individual exchanges. Drew proposes doing most live
-runs on the existing quorum appliance for its shared credentials and
-Mantle/Bedrock access; Bot recommends that as the first execution environment.
-That deployment proposal and the details of target configuration are the
-current discussion, not yet approved implementation choices.
+the core does not manage individual exchanges. Most live execution will use
+the existing appliance for its shared credentials and Mantle/Bedrock access.
+Drew confirms there are no old Quorum workloads to support. The new product
+has no Quorum coexistence or backward-compatibility requirement. Next, refine
+target configuration and the execution/report experience; deployment details
+remain open.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -60,10 +61,11 @@ no component should dictate the whole product.
 | Modular components and replaceable layers | Agreed direction. |
 | Centralize efforts around one eval product in smevals | Agreed direction. |
 | One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
-| Most live execution on the existing quorum appliance | Proposed by Drew and recommended by Bot; deployment details remain open. |
+| Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
+| Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
 | Keep one working document through brainstorming | Requested by Drew to preserve context across compaction. |
-| Specific schemas, command syntax, packaging, deployment, and migration | Open; not approved. |
+| Specific schemas, command syntax, packaging, deployment, and scenario reuse | Open; not approved. |
 | Implementation, existing-code removal, or paid runs | Not authorized by this design discussion. |
 
 Sealing, restart recovery, deep statistics, and elaborate analysis are
@@ -71,6 +73,12 @@ deferred. They should not return as prerequisites merely because older
 campaign designs required them. Their future value remains a separate
 question. Automatic retries, historical sample top-up, and fleet scheduling
 are also not established requirements.
+
+Quorum is being replaced as an eval product. There is no requirement for
+parallel operation of old and new engines, legacy CLI/result compatibility,
+campaign continuation, or a compatibility bridge. Reuse existing scenarios,
+infrastructure, and code where they serve the new requirements; preserving
+the old product's behavior is not an acceptance criterion.
 
 Basic execution correctness still matters: independent sessions, known
 effective inputs, finite time limits, cancellation/cleanup, retained
@@ -170,7 +178,7 @@ requiring a simulated user. Superpowers Evals would contribute a scenario
 suite and reusable workers/checkers. Gauntlet and other general-purpose
 components can remain independently useful packages or repositories.
 
-## Proposed first execution environment
+## First execution environment and proposed deployment
 
 Use the existing quorum appliance for most real eval execution. Drew points
 to the shared credentials and Mantle/Bedrock access already available there.
@@ -185,10 +193,9 @@ submission transport remains open; a fleet scheduler or new always-on remote
 service is not a prerequisite for this first host.
 
 Reuse the host, provider access, and useful runtime/provisioning pieces while
-implementing the agreed whole-run boundary. Hosting on the same appliance
-does not make Quorum's current campaign controller, registration, seals, or
-report policy part of the new engine. Existing operational entry points and
-authorization rules still apply until an explicit deployment changes them.
+implementing the agreed whole-run boundary. The new engine owns execution on
+the appliance. Quorum's campaign controller, registration, seals, CLI entry
+points, and report policy impose no compatibility requirement on that design.
 
 Credentials remain managed in the execution environment and are supplied to
 workers as needed. Scenario authors should not have to copy the shared bundle
@@ -197,20 +204,20 @@ selected auth path when integrating, rather than assuming every provider
 requires a new bearer token or credential arrangement.
 
 Shared access does not establish unlimited parallel capacity. Bound active
-sessions and shared provider/resource use, and explicitly account for old
-Quorum jobs during coexistence so independent schedulers do not each assume
-they own the whole host. Large artifact handling and reporting must not block
-dispatch or stopping active workers. Exact limits require a real workload
-check and are not set by this discussion.
+sessions and shared provider/resource use within the new engine. There is no
+old Quorum scheduler or workload to coordinate with. Large artifact handling
+and reporting must not block dispatch or stopping active workers. Exact limits
+require a real workload check and are not set by this discussion.
 
 The appliance is a Linux execution environment. Targets requiring another
 OS or runtime need a separate compatible executor later; the appliance must
 not redefine the full supported-harness requirement. Keep the core host-neutral
 without building multi-host orchestration before it is needed.
 
-This is a deployment recommendation based on the user's context, the current
-runbook, and the earlier source/operational investigation. No new live health,
-credential, quota, or capacity check was performed for this discussion.
+The execution location is agreed; deployment details remain proposals based
+on the user's context, the runbook, and the earlier investigation. No new
+live health, credential, quota, or capacity check was performed for this
+discussion.
 
 ## Findings that constrain the design
 
@@ -267,18 +274,19 @@ goal after the initial slice.
 Discuss these in the order that helps the design; they are questions, not
 separate process gates or implementation tasks.
 
-1. **Execution experience:** Where should the first useful version run, and
-   what progress, cancellation, and concurrency controls does Drew need?
-2. **Targets:** Which settings must be independently selectable, and what
+1. **Targets:** Which settings must be independently selectable, and what
    should unsupported combinations look like before execution?
+2. **Execution experience:** What progress, cancellation, and concurrency
+   controls does Drew need for appliance execution?
 3. **Single-scenario lifecycle:** Specify the input, setup, evidence capture,
    termination, and result details within the agreed whole-run boundary.
 4. **Evaluation/report:** What is the minimum useful result, what evidence
    supports it, and which expected outcomes require deterministic or LLM checks?
 5. **Interfaces and reuse:** Derive the Runner/Checker and internal harness
    boundaries from the agreed experience; decide what existing code fits.
-6. **First slice and migration:** Pick the actual scenario/targets, define
-   acceptance evidence, and decide how existing users and scenarios move over.
+6. **First slice and scenario reuse:** Pick the actual scenario/targets,
+   define acceptance evidence, and select useful scenarios/adapters to bring
+   across. No old Quorum workload or compatibility migration is required.
 
 ## Evidence and history pointers
 
@@ -336,3 +344,7 @@ implementation or operational claims.
   appliance as the first execution environment, with local authoring and
   offline checks. Reuse of infrastructure is distinct from adoption of the
   existing campaign controller; deployment specifics remain a proposal.
+- **2026-09-07:** Drew agreed with appliance execution and clarified there
+  are no old Quorum workloads. Removed coexistence, backward compatibility,
+  and old-workload migration requirements. The appliance and useful code can
+  be reused while replacing Quorum as a product.
