@@ -1052,9 +1052,10 @@ test('56-exec: real gpt-5.6-sol rollout slice — skill read via JS variable is 
   expect(calls.some((c) => c.tool === 'exec')).toBe(false);
 });
 
-// codex ≥0.144 spawns subagents from inside the same exec script, under the
-// `multi_agent_v1__` tool prefix (PRI-3097). Without the prefix the segmenter
-// saw no verbs at all and a 21-subagent run reported "Agent never called".
+// codex ≥0.144 spawns subagents from inside the same exec script under the
+// `multi_agent_v1__` tool prefix; the segmenter must accept the prefix, or a
+// run's subagent dispatches vanish into the whole-script Bash fallback and
+// `tool-called Agent` reports a false negative.
 
 test('56-exec: a multi_agent_v1__spawn_agent call inside an exec script surfaces as Agent with the message as prompt', () => {
   const input =

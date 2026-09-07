@@ -79,8 +79,10 @@ export type HostCampaignClaim = z.infer<typeof HostCampaignClaimSchema>;
 /** Exec-capable scratch inside an attempt container. The attempt scratch
  *  tmpfs at /run/quorum/attempt is mounted noexec, so binaries a check
  *  builds there (Go test binaries) cannot run; the spawner mounts this path
- *  as a separate rw tmpfs, and the check phase roots its sink here. Its path
- *  has no colons, which Go would split as a GOPATH list. */
+ *  as a separate `rw,exec` tmpfs — Docker's tmpfs default is noexec, so the
+ *  `exec` option is what makes it exec-capable — and the check phase roots
+ *  its sink here. Its path has no colons, which Go would split as a GOPATH
+ *  list. */
 export const CHECK_SCRATCH_DIR = '/tmp';
 export const PublicRuntimeEnvSchema = z
   .object({

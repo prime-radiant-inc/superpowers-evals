@@ -60,14 +60,15 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       'mkdir -p node_modules/pkg && printf dep > node_modules/pkg/index.js && mkdir -p .venv/bin && printf py > .venv/bin/python\n',
   );
   chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
+  // The attempt scratch tmpfs is mounted noexec, so the check phase's sink must
+  // land on the container's exec-capable /tmp instead (PRI-3097). Both phases
+  // probe it: the runner threads the scratch root into pre() and post()
+  // separately.
+  const tmpdirProbe = `  command-succeeds 'case "$TMPDIR" in ${CHECK_SCRATCH_DIR}/sink-*/tmp) exit 0;; *) echo "TMPDIR=$TMPDIR" >&2; exit 1;; esac'\n`;
   writeFileSync(
     join(scenarioDir, 'checks.sh'),
-    'pre() {\n  file-exists present.txt\n}\n' +
-      'post() {\n  file-contains present.txt fixture\n' +
-      // The attempt scratch tmpfs is mounted noexec, so the check phase's sink
-      // must land on the container's exec-capable /tmp instead (PRI-3097).
-      `  command-succeeds 'case "$TMPDIR" in ${CHECK_SCRATCH_DIR}/sink-*/tmp) exit 0;; *) echo "TMPDIR=$TMPDIR" >&2; exit 1;; esac'\n` +
-      '}\n',
+    `pre() {\n  file-exists present.txt\n${tmpdirProbe}}\n` +
+      `post() {\n  file-contains present.txt fixture\n${tmpdirProbe}}\n`,
   );
   writeManifest(scenarioDir, extractManifest(join(scenarioDir, 'checks.sh')));
 
@@ -82,6 +83,15 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   Bun.env['ANTHROPIC_API_KEY'] = 'sk-test';
   Bun.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   Bun.env['SUPERPOWERS_ROOT'] = superpowersRoot;
+
+  // An unrooted sink lands at os.tmpdir(), which is /tmp itself when TMPDIR is
+  // unset — there the probe would pass without checkScratchRoot. Pin TMPDIR off
+  // /tmp so only the threaded scratch root can satisfy it. A host whose tmpdir()
+  // is already /tmp cannot be pinned away from it, and the probe is then merely
+  // an assertion that both phases ran.
+  const savedTmpdir = Bun.env['TMPDIR'];
+  const pinnedTmpdir = realpathSync(mkdtempSync(join(tmpdir(), 'not-tmp-')));
+  if (!pinnedTmpdir.startsWith('/tmp/')) Bun.env['TMPDIR'] = pinnedTmpdir;
 
   try {
     const runResult = await runScenario({
@@ -156,6 +166,11 @@ test('a checks-bearing campaign runner result publishes with authenticated check
         passed: true,
       }),
       expect.objectContaining({
+        check: 'command-succeeds',
+        phase: 'pre',
+        passed: true,
+      }),
+      expect.objectContaining({
         check: 'file-contains',
         phase: 'post',
         passed: true,
@@ -171,6 +186,9 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       if (value === undefined) delete Bun.env[key];
       else Bun.env[key] = value;
     }
+    if (savedTmpdir === undefined) delete Bun.env['TMPDIR'];
+    else Bun.env['TMPDIR'] = savedTmpdir;
+    rmSync(pinnedTmpdir, { recursive: true, force: true });
     rmSync(shimDir, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }

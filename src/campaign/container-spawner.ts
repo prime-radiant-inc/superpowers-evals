@@ -231,10 +231,15 @@ function runtimeCommand(spec: AttemptRuntimeSpec): string[] {
     ...spec.args,
   ];
 }
+// Docker merges its tmpfs defaults (noexec,nosuid,nodev) into every --tmpfs
+// option string, so `exec` must be given explicitly. The check scratch needs
+// it: deterministic checks build and run binaries there (`go test ./...` execs
+// its test binary out of $TMPDIR). The attempt runtime scratch keeps the
+// noexec default — nothing executes from it.
 function runtimeTmpfs(spec: AttemptRuntimeSpec): Record<string, string> {
   return {
     [ATTEMPT_RUNTIME_DIR]: `rw,noexec,nosuid,size=${spec.tmpfs_bytes}`,
-    [CHECK_SCRATCH_DIR]: `rw,size=${spec.tmpfs_bytes}`,
+    [CHECK_SCRATCH_DIR]: `rw,exec,size=${spec.tmpfs_bytes}`,
   };
 }
 function parseEnvironment(entries: unknown): Record<string, string> {

@@ -1447,9 +1447,10 @@ import {
   jcsCanonicalize,
   sha256Hex,
 } from '../../src/contracts/campaign/digest.ts';
-import type {
-  BoundExecution,
-  PreparedExecution,
+import {
+  type BoundExecution,
+  CHECK_SCRATCH_DIR,
+  type PreparedExecution,
 } from '../../src/contracts/campaign/execution.ts';
 import {
   blockActivation,
@@ -1610,6 +1611,21 @@ it('V2 Linux deadline normal exit preserves namespace-death proof', async () => 
     'printf normal > "$QUORUM_ATTEMPT_DIR/probe"; exit 0',
   );
   expect(result).toEqual({ exitCode: 0, probe: 'normal' });
+}, 20000);
+
+// Docker merges its noexec tmpfs default into every --tmpfs option string, so
+// only the explicit `exec` keeps the check scratch exec-capable. The spawner
+// test asserts the option string; only a real container observes the mount.
+it('V2 Linux mounts the check scratch tmpfs exec-capable', async () => {
+  const probe = `${CHECK_SCRATCH_DIR}/exec-probe`;
+  const result = await namespaceDeadline(
+    `printf '#!/bin/sh\\nexit 7\\n' > ${probe}\n` +
+      `chmod +x ${probe}\n` +
+      `rc=0\n${probe} || rc=$?\n` +
+      'printf %s "$rc" > "$QUORUM_ATTEMPT_DIR/probe"',
+  );
+  // 7 is the probe's own exit; a noexec mount would yield 126.
+  expect(result).toEqual({ exitCode: 0, probe: '7' });
 }, 20000);
 
 it('V2 Linux deadline delivers TERM to a handling attempt', async () => {

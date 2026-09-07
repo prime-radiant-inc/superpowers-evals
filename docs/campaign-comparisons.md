@@ -189,9 +189,10 @@ journal and frozen document when retaining evidence. Do not move or migrate old
 campaigns/results to make them readable by V2.
 
 The check phase's scratch (the checks' private `HOME`/`TMPDIR`) is rooted at the
-attempt container's `/tmp`, a separate exec-capable tmpfs, because the attempt
-scratch tmpfs is mounted `noexec` and a check that builds a binary there (`go
-test`) could not run it.
+attempt container's `/tmp`, which the spawner mounts as a separate tmpfs with
+`exec` (Docker's tmpfs default is `noexec`), because the attempt scratch tmpfs
+is mounted `noexec` and a check that builds a binary there (`go test`) could not
+run it.
 
 Campaign runs prune dependency trees (`node_modules`, `.venv`, at any depth
 under the coding-agent workdir) before the attempt manifest is written, since

@@ -193,7 +193,7 @@ function runtimeFixture() {
       SecurityOpt: ['no-new-privileges'],
       Tmpfs: {
         '/run/quorum/attempt': `rw,noexec,nosuid,size=${spec.tmpfs_bytes}`,
-        '/tmp': `rw,size=${spec.tmpfs_bytes}`,
+        '/tmp': `rw,exec,size=${spec.tmpfs_bytes}`,
       },
       CapAdd: null,
       CapDrop: null,

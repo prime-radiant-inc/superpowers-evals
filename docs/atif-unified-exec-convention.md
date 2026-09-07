@@ -2,8 +2,12 @@
 
 Codex's `unified_exec` feature routes all tool use through one custom tool
 named `exec`. Its input is a JavaScript program that invokes
-`tools.exec_command`, `tools.apply_patch`, `tools.update_plan`, and
-`tools.write_stdin`. Codex enables the feature automatically for gpt-5.6-family
+`tools.exec_command`, `tools.apply_patch`, `tools.update_plan`,
+`tools.write_stdin`, `tools.multi_agent_v1__spawn_agent`,
+`tools.multi_agent_v1__wait_agent`, `tools.multi_agent_v1__close_agent`, and
+`tools.multi_agent_v1__send_input`. The segmenter accepts the
+`multi_agent_v1__` prefix and strips it, so the canonical names below are the
+unprefixed verbs. Codex enables the feature automatically for gpt-5.6-family
 models and accepts `--enable unified_exec` for older ones. A rollout therefore
 records one physical `custom_tool_call` per script, not one per action.
 
@@ -28,7 +32,11 @@ the `extra` field ATIF reserves for exactly this.
    (`const p = ".../SKILL.md"`) stay attached to the call that uses them.
 2. Map each segment to a canonical call: `exec_command` → `Bash`,
    `apply_patch` → `Edit` (with `file_path`/`file_paths` extracted from the
-   patch headers), `spawn_agent` → `Agent`, others verbatim.
+   patch headers), `spawn_agent` (prefixed or not) → `Agent` with
+   `arguments.prompt` taken from a plain `prompt`, `task`, or `message` string
+   or template literal (an interpolated template keeps the whole segment as
+   `arguments.input` instead), `wait_agent`, `close_agent`, and `send_input`
+   verbatim and unprefixed; others verbatim.
 3. Surface a `cmd` string literal as `arguments.command` only when it is
    static. A template literal with `${…}` interpolates variables defined
    elsewhere in the script, so the whole segment becomes the command instead.
