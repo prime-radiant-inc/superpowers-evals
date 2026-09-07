@@ -186,6 +186,22 @@ the reserve change), gauntlet `588a81e8`, superpowers `fd02874a` on every
 slots, 50 reserve slots (one per cell), no excluded cells; all ten arms at
 `effort: xhigh`; pricing snapshot digest `6423a36b…`; attempt bound 7800 s.
 
+Campaign 2 was cancelled at 04:33Z after about $22 of spend, for an
+instrument-parameter reason rather than a defect. Publication now works on
+real runs: both Astra `brainstorming-todo-purpose-discovery` attempts passed
+and published, and no attempt was missing evidence. But the first
+`brainstorming-resists-jump-to-implementation` block was invalidated for
+`skew` with two passing runs: the arms' first Coding-Agent exposures were 68
+s apart against the suite's 60 s limit, and the four blocks validated so far
+showed gaps of 2, 11, 37, and 68 s. Exposure timing follows grader startup
+latency, not the subject, so at 60 s roughly a quarter of pairs would be
+re-run and cells whose replacement also skewed would be lost. The suite now
+uses `max_exposure_skew: 300`; campaign 3 follows on that source. One other
+observation from campaign 2: a `cost-spec-plan-duplication` Astra head run
+composed indeterminate because the Gauntlet-Agent reported `investigate`
+while its summary read as a fail judgment (the plan duplicated the spec); a
+grader-instrument quirk worth watching in the readout.
+
 ## Results
 
-Pending campaign 2.
+Pending campaign 3.

@@ -265,9 +265,12 @@ the Opus, Sonnet, and Haiku rows. The probe must pass with
   `treatment: <model>_pr2258_head`, the ten scenarios listed explicitly,
   `n: 1`, and `cells` overrides `brainstorming-todo-purpose-discovery: {n: 2}`
   and `sdd-go-fractals-opus48: {n: 3}`.
-- `reserve: 4`, `max_exposure_skew: 60`,
+- `reserve: 1` (per cell; see below), `max_exposure_skew: 300`,
   `attempt_bounds: { max_attempts: 2, max_time_s: 7800 }` (the 120-minute
-  fractals cap plus setup, capture, and checks).
+  fractals cap plus setup, capture, and checks). The skew limit began at 60 s,
+  copied from the signature suites; campaign 2 discarded a block with two
+  passing runs at 68 s of skew (exposure timing follows grader startup
+  latency), so campaign 3 uses 300 s.
 - `pricing_snapshot: { path: docs/experiments/2026-09-06-pr2258-pricing/current.json, sha256: … }`,
   where the digest is `shasum -a 256` of the committed file; registration
   refuses a mismatch, so the suite is edited after the snapshot is final.

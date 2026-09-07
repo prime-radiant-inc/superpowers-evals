@@ -102,7 +102,11 @@ comparisons:
 # the 50 cells (50 reserve slots), bounding replacement spend after the first
 # campaign's platform defects burned replacements on unpublishable blocks.
 reserve: 1
-max_exposure_skew: 60
+# Exposure skew is measured between the two arms' first Coding-Agent
+# exposures, which depend on grader startup latency; at 60 s one of the first
+# four blocks of campaign 2 was discarded with two passing runs. 300 s still
+# holds both arms to the same provider window.
+max_exposure_skew: 300
 attempt_bounds:
   max_attempts: 2
   max_time_s: 7800
