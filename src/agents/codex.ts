@@ -198,6 +198,11 @@ export class CodexAgent implements CodingAgent {
       join(configDir, 'config.toml'),
       home.scenarioDir,
     );
+    prependEffortKey(
+      join(configDir, 'config.toml'),
+      home.effort,
+      home.scenarioDir,
+    );
 
     // No extra env: Codex finds CODEX_HOME via its $HOME/.codex default.
     return {};
@@ -465,14 +470,22 @@ function writeProviderOnlyConfig(
   );
 }
 
+// Prepend `block` (newline-terminated) plus a separating blank line ahead of
+// the generated config so its bare keys stay at TOML root scope — appending
+// would place them inside the config's last [table]. A stock subscription
+// arm may generate no config of its own; the block then stands as the whole
+// file rather than failing on the absent generated config.
+function prependConfigBlock(configPath: string, block: string): void {
+  const generated = existsSync(configPath)
+    ? readFileSync(configPath, 'utf8')
+    : '';
+  writeFileSync(configPath, `${block}\n${generated}`);
+}
+
 // Prepend a scenario's codex.config.toml fragment to the generated config.toml:
-// a provenance comment, the fragment byte-exact, then a separating blank line
-// before the generated content. Prepending keeps the fragment's bare keys at
-// TOML root scope — appending would place them inside the config's last
-// [table]. A run without a scenario dir, or a scenario without the fragment,
-// leaves the generated config untouched. A stock arm may generate no config
-// of its own (subscription is account-driven); the fragment then stands as
-// the whole file rather than failing on the absent generated config.
+// a provenance comment, then the fragment byte-exact. A run without a scenario
+// dir, or a scenario without the fragment, leaves the generated config
+// untouched.
 function prependScenarioConfigFragment(
   configPath: string,
   scenarioDir: string | undefined,
@@ -480,12 +493,37 @@ function prependScenarioConfigFragment(
   if (scenarioDir === undefined) return;
   const fragmentPath = join(scenarioDir, 'codex.config.toml');
   if (!existsSync(fragmentPath)) return;
-  const generated = existsSync(configPath)
-    ? readFileSync(configPath, 'utf8')
-    : '';
-  writeFileSync(
+  prependConfigBlock(
     configPath,
-    `# prepended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}\n${generated}`,
+    `# prepended from scenario codex.config.toml\n${readFileSync(fragmentPath, 'utf8')}`,
+  );
+}
+
+// Root-level `model_reasoning_effort` requested by the run (an arm-level
+// effort in campaigns, or `quorum run --effort`). A scenario fragment that
+// also sets the key would make the file a duplicate-key TOML error inside
+// codex — a silent indeterminate — so the collision is refused here, loudly,
+// at setup.
+function prependEffortKey(
+  configPath: string,
+  effort: string | undefined,
+  scenarioDir: string | undefined,
+): void {
+  if (effort === undefined) return;
+  if (scenarioDir !== undefined) {
+    const fragmentPath = join(scenarioDir, 'codex.config.toml');
+    if (
+      existsSync(fragmentPath) &&
+      /^\s*model_reasoning_effort\s*=/m.test(readFileSync(fragmentPath, 'utf8'))
+    ) {
+      throw new ProvisionError(
+        `scenario codex.config.toml already sets model_reasoning_effort; remove it or drop the run's effort ${effort}`,
+      );
+    }
+  }
+  prependConfigBlock(
+    configPath,
+    `# effort requested by the run\nmodel_reasoning_effort = "${tomlBasicString(effort)}"\n`,
   );
 }
 

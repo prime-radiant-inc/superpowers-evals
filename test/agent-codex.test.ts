@@ -1286,6 +1286,10 @@ const GENERATED_SUBSCRIPTION_CONFIG = [
 // TOML root scope.
 const FRAGMENT_PROVENANCE = '# prepended from scenario codex.config.toml\n';
 
+// The provenance comment the effort prepender writes ahead of the root
+// model_reasoning_effort key.
+const EFFORT_PROVENANCE = '# effort requested by the run\n';
+
 // Stage a scenario dir next to the temp home carrying a codex.config.toml
 // fragment (or no fragment when `fragment` is undefined); return its path.
 function stageScenarioDir(workdir: string, fragment?: string): string {
@@ -1394,6 +1398,123 @@ test('no scenario codex.config.toml leaves the generated config byte-identical',
       );
       expect(configToml).toBe(GENERATED_SUBSCRIPTION_CONFIG);
       expect(configToml).not.toContain('prepended from scenario');
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('a run effort is prepended as root-level model_reasoning_effort on the subscription config', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(base.workdir);
+  const home = { ...base, scenarioDir, effort: 'xhigh' as const };
+  const authParent = join(base.workdir, '..', 'host-auth-effort');
+  const spRoot = join(base.workdir, '..', 'sp-effort');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toBe(
+        `${EFFORT_PROVENANCE}model_reasoning_effort = "xhigh"\n\n${GENERATED_SUBSCRIPTION_CONFIG}`,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('a run effort lands before the api-key provider table', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(base.workdir);
+  const home = { ...base, scenarioDir, effort: 'high' as const };
+  const spRoot = join(base.workdir, '..', 'sp-effort-api');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+  const credential = makeApiKeyCredential();
+
+  try {
+    withEnv(
+      { SUPERPOWERS_ROOT: spRoot, CODEX_B4_TEST_API_KEY: 'effort-key' },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        agent.provision(home, runner, credential);
+        const configToml = readFileSync(
+          join(home.configDir, 'config.toml'),
+          'utf8',
+        );
+        expect(
+          configToml.startsWith(
+            `${EFFORT_PROVENANCE}model_reasoning_effort = "high"\n\n`,
+          ),
+        ).toBe(true);
+        expect(configToml.indexOf(EFFORT_PROVENANCE)).toBeLessThan(
+          configToml.indexOf('[model_providers."quorum"]'),
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('a run effort coexists with a scenario fragment that sets other keys', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(
+    base.workdir,
+    'model_context_window = 40000\n',
+  );
+  const home = { ...base, scenarioDir, effort: 'xhigh' as const };
+  const authParent = join(base.workdir, '..', 'host-auth-effort-frag');
+  const spRoot = join(base.workdir, '..', 'sp-effort-frag');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+      agent.provision(home, runner, SUBSCRIPTION_CRED);
+      const configToml = readFileSync(
+        join(home.configDir, 'config.toml'),
+        'utf8',
+      );
+      expect(configToml).toBe(
+        `${EFFORT_PROVENANCE}model_reasoning_effort = "xhigh"\n\n${FRAGMENT_PROVENANCE}model_context_window = 40000\n\n${GENERATED_SUBSCRIPTION_CONFIG}`,
+      );
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('a run effort refuses a scenario fragment that already sets model_reasoning_effort', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(
+    base.workdir,
+    'model_reasoning_effort = "high"\n',
+  );
+  const home = { ...base, scenarioDir, effort: 'xhigh' as const };
+  const authParent = join(base.workdir, '..', 'host-auth-effort-clash');
+  const spRoot = join(base.workdir, '..', 'sp-effort-clash');
+  mkdirSync(spRoot, { recursive: true });
+  stageSuperpowers(spRoot);
+  const runner = unusedRunner();
+
+  try {
+    withHostAuth(authParent, spRoot, SUBSCRIPTION_AUTH, () => {
+      const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+      expect(() => agent.provision(home, runner, SUBSCRIPTION_CRED)).toThrow(
+        /codex\.config\.toml already sets model_reasoning_effort/,
+      );
     });
   } finally {
     cleanup();
