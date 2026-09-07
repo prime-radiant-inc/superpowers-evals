@@ -172,6 +172,7 @@ function productionDependencies(
         attemptId,
         agent: arm.agent,
         credentialName: arm.credential,
+        ...(arm.effort === undefined ? {} : { effort: arm.effort }),
         evalsRoot: snapshot.evalsRoot,
         bundleDir: context.loaded.config.credential_bundle.path,
         uid,

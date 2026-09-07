@@ -27,6 +27,7 @@ import {
 } from '../contracts/campaign/execution.ts';
 import type { Grader } from '../contracts/campaign/experiment.ts';
 import type { PricingSnapshot } from '../contracts/campaign/suite.ts';
+import type { EffortLevel } from '../contracts/effort.ts';
 import type { PrepareAttemptStageArgs } from './attempt-projection.ts';
 import { prepareAttemptStage } from './attempt-projection.ts';
 import {
@@ -732,6 +733,8 @@ export interface PrepareContainerExecutionArgs extends PrepareAttemptStageArgs {
   readonly superpowersTree: string | null;
   readonly scenarioDir: string;
   readonly pricingSnapshot?: PricingSnapshot;
+  /** The arm's harness effort level, forwarded verbatim as `--effort`. */
+  readonly effort?: EffortLevel;
 }
 
 /** Prepare private inputs before committing the intent. The one authority file
@@ -808,6 +811,7 @@ export function prepareContainerExecution(
       credentialsFile: credentialsTarget,
       gauntletBin: join(args.binRoot, 'gauntlet'),
       graderModel: args.grader.model,
+      ...(args.effort === undefined ? {} : { effort: args.effort }),
       superpowers:
         args.superpowersTree === null
           ? { mode: 'none' }
@@ -906,6 +910,7 @@ export interface CampaignChildArgvArgs {
    *  for campaign children: without it the child grades with the runner's
    *  pinned default and the frozen campaign document lies about its grader. */
   readonly graderModel: string;
+  readonly effort?: EffortLevel;
   readonly superpowers: SuperpowersSpec;
   readonly identity: CampaignIdentity;
 }
@@ -938,6 +943,7 @@ export function buildCampaignChildArgv(args: CampaignChildArgvArgs): string[] {
     '--grader-model',
     args.graderModel,
   ];
+  if (args.effort !== undefined) argv.push('--effort', args.effort);
   if (args.superpowers.mode === 'root') {
     argv.push('--superpowers-root', args.superpowers.root);
   } else {

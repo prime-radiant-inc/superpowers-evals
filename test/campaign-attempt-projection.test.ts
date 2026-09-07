@@ -25,6 +25,7 @@ import {
 import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 import { AttemptRuntimeSpecSchema } from '../src/contracts/campaign/execution.ts';
 import type { PricingSnapshot } from '../src/contracts/campaign/suite.ts';
+import type { EffortLevel } from '../src/contracts/effort.ts';
 import { gauntletEnvBase } from '../src/runner/gauntlet-env.ts';
 
 const SUBJECT = "subject value '$tick' `quoted` ;";
@@ -458,6 +459,7 @@ function prepareV2(
   model = 'claude-grader',
   grants: { subjectKeyEnv?: string; graderKeyEnv?: string } = {},
   pricingSnapshot?: PricingSnapshot,
+  effort?: EffortLevel,
 ) {
   return prepareContainerExecution({
     campaignDir: fx.campaignDir,
@@ -486,6 +488,7 @@ function prepareV2(
     superpowersTree: null,
     scenarioDir: join(fx.corpus, 'scenarios', 'test'),
     ...(pricingSnapshot === undefined ? {} : { pricingSnapshot }),
+    ...(effort === undefined ? {} : { effort }),
   });
 }
 function addGrader(fx: ReturnType<typeof projectionFixture>) {
@@ -1065,4 +1068,20 @@ test('V2 refuses a shared source across different Mantle regions', () => {
   const fx = mantleFixture('SUBJECT_KEY', 'us-west-2');
   expect(() => prepareV2(fx)).toThrow(/equals a grader auth value/);
   expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+});
+
+test('V2 preparation threads the arm effort into the child argv only when declared', () => {
+  const plain = projectionFixture();
+  addGrader(plain);
+  const plainArgs = prepareV2(plain).intent.runtime_spec.args;
+  expect(plainArgs).not.toContain('--effort');
+
+  const declared = projectionFixture();
+  addGrader(declared);
+  const args = prepareV2(declared, 'claude-grader', {}, undefined, 'xhigh')
+    .intent.runtime_spec.args;
+  expect(args[args.indexOf('--effort') + 1]).toBe('xhigh');
+  expect(args.indexOf('--effort')).toBeGreaterThan(
+    args.indexOf('--grader-model'),
+  );
 });
