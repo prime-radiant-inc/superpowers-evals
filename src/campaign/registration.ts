@@ -50,6 +50,7 @@ import {
   CredentialSchema,
   parseCredentialsFile,
 } from '../contracts/credential.ts';
+import { effortRefusal } from '../contracts/effort.ts';
 import { getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import {
@@ -468,6 +469,14 @@ export function prepareRegistration(
         `arm ${name} requires a resolved superpowers source ref`,
       );
     }
+    if (arm.effort !== undefined) {
+      const refusal = effortRefusal(input.agentFamily(arm.agent), arm.effort);
+      if (refusal !== null) {
+        throw new RegistrationError(
+          `arm ${name} effort ${arm.effort} refused: ${refusal}`,
+        );
+      }
+    }
     return arm;
   });
   const activeCredentialNames = [
@@ -600,6 +609,7 @@ export function prepareRegistration(
         ? {}
         : { base_url: credential.base_url }),
       model: credential.model,
+      ...(arm.effort === undefined ? {} : { effort: arm.effort }),
       key_env_names:
         credential.key_pool ??
         (credential.api_key_env === undefined ? [] : [credential.api_key_env]),

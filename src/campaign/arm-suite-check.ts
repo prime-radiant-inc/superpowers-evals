@@ -13,6 +13,7 @@ import {
   type Credential,
   parseCredentialsFile,
 } from '../contracts/credential.ts';
+import { effortRefusal } from '../contracts/effort.ts';
 import { verifyPricingSnapshot } from './pricing-snapshot.ts';
 
 export interface ArmSuiteCheckOptions {
@@ -108,6 +109,12 @@ export function checkArmSuiteFiles(
           errors.push(
             `arms/${file}: credential '${arm.credential}' does not list harness '${family}'`,
           );
+        }
+        // Effort is validated against the same family, mirroring
+        // registration's refusal so it surfaces before a paid register.
+        if (arm.effort !== undefined) {
+          const refusal = effortRefusal(family, arm.effort);
+          if (refusal !== null) errors.push(`arms/${file}: ${refusal}`);
         }
       }
     }

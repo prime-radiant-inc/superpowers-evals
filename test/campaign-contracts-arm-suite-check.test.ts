@@ -475,3 +475,27 @@ test('suite subdirectories are not parsed as suites', () => {
   expect(result.errors).toEqual([]);
   expect(result.ok).toBe(true);
 });
+
+test('an arm effort outside its harness family is a check error', () => {
+  const root = repo({
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+    'arms/claude_fx.yaml': `${ARM}\neffort: minimal`,
+  });
+  const result = check(root);
+  expect(result.ok).toBe(false);
+  expect(result.errors).toEqual([
+    'arms/claude_fx.yaml: harness claude does not accept effort minimal (accepts low, medium, high, xhigh, max)',
+  ]);
+});
+
+test('a supported arm effort passes the check', () => {
+  const root = repo({
+    'coding-agents/claude.yaml': AGENT_YAML,
+    'credentials.yaml': CREDENTIALS,
+    'arms/claude_fx.yaml': `${ARM}\neffort: xhigh`,
+  });
+  const result = check(root);
+  expect(result.errors).toEqual([]);
+  expect(result.ok).toBe(true);
+});

@@ -921,3 +921,62 @@ test.each([
     expect(run).toThrow(/conflicting per-key allowance.*shared.*KEY_[AB]/);
   else expect(run).not.toThrow();
 });
+
+test('V2 registration freezes an arm effort into the execution surface', () => {
+  const plain = prepareExperimentRegistration(experimentInput());
+  expect(
+    plain.execution_surface.find((entry) => entry.name === 'arm_a'),
+  ).not.toHaveProperty('effort');
+
+  const withEffort = prepareExperimentRegistration(
+    experimentInput({
+      arms: {
+        arm_a: arm('arm_a', { effort: 'xhigh' }),
+        arm_b: arm('arm_b', { credential: 'cred_b' }),
+      },
+    }),
+  );
+  const surface = new Map(
+    withEffort.execution_surface.map((entry) => [entry.name, entry]),
+  );
+  expect(surface.get('arm_a')?.effort).toBe('xhigh');
+  expect(surface.get('arm_b')).not.toHaveProperty('effort');
+});
+
+test('V2 registration refuses an effort the arm agent family cannot honor', () => {
+  expect(() =>
+    prepareExperimentRegistration(
+      experimentInput({
+        arms: {
+          arm_a: arm('arm_a', { effort: 'minimal' }),
+          arm_b: arm('arm_b', { credential: 'cred_b' }),
+        },
+      }),
+    ),
+  ).toThrow(
+    /arm arm_a effort minimal refused: harness claude does not accept effort minimal/,
+  );
+  expect(() =>
+    prepareExperimentRegistration(
+      experimentInput({
+        agentFamily: () => 'pi',
+        credentials: {
+          cred_a: credential({
+            harnesses: ['pi'],
+            max_concurrency: 8,
+            api_key_env: 'DEFINITELY_UNSET_SECRET_A',
+          }),
+          cred_b: credential({
+            harnesses: ['pi'],
+            max_concurrency: 8,
+            api_key_env: 'DEFINITELY_UNSET_SECRET_B',
+          }),
+        },
+        arms: {
+          arm_a: arm('arm_a', { effort: 'high' }),
+          arm_b: arm('arm_b', { credential: 'cred_b' }),
+        },
+      }),
+    ),
+  ).toThrow(/arm arm_a effort high refused: harness pi has no effort control/);
+});
