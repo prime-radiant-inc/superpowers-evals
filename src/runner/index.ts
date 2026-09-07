@@ -1277,6 +1277,14 @@ export async function runScenario(
         expected: expectedChecksCache.manifest,
       });
     }
+    if (existsSync(join(runDir, 'gauntlet-roles.json'))) {
+      const economics = await safeBuildRunEconomics(runDir);
+      verdict = {
+        ...verdict,
+        economics:
+          economics === null ? null : OpaqueEconomicsSchema.parse(economics),
+      };
+    }
   }
   const persistedConversation = readConversationRecord(runDir);
   if (persistedConversation !== null)

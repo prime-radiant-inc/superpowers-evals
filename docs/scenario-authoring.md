@@ -27,6 +27,49 @@ regenerate the list instead of pasting a table that will rot.
 - The Gauntlet-Agent **never sees `checks.sh`.** It grades only the prose in
   `story.md`. `checks.sh` is quorum's independent, deterministic second opinion.
 
+## Conversation scenarios
+
+`quorum_mode: conversation` opts a story into the separate user and assessor
+roles. The initial fixture is `conversation-pricing`; supported runtime
+families are Linux Claude and Codex. Omitting the selector keeps the QA flow;
+unknown selectors and unsupported harnesses fail before launch.
+
+Write the user's natural request before `## Acceptance Criteria`. Quorum gives
+only that prose to the conversation role and projects the criteria into a
+private rubric for a fresh assessment history. Both roles use the configured
+controller model and credential. The conversation role interacts with the
+prepared Coding-Agent through Quorum's generated launcher; scenario setup owns
+fixture files, never launch or credential configuration.
+
+Use `quorum_max_time: 10m`. The parent bounds conversation startup and model
+calls within that time and bounds assessment at two minutes, inside the existing
+outer attempt deadline. A visible delivery or refusal completes the interaction
+even when the delivered output is wrong. Completion is retained through later
+capture, check, assessment or cleanup failures. Failed deterministic oracles
+still reach assessment; missing required evidence, checker crashes and
+cancellation produce an indeterminate result without grading incomplete evidence.
+
+Quorum snapshots output before post-checks and gives the assessor the same
+retained output, checks, visible exchange, native logs and normalized trajectory
+through `evidence/index.json`. The assessor has only indexed file reads and
+reporting tools. Private role logs, the user brief and credential HOME are not
+in that index. `quorum show` separates conversation completion and its visible
+quote from Assessment criterion verdicts/citations, checks and economics.
+
+Retained worker artifacts include `conversation.json`, `gauntlet-roles.json`,
+`conversation-input/{user-brief.md,rubric.md}`,
+`conversation-agent/<id>/{run.jsonl,usage.jsonl,exchange.jsonl,captures/}`,
+`gauntlet-agent/results/<id>/{result.json,result.md,run.jsonl,usage.jsonl}`,
+and `evidence/{index.json,checks.json,conversation.json,trajectory.json,native/,output/,visible/}`.
+Each actually started role is priced from its allocated usage path. Missing
+usage means partial coverage; an unstarted role is shown as not run. Known
+sibling costs and unpriced model coverage remain available.
+
+Campaign aggregates retain their current validity policy. This increment does
+not establish a speedup, useful live model behavior, or a concurrency capacity.
+Offline tests use scripted model responses; live qualification needs a separate
+finite appliance run plan with explicit revisions, sample counts and bounds.
+
 ## Table of contents
 
 1. [Anatomy & getting started](#1-anatomy--getting-started)

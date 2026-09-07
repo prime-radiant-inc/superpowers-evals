@@ -25,6 +25,27 @@ the configured branch, then exports that path to the repo-owned TypeScript CLI.
 Direct local `bun run appliance ...` use can still set `EVALS_APPLIANCE_CONFIG`
 when intentionally running outside the installed wrapper.
 
+## Conversation worker evidence
+
+Conversation scenarios use the same finite appliance submission, status,
+publication and cancellation paths. Source snapshots pin both Quorum and
+Gauntlet revisions; no additional snapshot schema or scheduling policy is needed.
+
+The published worker manifest retains `conversation.json`, `gauntlet-roles.json`,
+`conversation-input/`, `conversation-agent/<id>/` (exchange, ANSI/JSON captures,
+role log and usage), `gauntlet-agent/results/<id>/` (assessment result, log and
+usage), and `evidence/` (exact file index, completion, checks, native logs,
+trajectory, output and visible exchange). These are sensitive worker artifacts;
+the separate `export-runs` allowlist described below remains unchanged.
+
+`quorum show` reports completion/endpoint evidence separately from Assessment
+criteria, deterministic checks and both role costs. A completed bad delivery or
+refusal is still assessed; missing started-role usage leaves partial economics.
+The parent enforces the ten-minute conversation and two-minute assessment bounds
+within the outer attempt deadline. Campaign aggregates retain their current
+validity policy. These changes establish no speedup or capacity level; qualify
+live behavior and overlap only through a separately authorized finite run plan.
+
 ## Operator Rule
 
 Agents operating shared live evals use the appliance helper, not raw quorum

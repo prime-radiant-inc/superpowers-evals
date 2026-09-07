@@ -3,6 +3,11 @@ import { dirname, join } from 'node:path';
 import { Glob } from 'bun';
 import type { z } from 'zod';
 import {
+  type GauntletRoleRecord,
+  type GauntletRoles,
+  GauntletRolesSchema,
+} from './contracts/conversation.ts';
+import {
   type OpenRouterEconomics,
   OpenRouterEconomicsSchema,
   type PerModelUsageSchema,
@@ -42,7 +47,15 @@ interface PerModelEntry {
   readonly est_cost_usd: number | null;
 }
 
+export type GauntletRoleEconomics =
+  | { status: 'not_run'; usage: null; duration_ms: null }
+  | { status: 'started'; usage: TokenUsage | null; duration_ms: number | null };
+
 interface GauntletBlock {
+  readonly roles?: {
+    conversation: GauntletRoleEconomics;
+    assessment: GauntletRoleEconomics;
+  };
   readonly duration_ms: number | null;
   readonly model: string | null;
   readonly tokens: TokenShell;
@@ -233,6 +246,121 @@ function buildGauntletBlock(
   };
 }
 
+/** Actual starts select exact role sidecars; an allocated role is not usage. */
+async function buildRoleEconomics(
+  runDir: string,
+  record: GauntletRoleRecord,
+  estimator: SidecarEstimator,
+): Promise<GauntletRoleEconomics> {
+  if (record.started_at === null)
+    return { status: 'not_run', usage: null, duration_ms: null };
+  let usage: TokenUsage | null = null;
+  try {
+    usage = await estimator(join(runDir, record.out_dir, 'usage.jsonl'));
+  } catch {
+    /* Missing pricing cannot erase sibling usage. */
+  }
+  return {
+    status: 'started',
+    usage,
+    duration_ms:
+      record.finished_at === null
+        ? null
+        : Math.max(
+            0,
+            Date.parse(record.finished_at) - Date.parse(record.started_at),
+          ),
+  };
+}
+
+async function buildRoleBlock(
+  runDir: string,
+  records: GauntletRoles,
+  estimator: SidecarEstimator,
+): Promise<GauntletBlock> {
+  const roles = {
+    conversation: await buildRoleEconomics(
+      runDir,
+      records.conversation,
+      estimator,
+    ),
+    assessment: await buildRoleEconomics(runDir, records.assessment, estimator),
+  };
+  const started = Object.values(roles).filter(
+    (role) => role.status === 'started',
+  );
+  const usages = started.flatMap((role) => (role.usage ? [role.usage] : []));
+  const models: TokenUsage['models'] = {};
+  const tokens = { ...ZERO_TOKENS };
+  for (const usage of usages) {
+    const shell = tokensShellFromUsage(usage);
+    for (const key of [
+      'input',
+      'output',
+      'cache_create',
+      'cache_read',
+      'total',
+    ] as const)
+      tokens[key] += shell[key];
+    for (const [model, bucket] of Object.entries(usage.models)) {
+      const previous = models[model];
+      if (!previous) {
+        models[model] = { ...bucket };
+        continue;
+      }
+      for (const key of [
+        'total_input',
+        'total_output',
+        'total_cache_create',
+        'total_cache_read',
+        'total_tokens',
+      ] as const)
+        previous[key] += bucket[key];
+      previous.est_cost_usd =
+        previous.est_cost_usd === null && bucket.est_cost_usd === null
+          ? null
+          : round6((previous.est_cost_usd ?? 0) + (bucket.est_cost_usd ?? 0));
+    }
+  }
+  const costs = usages.flatMap((usage) =>
+    usage.est_cost_usd === null ? [] : [usage.est_cost_usd],
+  );
+  const modelNames = [
+    ...new Set(
+      Object.values(records)
+        .filter((record) => record.started_at !== null)
+        .map((record) => record.model),
+    ),
+  ];
+  const unpriced = [
+    ...new Set(usages.flatMap((usage) => usage.unpriced_models)),
+  ];
+  return {
+    roles,
+    tokens,
+    duration_ms:
+      started.length === 0 || started.some((role) => role.duration_ms === null)
+        ? null
+        : started.reduce((sum, role) => sum + (role.duration_ms ?? 0), 0),
+    model: modelNames.length === 1 ? (modelNames[0] ?? null) : null,
+    est_cost_usd: costs.length
+      ? round6(costs.reduce((sum, cost) => sum + cost, 0))
+      : started.length === 0
+        ? 0
+        : null,
+    has_unpriced_model: unpriced.length > 0,
+    obol: usages.length
+      ? {
+          per_model: models,
+          unpriced_models: unpriced,
+          approximations: usages.flatMap((usage) => usage.approximations),
+          pricing_as_of:
+            usages.find((usage) => usage.pricing_as_of)?.pricing_as_of ?? null,
+        }
+      : null,
+  };
+}
+
 function buildOpenRouterEconomics(
   attestation: OpenRouterAttestation,
   estimatedCostUsd: number | null,
@@ -315,15 +443,22 @@ export async function buildRunEconomics(
 ): Promise<RunEconomics | null> {
   // Gauntlet block — built whenever result.json OR usage exists.
   let gauntlet: GauntletBlock | null = null;
-  const resultsDir = gauntletResultsDir(runDir);
-  const gResult = resultsDir
-    ? readJsonObject(join(resultsDir, 'result.json'))
-    : null;
-  const gUsage = resultsDir
-    ? await sidecarEstimator(join(resultsDir, 'usage.jsonl'))
-    : null;
-  if (gResult !== null || gUsage !== null) {
-    gauntlet = buildGauntletBlock(gResult, gUsage);
+  const rolePath = join(runDir, 'gauntlet-roles.json');
+  if (existsSync(rolePath)) {
+    const roles = GauntletRolesSchema.safeParse(readJsonObject(rolePath));
+    gauntlet = roles.success
+      ? await buildRoleBlock(runDir, roles.data, sidecarEstimator)
+      : buildGauntletBlock(null, null);
+  } else {
+    const resultsDir = gauntletResultsDir(runDir);
+    const gResult = resultsDir
+      ? readJsonObject(join(resultsDir, 'result.json'))
+      : null;
+    const gUsage = resultsDir
+      ? await sidecarEstimator(join(resultsDir, 'usage.jsonl'))
+      : null;
+    if (gResult !== null || gUsage !== null)
+      gauntlet = buildGauntletBlock(gResult, gUsage);
   }
 
   // Coding-agent block — frozen, already priced at capture time. Read
@@ -349,8 +484,15 @@ export async function buildRunEconomics(
   const anyUnpriced =
     (coding?.has_unpriced_model ?? false) ||
     (gauntlet?.has_unpriced_model ?? false);
+  const missingRoleUsage =
+    gauntlet?.roles !== undefined &&
+    Object.values(gauntlet.roles).some(
+      (role) =>
+        role.status === 'started' &&
+        (role.usage === null || role.usage.est_cost_usd === null),
+    );
   const total =
-    gCost !== null && cCost !== null && !anyUnpriced
+    gCost !== null && cCost !== null && !anyUnpriced && !missingRoleUsage
       ? round6(gCost + cCost)
       : null;
   const partial =
@@ -359,6 +501,7 @@ export async function buildRunEconomics(
     gCost === null ||
     cCost === null ||
     anyUnpriced ||
+    missingRoleUsage ||
     coding?.openrouter?.charged_cost_usd === null;
   // Take the first truthy pricing_as_of across (coding, gauntlet), so a
   // present-but-null (falsy) value falls through.

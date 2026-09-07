@@ -97,8 +97,14 @@ if (role === 'converse') {
   process.exit(0);
 }
 if (mode === 'assessment-hang') await new Promise(() => {});
+const assessmentStatus =
+  mode === 'assessed-fail'
+    ? 'fail'
+    : mode === 'assessed-investigate'
+      ? 'investigate'
+      : 'pass';
 const result = {
-  status: 'pass',
+  status: assessmentStatus,
   summary: 'Assessed',
   reasoning: 'Evidence checked',
   ...(mode === 'missing-criteria'
@@ -107,7 +113,7 @@ const result = {
         criteria: [
           {
             criterion: 'Fix pricing',
-            verdict: mode === 'inconsistent' ? 'fail' : 'pass',
+            verdict: mode === 'inconsistent' ? 'fail' : assessmentStatus,
             evidence: 'output/src/pricing.js',
           },
         ],
@@ -117,4 +123,12 @@ const resultOut =
   mode === 'missing-result' ? join(dirname(out), 'unallocated') : out;
 mkdirSync(resultOut, { recursive: true });
 writeFileSync(join(resultOut, 'result.json'), JSON.stringify(result));
-process.exit(mode === 'assessment-error' ? 7 : 0);
+process.exit(
+  mode === 'assessment-error'
+    ? 7
+    : mode === 'exit-mismatch'
+      ? 1
+      : assessmentStatus === 'pass'
+        ? 0
+        : 1,
+);

@@ -1,9 +1,18 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AtifTrajectory } from '../src/atif/types.ts';
 import { captureTokenUsage } from '../src/capture/index.ts';
+import type { GauntletRoles } from '../src/contracts/conversation.ts';
+import type { TokenUsage } from '../src/contracts/economics.ts';
 import { buildRunEconomics } from '../src/economics.ts';
 
 function frozenUsage(runDir: string): void {
@@ -492,4 +501,173 @@ test('semantically incomplete OpenRouter sidecars preserve legacy coding-agent e
   const econ = await buildRunEconomics(runDir);
   expect(econ?.coding_agent?.openrouter).toBeUndefined();
   expect(econ?.coding_agent?.est_cost_usd).toBe(0.5);
+});
+
+function roleUsage(cost: number | null, model = 'shared'): TokenUsage {
+  return {
+    total_input: 10,
+    total_output: 5,
+    total_cache_create: 2,
+    total_cache_read: 3,
+    total_tokens: 20,
+    model,
+    models: {
+      [model]: {
+        total_input: 10,
+        total_output: 5,
+        total_cache_create: 2,
+        total_cache_read: 3,
+        total_tokens: 20,
+        provider: 'anthropic',
+        est_cost_usd: cost,
+      },
+    },
+    est_cost_usd: cost,
+    unpriced_models: cost === null ? [model] : [],
+    approximations: [{ kind: 'rate', detail: model }],
+    pricing_as_of: '2026-09-07',
+  };
+}
+function roleArtifacts(
+  runDir: string,
+  assessmentStarted = true,
+): GauntletRoles {
+  const role = (out_dir: string, started = true) => ({
+    out_dir,
+    model: 'shared',
+    started_at: started ? '2026-09-07T00:00:00Z' : null,
+    finished_at: started ? '2026-09-07T00:00:01Z' : null,
+    process_exit: started ? { code: 0, signal: null } : null,
+    stop_cause: null,
+  });
+  const roles: GauntletRoles = {
+    conversation: role('conversation-agent/conversation'),
+    assessment: role('gauntlet-agent/results/assessment', assessmentStarted),
+  };
+  writeFileSync(join(runDir, 'gauntlet-roles.json'), JSON.stringify(roles));
+  for (const [name, record] of Object.entries(roles)) {
+    mkdirSync(join(runDir, record.out_dir), { recursive: true });
+    writeFileSync(
+      join(runDir, record.out_dir, 'usage.jsonl'),
+      JSON.stringify(roleUsage(name === 'conversation' ? 0.1 : 0.2)),
+    );
+  }
+  frozenUsage(runDir);
+  return roles;
+}
+const estimateRole = async (path: string): Promise<TokenUsage | null> =>
+  existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+
+test('both exact roles sum tokens, matching models, costs and provenance', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roles-'));
+  try {
+    roleArtifacts(dir);
+    mkdirSync(join(dir, 'gauntlet-agent/results/aaa'), { recursive: true });
+    writeFileSync(
+      join(dir, 'gauntlet-agent/results/aaa/usage.jsonl'),
+      JSON.stringify(roleUsage(99)),
+    );
+    const e = (await buildRunEconomics(dir, estimateRole))!;
+    expect(e.gauntlet?.est_cost_usd).toBe(0.3);
+    expect(e.gauntlet?.tokens).toEqual({
+      input: 20,
+      output: 10,
+      cache_create: 4,
+      cache_read: 6,
+      total: 40,
+    });
+    expect(e.gauntlet?.obol?.per_model['shared']).toEqual({
+      total_input: 20,
+      total_output: 10,
+      total_cache_create: 4,
+      total_cache_read: 6,
+      total_tokens: 40,
+      provider: 'anthropic',
+      est_cost_usd: 0.3,
+    });
+    expect(e.gauntlet?.obol?.approximations).toEqual([
+      { kind: 'rate', detail: 'shared' },
+      { kind: 'rate', detail: 'shared' },
+    ]);
+    expect(e.gauntlet?.duration_ms).toBe(2000);
+    expect(e.gauntlet?.roles?.conversation).toEqual({
+      status: 'started',
+      usage: roleUsage(0.1),
+      duration_ms: 1000,
+    });
+    expect(e.gauntlet?.roles?.assessment.usage).toEqual(roleUsage(0.2));
+    expect(e.partial).toBe(false);
+    expect(e.total_est_cost_usd).toBe(0.8);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+for (const missing of ['conversation', 'assessment'] as const)
+  test(`started ${missing} without usage keeps sibling cost and partial coverage`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'roles-'));
+    try {
+      const roles = roleArtifacts(dir);
+      rmSync(join(dir, roles[missing].out_dir, 'usage.jsonl'));
+      const e = (await buildRunEconomics(dir, estimateRole))!;
+      expect(e.partial).toBe(true);
+      expect(e.total_est_cost_usd).toBeNull();
+      expect(e.gauntlet?.est_cost_usd).toBe(
+        missing === 'conversation' ? 0.2 : 0.1,
+      );
+      expect(e.gauntlet?.roles?.[missing]).toEqual({
+        status: 'started',
+        usage: null,
+        duration_ms: 1000,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+test('never-started assessment ignores stray usage and is distinct from interrupted conversation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roles-'));
+  try {
+    const roles = roleArtifacts(dir, false);
+    let e = (await buildRunEconomics(dir, estimateRole))!;
+    expect(e.gauntlet?.roles?.assessment).toEqual({
+      status: 'not_run',
+      usage: null,
+      duration_ms: null,
+    });
+    expect(e.gauntlet?.est_cost_usd).toBe(0.1);
+    expect(e.total_est_cost_usd).toBe(0.6);
+    roles.conversation.finished_at = null;
+    writeFileSync(join(dir, 'gauntlet-roles.json'), JSON.stringify(roles));
+    rmSync(join(dir, roles.conversation.out_dir, 'usage.jsonl'));
+    e = (await buildRunEconomics(dir, estimateRole))!;
+    expect(e.gauntlet?.roles?.conversation).toEqual({
+      status: 'started',
+      usage: null,
+      duration_ms: null,
+    });
+    expect(e.partial).toBe(true);
+    expect(e.gauntlet?.est_cost_usd).toBeNull();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test('unpriced role preserves raw model coverage and known sibling cost', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roles-'));
+  try {
+    const roles = roleArtifacts(dir);
+    writeFileSync(
+      join(dir, roles.assessment.out_dir, 'usage.jsonl'),
+      JSON.stringify(roleUsage(null, 'unknown')),
+    );
+    const e = (await buildRunEconomics(dir, estimateRole))!;
+    expect(e.gauntlet?.est_cost_usd).toBe(0.1);
+    expect(e.gauntlet?.obol?.unpriced_models).toEqual(['unknown']);
+    expect(e.gauntlet?.obol?.per_model['unknown']?.total_tokens).toBe(20);
+    expect(e.gauntlet?.roles?.assessment.usage).toEqual(
+      roleUsage(null, 'unknown'),
+    );
+    expect(e.partial).toBe(true);
+    expect(e.total_est_cost_usd).toBeNull();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

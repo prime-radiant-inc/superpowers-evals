@@ -121,9 +121,7 @@ function regularFile(root: string, path: string): string {
   return full;
 }
 
-export async function runPreparedConversation(
-  a: PreparedConversation,
-): Promise<FinalVerdict> {
+async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
   const evidenceRoot = join(a.runDir, 'evidence');
   const role = (out_dir: string) => ({
     out_dir,
@@ -337,8 +335,7 @@ export async function runPreparedConversation(
       return fail('gauntlet', conversation.reason);
     if (
       roles.conversation.stop_cause !== null ||
-      roles.conversation.process_exit?.code !== 0 ||
-      existsSync(socketPath)
+      roles.conversation.process_exit?.code !== 0
     )
       return fail(
         'gauntlet',
@@ -435,7 +432,11 @@ export async function runPreparedConversation(
     }
     if (roles.assessment.stop_cause === 'cancelled' || (await stopRequested()))
       return stopped();
-    if (processExit?.code !== 0 || roles.assessment.stop_cause !== null)
+    const expectedExit = gauntlet.status === 'pass' ? 0 : 1;
+    if (
+      processExit?.code !== expectedExit ||
+      roles.assessment.stop_cause !== null
+    )
       return fail(
         'gauntlet',
         'Assessment inconclusive: assessor process failed',
@@ -463,19 +464,7 @@ export async function runPreparedConversation(
       error: null,
       expected: a.expectedChecks,
     });
-    let economics: FinalVerdict['economics'] = null;
-    try {
-      const measured = await buildRunEconomics(a.runDir);
-      economics =
-        measured === null ? null : z.record(z.unknown()).parse(measured);
-    } catch {
-      /* Cost failure cannot erase the verdict. */
-    }
-    return {
-      ...verdict,
-      conversation,
-      economics,
-    };
+    return { ...verdict, conversation };
   } catch (error) {
     conversation =
       readConversationRecord(a.runDir) ??
@@ -487,4 +476,20 @@ export async function runPreparedConversation(
     if (socketRoot !== undefined)
       rmSync(socketRoot, { recursive: true, force: true });
   }
+}
+
+/** Price every role outcome, including failures before an assessment starts. */
+export async function runPreparedConversation(
+  a: PreparedConversation,
+): Promise<FinalVerdict> {
+  const verdict = await runConversation(a);
+  let economics: FinalVerdict['economics'] = null;
+  try {
+    const measured = await buildRunEconomics(a.runDir);
+    economics =
+      measured === null ? null : z.record(z.unknown()).parse(measured);
+  } catch {
+    /* Cost failure cannot erase the verdict. */
+  }
+  return { ...verdict, economics };
 }

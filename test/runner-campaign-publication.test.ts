@@ -13,14 +13,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { publishAttempt } from '../src/campaign/attempt-publish.ts';
 import { readAttemptEvidence } from '../src/campaign/report-evidence.ts';
 import { extractManifest, writeManifest } from '../src/check/manifest.ts';
 import type { CampaignIdentity } from '../src/contracts/campaign/campaign.ts';
 import { CHECK_SCRATCH_DIR } from '../src/contracts/campaign/execution.ts';
 import { runScenario } from '../src/runner/index.ts';
-import { parseAttemptManifest } from '../src/runner/manifest.ts';
+import {
+  parseAttemptManifest,
+  writeAttemptManifest,
+} from '../src/runner/manifest.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const REPO = resolve(import.meta.dir, '..');
@@ -106,6 +109,54 @@ test('a checks-bearing campaign runner result publishes with authenticated check
     expect(runResult.verdict.final).toBe('pass');
     expect(existsSync(join(runResult.runDir, 'home'))).toBe(false);
 
+    // New-mode artifacts travel through the ordinary worker manifest/publisher.
+    const retained = {
+      'conversation.json': {
+        status: 'completed',
+        endpoint: 'refusal',
+        reason: 'Subject declined',
+        timestamp: '2026-09-07T00:00:00Z',
+        evidence: {
+          path: 'conversation-agent/demo/captures/1.ansi',
+          quote: 'Declined',
+        },
+      },
+      'gauntlet-roles.json': {
+        conversation: {
+          out_dir: 'conversation-agent/demo',
+          model: 'offline',
+          started_at: '2026-09-07T00:00:00Z',
+          finished_at: '2026-09-07T00:00:01Z',
+          process_exit: { code: 0, signal: null },
+          stop_cause: null,
+        },
+        assessment: {
+          out_dir: 'gauntlet-agent/results/demo',
+          model: 'offline',
+          started_at: null,
+          finished_at: null,
+          process_exit: null,
+          stop_cause: null,
+        },
+      },
+      'conversation-agent/demo/exchange.jsonl': {
+        kind: 'screen',
+        path: 'captures/1.ansi',
+      },
+      'evidence/index.json': {
+        files: ['conversation.json', 'output/pricing.js'],
+      },
+      'evidence/conversation.json': {
+        status: 'completed',
+        endpoint: 'refusal',
+      },
+      'evidence/output/pricing.js': { total: 0 },
+    };
+    for (const [path, body] of Object.entries(retained)) {
+      mkdirSync(dirname(join(runResult.runDir, path)), { recursive: true });
+      writeFileSync(join(runResult.runDir, path), JSON.stringify(body));
+    }
+    writeAttemptManifest(runResult.runDir, identity);
     const manifestBody = readFileSync(
       join(runResult.runDir, 'manifest.json'),
       'utf8',
@@ -156,6 +207,12 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       artifacts,
     });
     expect(evidence.publication_valid).toBe(true);
+    for (const [path, body] of Object.entries(retained)) {
+      expect(manifest.files.some((file) => file.path === path)).toBe(true);
+      expect(
+        JSON.parse(readFileSync(join(publishedDir, path), 'utf8')),
+      ).toEqual(body);
+    }
     const link = join(publishedDir, 'coding-agent-workdir', 'link-to-present');
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     expect(readlinkSync(link)).toBe('present.txt');

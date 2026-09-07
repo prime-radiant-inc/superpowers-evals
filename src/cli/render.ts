@@ -201,6 +201,13 @@ const ModelViewSchema = z
     est_cost_usd: z.unknown(),
   })
   .passthrough();
+const RoleViewSchema = z.object({
+  status: z.unknown(),
+  duration_ms: z.unknown(),
+  usage: z
+    .object({ total_tokens: z.unknown(), est_cost_usd: z.unknown() })
+    .nullish(),
+});
 const BlockViewSchema = z
   .object({
     duration_ms: z.unknown(),
@@ -210,6 +217,9 @@ const BlockViewSchema = z
     models: z.array(ModelViewSchema).nullish(),
     tool_result_total_bytes: z.unknown(),
     obol: ObolViewSchema.nullish(),
+    roles: z
+      .object({ conversation: RoleViewSchema, assessment: RoleViewSchema })
+      .nullish(),
   })
   .passthrough();
 const EconViewSchema = z
@@ -273,10 +283,20 @@ function formatEconomicsPane(
   );
   const header = `  ${''.padEnd(10)} ${'duration'.padStart(10)} ${'tokens'.padStart(9)} ${'est cost'.padStart(9)}`;
   const coding = econ.coding_agent;
-  const rows: string[] = [
-    agentRow('Gauntlet', econ.gauntlet),
-    agentRow('Coding', coding),
-  ];
+  const rows: string[] = [agentRow('Gauntlet', econ.gauntlet)];
+  if (econ.gauntlet?.roles) {
+    for (const [name, role] of Object.entries(econ.gauntlet.roles)) {
+      const roleLabel = name === 'conversation' ? 'Conversation' : 'Assessment';
+      rows.push(
+        role.status === 'not_run'
+          ? `  ${roleLabel}  not run`
+          : role.usage == null
+            ? `  ${roleLabel}  ${fmtMs(role.duration_ms)}  usage missing`
+            : `  ${roleLabel}  ${fmtMs(role.duration_ms)}  ${fmtTokens(role.usage.total_tokens)}  ${fmtCost(role.usage.est_cost_usd)}`,
+      );
+    }
+  }
+  rows.push(agentRow('Coding', coding));
   for (const entry of coding?.models ?? []) {
     rows.push(modelSubrow(entry));
   }
@@ -346,7 +366,9 @@ function formatGauntletPane(verdict: FinalVerdict, color: boolean): string {
   const summary = wrapIndent(g?.summary ?? '', 10, 72);
   const reasoning = wrapIndent(g?.reasoning ?? '', 10, 72);
   const sep = style(
-    '─── Gauntlet-Agent ───────────────────────────────',
+    verdict.conversation
+      ? '─── Assessment ──────────────────────────────────'
+      : '─── Gauntlet-Agent ───────────────────────────────',
     { fg: 'bright_cyan', bold: true },
     color,
   );
@@ -354,8 +376,34 @@ function formatGauntletPane(verdict: FinalVerdict, color: boolean): string {
     `${sep}\n` +
     `${label('status   ', color)} ${statusStyled}\n` +
     `${label('summary  ', color)} ${summary}\n` +
-    `${label('reasoning', color)} ${reasoning}\n`
+    `${label('reasoning', color)} ${reasoning}\n` +
+    (verdict.conversation
+      ? (g?.criteria ?? [])
+          .map((c) => `${c.verdict}: ${c.criterion}\n  ${c.evidence}\n`)
+          .join('')
+      : '')
   );
+}
+
+function formatConversationPane(verdict: FinalVerdict, color: boolean): string {
+  const c = verdict.conversation;
+  if (!c) return '';
+  const lines = [
+    style(
+      '─── Conversation ────────────────────────────────',
+      { fg: 'bright_cyan', bold: true },
+      color,
+    ),
+    `${label('status   ', color)} ${c.status}`,
+    `${label('endpoint ', color)} ${c.endpoint ?? '—'}`,
+    `${label('reason   ', color)} ${c.reason}`,
+  ];
+  if (c.evidence)
+    lines.push(
+      `${label('evidence ', color)} ${c.evidence.path}`,
+      `  ${c.evidence.quote}`,
+    );
+  return `${lines.join('\n')}\n`;
 }
 
 function formatChecksPane(verdict: FinalVerdict, color: boolean): string {
@@ -409,6 +457,7 @@ export function render(
 
   const parts = [
     formatHeader(verdict, runDir, opts.color),
+    formatConversationPane(verdict, opts.color),
     formatGauntletPane(verdict, opts.color),
     formatChecksPane(verdict, opts.color),
     formatEconomicsPane(verdict.economics, opts.color),

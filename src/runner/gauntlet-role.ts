@@ -58,6 +58,16 @@ function terminateRuntime(
   spawnSync('tmux', ['-S', socketPath, 'kill-server'], { timeout: 100 });
 }
 
+// tmux can retain its socket inode after kill-server. Probe the exact server;
+// an execution failure or timeout cannot establish that it has stopped.
+function runtimeServerAlive(socketPath: string): boolean {
+  if (!existsSync(socketPath)) return false;
+  const result = spawnSync('tmux', ['-S', socketPath, 'list-sessions'], {
+    timeout: 100,
+  });
+  return result.status !== 1;
+}
+
 function runtimeGroupAlive(groups: Set<number>): boolean {
   return [...groups].some((pid) => {
     try {
@@ -144,7 +154,7 @@ export async function invokeGauntletRole(
     }
     if (
       a.socketPath !== undefined &&
-      (existsSync(a.socketPath) || runtimeGroupAlive(groups)) &&
+      (runtimeServerAlive(a.socketPath) || runtimeGroupAlive(groups)) &&
       record.process_exit?.code === 0 &&
       record.stop_cause === null
     ) {

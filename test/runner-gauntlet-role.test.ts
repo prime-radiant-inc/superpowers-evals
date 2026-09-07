@@ -194,3 +194,29 @@ test('a failed spawn leaves the allocated role unstarted', async () => {
   expect(role.process_exit).toBeNull();
   expect(currentRoleChild()).toBeNull();
 });
+
+test('a closed private server can leave a socket inode after a clean role exit', async () => {
+  const args = setup();
+  const socketPath = join(args.runDir, 'owned');
+  expect(
+    spawnSync('tmux', ['-S', socketPath, 'new-session', '-d', 'sleep 30'])
+      .status,
+  ).toBe(0);
+  try {
+    const result = await invokeGauntletRole({
+      ...args,
+      socketPath,
+      deadlineMs: 1000,
+      argv: [
+        '-e',
+        `await Bun.sleep(70); Bun.spawnSync(['tmux', '-S', ${JSON.stringify(socketPath)}, 'kill-server']); await Bun.sleep(70);`,
+      ],
+    });
+    expect(result.process_exit?.code).toBe(0);
+    expect(
+      spawnSync('tmux', ['-S', socketPath, 'list-sessions']).status,
+    ).not.toBe(0);
+  } finally {
+    spawnSync('tmux', ['-S', socketPath, 'kill-server']);
+  }
+});

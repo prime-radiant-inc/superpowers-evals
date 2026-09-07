@@ -60,3 +60,33 @@ test('an off-type est_cost_usd in a block degrades that cost cell, pane still re
   expect(gauntletRow).toBeDefined();
   expect(gauntletRow).toContain('n/a');
 });
+
+test('role cost rows distinguish missing started usage from assessment not run', () => {
+  const base = {
+    gauntlet: {
+      est_cost_usd: 0.1,
+      roles: {
+        conversation: {
+          status: 'started',
+          duration_ms: 1000,
+          usage: { total_tokens: 1000, est_cost_usd: 0.1 },
+        },
+        assessment: { status: 'not_run', duration_ms: null, usage: null },
+      },
+    },
+    partial: true,
+    total_est_cost_usd: null,
+  };
+  let out = render(verdictWith(base), '/run/x', { color: false, mode: 'full' });
+  expect(
+    out.split('\n').find((line) => line.trimStart().startsWith('Conversation')),
+  ).toContain('$0.10');
+  expect(
+    out.split('\n').find((line) => line.trimStart().startsWith('Assessment')),
+  ).toContain('not run');
+  base.gauntlet.roles.assessment.status = 'started';
+  out = render(verdictWith(base), '/run/x', { color: false, mode: 'full' });
+  expect(
+    out.split('\n').find((line) => line.trimStart().startsWith('Assessment')),
+  ).toContain('usage missing');
+});

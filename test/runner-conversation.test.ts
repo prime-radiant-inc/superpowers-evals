@@ -121,6 +121,7 @@ for (const mode of [
     const args = setup(mode);
     const v = await runPreparedConversation(args);
     expect(v.final).toBe('indeterminate');
+    expect(v.economics?.['gauntlet']).toBeTruthy();
     expect(v.conversation?.status).toBe('completed');
     if (mode === 'cleanup-zero')
       expect(
@@ -150,6 +151,12 @@ test('cancellation before launch allocates both roles without executing either',
   const args = setup();
   const v = await runPreparedConversation({ ...args, shouldStop: () => true });
   expect(v.error?.stage).toBe('stopped');
+  expect(v.economics?.['gauntlet']).toMatchObject({
+    roles: {
+      conversation: { status: 'not_run' },
+      assessment: { status: 'not_run' },
+    },
+  });
   expect(existsSync(join(args.runDir, 'invocations.jsonl'))).toBe(false);
   expect(
     JSON.parse(readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'))
@@ -355,4 +362,65 @@ test('assessment reads only its allocated result file', async () => {
   );
   expect(v.gauntlet?.run_id).toBe(roles.assessment.out_dir.split('/').at(-1));
   expect(v.gauntlet?.process_exit).toEqual({ code: 0, signal: null });
+});
+
+for (const [mode, final, exit] of [
+  ['assessed-fail', 'fail', 1],
+  ['assessed-investigate', 'indeterminate', 1],
+  ['exit-mismatch', 'indeterminate', 1],
+] as const)
+  test(`${mode} preserves the assessor's semantic exit and independent completion`, async () => {
+    const args = setup(mode);
+    const verdict = await runPreparedConversation(args);
+    expect(verdict.final).toBe(final);
+    expect(verdict.conversation?.status).toBe('completed');
+    expect(verdict.gauntlet?.process_exit?.code).toBe(exit);
+    expect(verdict.error).toEqual(
+      mode === 'exit-mismatch'
+        ? expect.objectContaining({ stage: 'gauntlet' })
+        : null,
+    );
+  });
+
+test('outer runner exception retains persisted started-role accounting', async () => {
+  const args = setup();
+  const { runScenario } = await import('../src/runner/index.ts');
+  const result = await runScenario({
+    scenarioDir: args.scenarioDir,
+    codingAgent: 'claude',
+    codingAgentsDir: resolve(import.meta.dir, '../coding-agents'),
+    outRoot: join(args.runDir, 'outer-error'),
+    onRunDir(runDir) {
+      const record = {
+        out_dir: 'conversation-agent/observed',
+        model: 'claude-sonnet-4-6',
+        started_at: '2026-09-07T00:00:00Z',
+        finished_at: null,
+        process_exit: null,
+        stop_cause: null,
+      };
+      writeFileSync(
+        join(runDir, 'gauntlet-roles.json'),
+        JSON.stringify({
+          conversation: record,
+          assessment: {
+            ...record,
+            out_dir: 'gauntlet-agent/results/allocated',
+            started_at: null,
+          },
+        }),
+      );
+    },
+    onCredentialLabels() {
+      throw new Error('escaped finalization error');
+    },
+  });
+  expect(result.verdict.error?.message).toBe('escaped finalization error');
+  expect(result.verdict.economics?.['partial']).toBe(true);
+  expect(result.verdict.economics?.['gauntlet']).toMatchObject({
+    roles: {
+      conversation: { status: 'started', usage: null },
+      assessment: { status: 'not_run' },
+    },
+  });
 });
