@@ -247,7 +247,7 @@ identity before any process runs:
   --env TMUX_TMPDIR=/run/quorum/attempt --env XDG_*` beneath `home`. No secret
   value ever appears in `--env`.
 - `--tmpfs /run/quorum/attempt:rw,noexec,nosuid,size=<bounded>` and
-  `--tmpfs /tmp:rw,size=<bounded>`. The attempt-private `TMUX_TMPDIR` means a
+  `--tmpfs /tmp:rw,exec,size=<bounded>`. The attempt-private `TMUX_TMPDIR` means a
   shared bind can never couple two attempts' tmux servers.
 - Mounts, all `type=bind`:
 
