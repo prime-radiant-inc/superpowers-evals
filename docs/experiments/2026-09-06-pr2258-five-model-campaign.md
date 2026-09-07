@@ -237,6 +237,26 @@ interruption: 24 pass, 2 fail (`writing-plans-no-spec-conversational` Astra
 base and head, post-check), 2 indeterminate (`user-pref-no-brainstorm` Astra,
 grader `investigate`), all Astra and Sol; no Luna or Claude cells had started.
 
+## Fixes after campaign 3
+
+Both halves of the mechanism were fixed on main before any further spend
+(`691975a4`, `6266099f`, `be6027cf`). Campaign runs now prune dependency
+trees (`node_modules`, `.venv`, at any depth under the coding-agent workdir)
+before the attempt manifest is written, so a purpose-discovery run publishes
+on the order of a hundred files rather than five thousand; development
+`quorum run` results keep their trees, and the frozen check records in
+`verdict.json` remain the authoritative evidence of post-check outcomes,
+which run before the prune. And admission now waits, cadence by cadence for
+up to six cadences measured on the clock, for a fresh telemetry sample
+before applying the unchanged fatal guard; a crashed sampler still halts the
+campaign at once, a cancel intent still cuts the wait, and a block is not
+activated on a sample that opened a contention breach. The whole-branch
+review traced campaign 3 through the new code: either fix alone would have
+saved it, but only both remove the cause and the cliff, since a large
+publication would otherwise still blind the sampler for about twenty
+seconds and, under the default coverage tolerance, classify every in-flight
+block as missing telemetry.
+
 ## Results
 
 Pending campaign 3.
