@@ -308,6 +308,22 @@ that spend run. Fourth platform defect of the program; fixed next by making
 the sink removal tolerate read-only trees and adding a Luna fractals cell to
 the smoke suite as the live proof.
 
+## Fix after campaign 4
+
+`9fc5cdc1` on main: a shared `removeTree` helper first makes every real
+directory in a tree owner-writable, walking with `lstat` so symlinks are
+never followed or changed through, and then removes the tree; the check
+phase's sink and the campaign prune both use it. The new check-phase test
+reproduced campaign 4's exact `EACCES` before the fix by having a check leave
+a 0555 `go/pkg/mod` tree in its HOME. The effort smoke suite gained a Luna
+`sdd-go-fractals-opus48` cell as the live proof that a fractals post check
+now publishes with grader status and check records, with its attempt bound
+raised to 5400 s for the roughly hour-long drive. Two observations recorded
+for later rather than fixed here: the prune module's use of the helper is
+not pinned by a prune-level test, and inside attempt containers Go splits
+`GOPATH` on the colons in attempt directory names, so the agent's own module
+cache lands outside the attempt directory.
+
 ## Results
 
 Pending campaign 5.
