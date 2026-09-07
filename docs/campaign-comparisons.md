@@ -114,8 +114,10 @@ Admission checks live resource floors and the registered CPU/memory/disk fingerp
 Stale host telemetry pauses further activation or worker launch, including after
 slow preparation: a slow controller stretch, such as publishing a large run,
 holds launches until the next host sample lands, and a sampler silent for six
-cadences ends the campaign as before. It does not prevent termination of already
-owned workers.
+cadences ends the campaign as before. The check runs where that wait is
+possible, at admission; telemetry going stale while the container runtime
+creates or starts an already admitted worker does not end the campaign. It
+does not prevent termination of already owned workers.
 Credential aliases share key loads by logical pool and public key environment name.
 Within a pool, an overlapping key must have the same derived per-key limit
 (`ceil(frozen pool capacity / inventory size)`) for every alias. Different or

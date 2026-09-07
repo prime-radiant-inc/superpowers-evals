@@ -569,7 +569,9 @@ timing").
   the sidecar's last-sample age; staleness > 2× `cadence_ms` pauses admission
   for up to `STALE_TELEMETRY_WAIT_CADENCES` (6) cadences awaiting a fresh
   sample, then fails closed (a dead sampler must not look like a quiet host,
-  and a controller busy publishing must not look like a dead sampler).
+  and a controller busy publishing must not look like a dead sampler). The
+  rule belongs to the admission waves, which can take that wait; the runtime's
+  create/start authorization callbacks check identity and session state only.
 - **Missing-sample policy:** a missed sample (probe error, scheduler stall)
   records a gap line `{ ts_ms, missing: true }`; gaps count against coverage
   and neither extend nor interrupt a sustain run.
@@ -1769,7 +1771,8 @@ authorized repair = removal + re-create under D2's lock; E7 rerun re-entry).
 Same halt semantics serve the contention live breach (Decision D-3):
 admission-only halt, in-flight runs to service end, loud at entry and
 resolution; plus the dead-sampler liveness halt (>2× cadence staleness, after
-a bounded 6-cadence wait for a fresh sample).
+a bounded 6-cadence wait for a fresh sample, at the admission points alone —
+never in the synchronous runtime authorization callbacks).
 Contention never inherits drift's kill/rerun mapping: overlapped processes
 are analytically superseded, never killed for contention, and their slots
 release only at service end.
@@ -1969,7 +1972,8 @@ the exit sample before** notifying the dispatcher of the closed window. The
 dispatcher owns the R-DSP-11 resolution batch and its resolution/resume
 output; sensors never mint or journal. Dead-sampler liveness pauses admission
 on staleness > 2× cadence and halts it once six cadences pass with no fresh
-sample. The sidecar remains non-replay evidence — replay
+sample; it is applied where that wait can be taken, at admission, not in the
+runtime authorization path. The sidecar remains non-replay evidence — replay
 of landed journal events is self-sufficient — but recovery may re-read its
 durable closed windows to derive an unlanded batch suffix. Sidecar loss never
 reverses a landed mint; it becomes an attribution caveat plus

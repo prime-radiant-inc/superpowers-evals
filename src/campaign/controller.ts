@@ -365,8 +365,13 @@ export async function runCampaignDispatch(
         `stale telemetry (${age}ms) after ${STALE_TELEMETRY_WAIT_CADENCES} cadences; refusing admission`,
       );
   };
+  /** The runtime's authorization callbacks check identity and session state,
+   *  never host telemetry: they run synchronously inside `docker create` /
+   *  `docker start`, so a staleness rule here has no chance to take the
+   *  bounded wait. Staleness is enforced at the admission points, which run
+   *  `await admit()` immediately before each of those calls. */
   const assertIntent = (prepared: PreparedExecution) => {
-    admissionGuard();
+    guard();
     const a = projection().attempts.get(
       prepared.intent.identity.execution_attempt_id,
     );

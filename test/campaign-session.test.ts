@@ -81,6 +81,7 @@ function fixture(
     fail?: boolean;
     stage?: string;
     missingTelemetry?: boolean;
+    coverageN?: number;
     n?: number;
     spacing?: number;
     sharedKeyPool?: boolean;
@@ -104,6 +105,7 @@ function fixture(
   experiment.contention.thresholds = [
     { metric: 'load1', source: 'host', op: 'gt', value: 3 },
   ];
+  if (options.coverageN) experiment.contention.coverage_n = options.coverageN;
   const registry: Record<string, Credential> = {
     subject: {
       auth: 'api-key',
@@ -1772,6 +1774,45 @@ test('stale producer after asynchronous create refuses start and still stops own
     [...f.writer.readProjection().attempts.values()].every((a) => a.stopped),
   ).toBe(true);
   expect(f.finished).toBe(true);
+});
+
+test('telemetry going stale between admission and the runtime authorization does not end the campaign', async () => {
+  // The wider coverage tolerance keeps the sample gap this test opens off the
+  // separate missing-telemetry validity rule, which would replace the block
+  // and hide the admission-versus-authorization question being asked here.
+  const f = fixture({ coverageN: 20 });
+  const factory = f.deps.runtime;
+  f.deps.runtime = (authority) => {
+    const runtime = factory(authority);
+    const start = runtime.start.bind(runtime);
+    runtime.start = async (bound) => {
+      // Runtime latency between the admission that just passed and the start
+      // authorization: the sidecar is stale exactly when the authorization
+      // callback runs, with no chance for the bounded wait to help.
+      f.clock.advance(1);
+      return await start(bound);
+    };
+    return runtime;
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  // Each start leaves telemetry stale, so the next attempt's admission parks
+  // on the clock until the sampler catches up.
+  for (let i = 0; i < 40 && f.started.length < 2; i++) {
+    await flush();
+    const next = f.clock.earliestWaiter();
+    if (next === null) break;
+    f.clock.setTo(next);
+  }
+  await flush();
+  for (let i = 0; i < f.started.length; i++) f.complete(i);
+  expect(await settle(f, run)).toMatchObject({
+    outcome: 'completed',
+    reason: expect.not.stringContaining('stale telemetry'),
+  });
+  expect(f.started).toHaveLength(2);
+  expect(f.writer.readProjection().ended?.reason).not.toContain(
+    'stale telemetry',
+  );
 });
 
 test('stale telemetry wait is cut short by operator cancellation', async () => {
