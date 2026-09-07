@@ -273,8 +273,12 @@ the Opus, Sonnet, and Haiku rows. The probe must pass with
   refuses a mismatch, so the suite is edited after the snapshot is final.
 - Registered with `--global-cap 6`.
 
-Planned samples: 130. With reserve, at most 134 durable attempts plus
-retries within `max_attempts`.
+Planned samples: 130. Registration expands `reserve` per cell, so `reserve: 1`
+yields 50 replacement slots and at most 180 durable attempts plus retries
+within `max_attempts`. (The original draft said `reserve: 4` and "at most
+134 attempts"; that arithmetic was wrong, and campaign 1 showed replacements
+burning on unpublishable blocks, so the reserve was reduced to one per cell
+before campaign 2.)
 
 ## Budget
 

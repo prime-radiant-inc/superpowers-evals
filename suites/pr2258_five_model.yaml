@@ -98,7 +98,10 @@ comparisons:
     cells:
       brainstorming-todo-purpose-discovery: { n: 2 }
       sdd-go-fractals-opus48: { n: 3 }
-reserve: 4
+# reserve is PER CELL: 1 here means one whole-block replacement for each of
+# the 50 cells (50 reserve slots), bounding replacement spend after the first
+# campaign's platform defects burned replacements on unpublishable blocks.
+reserve: 1
 max_exposure_skew: 60
 attempt_bounds:
   max_attempts: 2

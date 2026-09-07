@@ -159,6 +159,22 @@ manifest as inventory; the publisher accepts only listed, unaltered
 symlinks; nothing follows a link) is documented in the ledger and lands as a
 separate commit before campaign 2.
 
+## Smoke campaign 3 (on the symlink fix)
+
+`b7bf9dd2-72a3-45bb-9686-fe300e3fae38`, evals `ecf99a43`, launched 2026-09-07
+03:55Z, completed 04:04Z, $1.12 with complete coverage. The Codex cell ran
+`brainstorming-todo-purpose-discovery` itself on Luna: pass, all five
+post-checks, published with 93 artifacts, `provenance.effort: "xhigh"`,
+subject $0.10, grader $0.67, 523 s. The Claude hello-world cell passed and
+published (72 artifacts, $0.19 + $0.15). Caveat: this Luna run reached its
+first product-work action without an npm install, so its run directory held
+no symlinks; the symlink path itself is proven by the unit tests and the
+end-to-end publication test that now leaves a real symlink, not by this
+smoke.
+
+Before campaign 2 the suite's `reserve` was reduced from 4 to 1 per cell
+(50 replacement slots instead of 200) to bound replacement spend.
+
 ## Results
 
 Pending campaign 2.
