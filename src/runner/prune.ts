@@ -1,11 +1,6 @@
-import {
-  existsSync,
-  lstatSync,
-  readdirSync,
-  rmSync,
-  unlinkSync,
-} from 'node:fs';
+import { existsSync, lstatSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { removeTree } from '../remove-tree.ts';
 
 export const DEPENDENCY_TREE_NAMES: readonly string[] = [
   'node_modules',
@@ -39,7 +34,7 @@ export function pruneDependencyTrees(workdir: string): string[] {
           unlinkSync(path);
           removed.push(relPath);
         } else if (entry.isDirectory()) {
-          rmSync(path, { recursive: true, force: true });
+          removeTree(path);
           removed.push(relPath);
         }
         continue;

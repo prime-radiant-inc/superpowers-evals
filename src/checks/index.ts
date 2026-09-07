@@ -1,11 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +12,7 @@ import {
   CheckRecordSchema,
 } from '../contracts/verdict.ts';
 import { getEnv } from '../env.ts';
+import { removeTree } from '../remove-tree.ts';
 import { foldUnknownKeys } from './record-fold.ts';
 
 // A check verb emits one of these per line into QUORUM_RECORD_SINK. The verbs
@@ -199,7 +194,7 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     }
     return { records, exitCode, stderr };
   } finally {
-    rmSync(sinkDir, { recursive: true, force: true });
+    removeTree(sinkDir);
   }
 }
 

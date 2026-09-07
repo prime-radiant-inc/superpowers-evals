@@ -1,12 +1,15 @@
-# Two-cell smoke proving the arm-level effort reaches both harnesses on the
+# Three-cell smoke proving the arm-level effort reaches both harnesses on the
 # appliance before the PR 2258 campaign spends (PRI-3097). Cheapest model
-# per harness. The Codex cell runs the purpose-discovery scenario itself: its
-# Vite scaffold leaves node_modules symlinks, which the first campaign's
-# manifest writer refused, so a smoke on hello-world alone proves nothing
-# about publication of real runs. Register with --global-cap 2. Verify
-# "effort":"xhigh" in the Codex turn_context, the CLAUDE_CODE_EFFORT_LEVEL
-# line in the Claude run env file, publication_valid on both attempts, and
-# empty unpriced_models on both roles.
+# per harness. The Codex cells run real scenarios, because a smoke on
+# hello-world alone proves nothing about publication of real runs: the
+# purpose-discovery Vite scaffold leaves node_modules symlinks, which the
+# first campaign's manifest writer refused, and the Go fractals cell proves
+# the check sink is still removable after `go test ./...` extracts a
+# read-only module cache into the sink's HOME. Register with --global-cap 3.
+# Verify "effort":"xhigh" in the Codex turn_context, the
+# CLAUDE_CODE_EFFORT_LEVEL line in the Claude run env file,
+# publication_valid on every attempt, and empty unpriced_models on both
+# roles.
 schema_version: 2
 name: pr2258_effort_smoke
 grader:
@@ -23,9 +26,11 @@ comparisons:
   - arm: codex_luna_pr2258_head
     scenarios:
       - brainstorming-todo-purpose-discovery
+      - sdd-go-fractals-opus48
     n: 1
 reserve: 0
 max_exposure_skew: 60
 attempt_bounds:
   max_attempts: 2
-  max_time_s: 2400
+  # A fractals drive runs about 56 minutes.
+  max_time_s: 5400

@@ -4,7 +4,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -17,6 +19,7 @@ import {
   parseOsDirective,
   runPhase,
 } from '../src/checks/index.ts';
+import { removeTree } from '../src/remove-tree.ts';
 
 const REPO = resolve(import.meta.dir, '..');
 
@@ -761,4 +764,46 @@ test('crash stderr is captured for the final_reason hint', async () => {
   });
   expect(exitCode).toBe(127);
   expect(stderr).toContain('no-such-verb-xyz');
+});
+
+// A check may leave read-only directories inside its private HOME — `go test`
+// extracts the module cache with 0555 dirs — and a non-root uid cannot unlink
+// their entries. The phase must still remove its own sink (PRI-3097).
+test('the phase sink is removed even when a check leaves a read-only tree in its HOME', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  writeFileSync(join(workdir, 'README.md'), '# fixture\n');
+  const checksSh = checksShWith(
+    'pre() {\n' +
+      '  mkdir -p "$HOME/go/pkg/mod/example" && printf x > "$HOME/go/pkg/mod/example/f" && chmod 555 "$HOME/go/pkg/mod/example" "$HOME/go/pkg/mod"\n' +
+      '  file-exists README.md\n' +
+      '}\npost() { :; }\n',
+  );
+  // Point the phase sink at a private root: os.tmpdir() reads TMPDIR per call.
+  const sinkRoot = realpathSync(mkdtempSync(join(tmpdir(), 'sink-root-')));
+  const savedTmpdir = Bun.env['TMPDIR'];
+  try {
+    Bun.env['TMPDIR'] = sinkRoot;
+    const { records, exitCode } = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+    });
+    expect(exitCode).toBe(0);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      check: 'file-exists',
+      args: ['README.md'],
+      passed: true,
+      phase: 'pre',
+    });
+    expect(readdirSync(sinkRoot)).toEqual([]);
+  } finally {
+    if (savedTmpdir === undefined) {
+      delete Bun.env['TMPDIR'];
+    } else {
+      Bun.env['TMPDIR'] = savedTmpdir;
+    }
+    removeTree(sinkRoot);
+  }
 });
