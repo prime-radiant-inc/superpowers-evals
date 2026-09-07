@@ -16,9 +16,11 @@ The six requirements below come directly from Drew. The component choices
 and first milestone are proposals. No existing implementation, language,
 or orchestration policy is a constraint on the new design.
 
-**Current discussion:** What should an author specify about the simulated
-user, and how much of the conversation should that user decide dynamically?
-Start with one concrete scenario before fixing YAML syntax or interfaces.
+**Authoring clarified:** Drew wants to define basically none of the exchange.
+Use the current prose scenario brief and acceptance criteria as the starting
+point; the driver conducts the conversation. No authored turn sequence or
+mandatory reply/persona schema. Next, discuss the complete single-scenario
+execution boundary and target configuration using that authoring model.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -49,6 +51,7 @@ no component should dictate the whole product.
 |---|---|
 | The six product requirements above | Agreed requirements from Drew. |
 | Real end-user interaction for Superpowers tests | Agreed requirement; exact interaction controls need design. |
+| Author defines basically none of the exchange | Explicit clarification from Drew; preserve the current prose-brief authoring model. |
 | Modular components and replaceable layers | Agreed direction. |
 | Centralize efforts around one eval product in smevals | Working direction following the team investigation and Drew's agreement to brainstorm it. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
@@ -69,10 +72,40 @@ failure. The mechanisms and first-version scope remain to be designed.
 
 ## Proposed user experience
 
-An author describes a scenario, its starting workspace, the user's goal
-and relevant facts, and the expected outcomes. They choose target configs
-and repetition/concurrency settings, start a batch, inspect progress, and
-receive the same report format for every target.
+An author writes a natural-language scenario brief and acceptance criteria,
+with starting fixtures and deterministic checks supplied separately. The
+driver reads the brief and conducts the live conversation. The author should
+not have to enumerate questions, answers, approvals, or conversation states.
+They choose target configs and repetition/concurrency settings, start a batch,
+inspect progress, and receive the same report format for every target.
+
+### Start from the existing scenario abstraction
+
+The current format is `story.md` with YAML metadata and prose, `setup.sh`
+for the fixture, and `checks.sh` for deterministic pre/post assertions.
+The story briefs the Gauntlet-Agent and includes semantic acceptance
+criteria; it is not a transcript or a machine-readable dialogue program.
+
+For example, `sdd-go-fractals-opus48/story.md` gives an example initial
+request, then says to let the coding agent proceed autonomously and answer
+clarifications briefly. `code-review-catches-planted-bugs/story.md` gives
+a review request, forbids revealing the planted defects, and says a completed
+bad review is still a completed run. Gauntlet handles the actual interaction.
+
+Some targeted tests pin particular messages or contingent replies because
+those are the stimulus being tested. `brainstorming-todo-purpose-discovery`
+has a detailed response policy, and the current authoring guide encourages
+canned replies. That is evidence of existing experimental controls, not a
+requirement that every new scenario define an exchange. Drew's desired
+default is the lighter prose brief. Exact wording or constraints can remain
+scenario-specific when necessary to express the test.
+
+**Design consequence:** Preserve this level of abstraction when integrating
+with smevals. A story may remain Markdown or be referenced/embedded in YAML;
+file packaging is open. Do not invent a mandatory conversation DSL, persona
+form, or answer-policy schema. Shared driver behavior should carry ordinary
+interaction mechanics. This authoring choice does not yet settle whether
+the user actor and semantic grader share an implementation or model.
 
 The scenario should be reusable across supported targets. Harness, subject
 model/provider, Superpowers version/configuration, and interaction settings
@@ -82,8 +115,8 @@ not a frozen schema.
 
 There are three distinct roles:
 
-- **Simulated user:** supplies the request and responds during the session
-  according to the scenario's user knowledge, goals, and constraints.
+- **Simulated user:** interprets the prose brief, supplies the request, and
+  handles the conversation without an author-specified sequence of turns.
 - **Coding agent:** the actual model/harness under test, running Superpowers.
 - **Evaluator:** checks the resulting behavior and artifacts.
 
@@ -172,8 +205,8 @@ goal after the initial slice.
 Discuss these in the order that helps the design; they are questions, not
 separate process gates or implementation tasks.
 
-1. **Scenario authoring:** What does an author write about the user's goal,
-   knowledge, replies, and approvals? When is an exact scripted turn needed?
+1. **Single-scenario execution:** Given a prose story, fixture, and checks,
+   what does the runner own from setup through completion and evidence capture?
 2. **Targets:** Which settings must be independently selectable, and what
    should unsupported combinations look like before execution?
 3. **Execution experience:** Where should the first useful version run, and
@@ -202,6 +235,10 @@ Pinned source inspected on 2026-09-07:
 - [smevals source](https://github.com/prime-radiant-inc/smevals/tree/0c28dc6298eb0e6c3b47e296e82a6972a01d76d0)
 - [Concurrency PR #2](https://github.com/prime-radiant-inc/smevals/pull/2)
 - [August direction panel](../../experiments/2026-08-17-platform-direction-panel.md)
+- [Current scenario authoring guide](../../scenario-authoring.md)
+- [Go fractals story](../../../scenarios/sdd-go-fractals-opus48/story.md)
+- [Code review story](../../../scenarios/code-review-catches-planted-bugs/story.md)
+- [Purpose-discovery response controls](../../../scenarios/brainstorming-todo-purpose-discovery/story.md)
 - [Local smevals investigation and five peer reports](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/smevals-unification/READOUT.md)
 - [Local Quorum architecture/history/evidence investigation](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/evals-architecture-audit/READOUT.md)
 
@@ -222,3 +259,8 @@ implementation or operational claims.
 - **2026-09-07:** Drew requested a persistent working design document to
   avoid losing context to compaction. This draft records the starting point;
   detailed interfaces and implementation remain open.
+- **2026-09-07:** Drew clarified that he wants to define basically none of
+  the exchange and directed us to the existing scenario format. Reviewed the
+  authoring guide, scaffold, setup/checks, and ordinary and targeted stories.
+  Established prose brief plus acceptance criteria as the authoring baseline;
+  removed authored dialogue mechanics as the default design question.
