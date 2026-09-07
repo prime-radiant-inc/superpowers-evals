@@ -1,660 +1,621 @@
-# Unified eval product: working design
+# Unified evals: proposed specification
 
-**Status:** Brainstorming draft; not an approved specification or implementation plan.
-**Participants:** Drew and Bot.
-**Started / last updated:** 2026-09-07.
-**Purpose:** Preserve the discussion and its reasoning while we develop a spec.
+**Status:** Proposed for Drew's review; implementation has not started.
+**Participants:** Drew and Bot. **Updated:** 2026-09-07.
+**Canonical design:** This file. Earlier reasoning, investigations, and decisions
+are preserved in [research notes](2026-09-07-unified-evals-research-notes.md).
 
 ## Resume here
 
-Drew wants a simpler, modular eval product and has agreed to consolidate
-around smevals with a replaceable runner owning each complete live harness
-interaction. The initial architecture and smevals investigations are complete.
-We are now refining the execution experience; implementation has not started.
+Build one eval product in **smevals**. It schedules complete runs, invokes
+checkers, and produces a common report. A replaceable interactive Runner
+conducts a whole conversation with a real coding harness. Start with Gauntlet
+as that Runner's conversation driver and reuse useful provisioning, fixture,
+and transcript code from Superpowers Evals.
 
-The six requirements and product/runner boundary below are agreed with Drew.
-Specific component implementations and the first milestone remain proposals.
-No existing implementation, language, or orchestration policy is a constraint
-on the new design.
+Drew has agreed to the product requirements, whole-run boundary, appliance
+ownership, configuration separation, completion/grading distinction, and
+capacity targets below. This draft proposes the concrete contracts, command
+surface, lifecycle, packaging, and first delivery slice for review. Approval
+to draft this spec does not authorize implementation, deployments, or live
+spend. The next step after review is an implementation plan.
 
-**Authoring clarified:** Drew wants to define basically none of the exchange.
-Use the current prose scenario brief and acceptance criteria as the starting
-point; the driver conducts the conversation. No authored turn sequence or
-mandatory reply/persona schema. The complete interaction is one smevals run;
-the core does not manage individual exchanges. Most live execution will use
-the existing appliance for its shared credentials and Mantle/Bedrock access.
-Drew confirms there are no old Quorum workloads to support. The new product
-has no Quorum coexistence or backward-compatibility requirement. Drew agrees
-to reuse existing auth sources and useful harness delivery code, with separate
-responsibilities for targets, connections, and shared resource limits. Exact
-schemas and target-selection UX remain open. Drew agrees that a completed
-bad implementation or review is a valid run and important signal. Evaluate
-the transcript and any scenario outputs after the interaction. Submitted
-batches belong to the appliance: the client records an ID and polls until
-completion, as in current evals. Client disconnects do not stop execution.
-Worker implementation, grading/report shape, and detailed execution controls
-remain open. Drew agreed to eight concurrent runs as the normal target,
-qualification at sixteen, and initially two heavy build/browser attempts
-within the total. Six is demonstrated; the agreed higher targets still need
-qualification. Next, turn the working decisions into a concrete proposed spec,
-using an end-to-end example to settle inputs, worker/checker contracts, and
-the report. Detailed implementation and first-slice choices remain proposals.
+## 1. Product and scope
 
-Keep this document current after substantive discussion: promote an agreed
-proposal into a decision, retain a short reason when an alternative is
-rejected, and update this checkpoint. The eventual spec should grow from
-this document. Research reports remain supporting evidence.
+The product must let an author:
 
-## What Drew wants
+1. Describe scenarios in natural-ish prose, with YAML for configuration.
+2. Exercise Superpowers through a live coding harness as an end user would.
+3. Select any group of supported model/harness configurations.
+4. Run all models and harnesses supported by Superpowers in compatible environments.
+5. Receive a standardized report, including transcript and output grading.
+6. Run many independent sessions concurrently within and across harness families.
 
-1. Describe eval scenarios in natural-ish language, using YAML or similar.
-2. Run those scenarios by driving a live coding harness as an end user would.
-3. Select an arbitrary group of supported model/harness combinations.
-4. Support all models/harnesses supported by Superpowers.
-5. Emit a standardized report instead of bespoke analysis.
-6. Run with high parallelism within a harness and across multiple harnesses.
+An author defines the task and expected behavior, essentially none of the
+exchange. The simulated user handles questions, clarification, ordinary
+approvals, and task completion. A finished bad implementation, review, or
+refusal is an observed outcome, not an excuse to rerun or coach the subject.
 
-Superpowers runs in a user-driven loop. An eval must reproduce the relevant
-interaction: questions, clarification, design/plan approval, follow-up,
-implementation, and completion. Calling a model API directly is useful for
-other smevals evals, but does not establish that experience.
+Most live execution belongs on the existing appliance, using its credentials
+and Mantle/Bedrock access. Local authoring, validation, offline testing, and
+report viewing remain useful. Full local live parity is not required for the
+first delivery. The Linux appliance's capabilities do not limit the product's
+eventual support for other environments.
 
-Drew explicitly permits reconsidering every layer, including Quorum,
-Gauntlet, drivers, and reports. Components should have useful boundaries;
-no component should dictate the whole product.
+Quorum is replaced as a product. There are no old workloads to preserve: no
+old CLI/result compatibility, coexistence controller, campaign continuation,
+or historical-result migration is required. Reuse code and scenarios where
+they fit. Existing smevals API-oriented evals remain first-class users of the
+same Runner/Checker boundary; they need no simulated user or coding harness.
 
-## Scope and decision status
+Defer restart recovery, seals, campaign journals, statistical significance,
+automatic retries/replacement samples, historical sample top-up, fleet
+scheduling, and a new secret manager. Finite execution, isolation, retained
+evidence, cancellation, and truthful reports are part of the core.
 
-| Item | Status |
+## 2. Architecture and ownership
+
+```mermaid
+flowchart LR
+    A[Scenario and target configs] --> S[smevals batch supervisor]
+    C[Client: submit and poll] --> S
+    S --> R[Interactive Runner: one whole run]
+    R --> D[Replaceable conversation driver]
+    D <--> H[Live coding harness with Superpowers]
+    R --> E[Transcript and workspace evidence]
+    E --> G[smevals Checker jobs]
+    G --> O[Common report model]
+    S --> O
+```
+
+| Component | Responsibility | Initial implementation |
+|---|---|---|
+| smevals core | Resolve tasks/configs, expand the finite matrix, schedule jobs, record runs/grades, report | Existing Python product, with execution and reporting internals corrected |
+| Appliance host adapter | Detached supervisor lifetime, isolated runtimes, private auth delivery, stop/cleanup | Existing Linux host and service manager, container per live run |
+| Interactive Runner | Provision fixture/harness, conduct the complete interaction, stop children, collect evidence | Bun executable in smevals, extracting useful Quorum code |
+| Conversation driver | Act as the user through the prepared live harness; return when interaction concludes | Gauntlet conversation-only entrypoint |
+| Harness adapter | Install/configure/launch a harness, expose interactions, identify/capture sessions | Reused adapters and normalizers behind a small per-harness interface |
+| Scenario and checkers | Describe the task; evaluate behavior, transcript, and outputs | Superpowers suite in smevals; deterministic and optional model-based checkers |
+| Report readers | Display the same run/grade records | CLI, JSON, Markdown first; Studio consumes the same reader |
+
+Keep the reusable Bun worker package separate from the Superpowers scenario
+suite inside the smevals repository. Gauntlet remains an independent driver
+library/product. There is no language rewrite prerequisite. Quorum's entire
+CLI, campaign controller, global child state, and nested scheduling do not
+cross the boundary. The worker is an executable plugin, not a new service.
+
+Each Runner invocation corresponds to one scenario × target × repetition.
+The core does not see or schedule individual conversation turns. The Runner
+cannot create more matrix cells. A Checker receives retained evidence and
+cannot restart the subject. This leaves API-only runners and alternative live
+drivers possible without changing scheduling or reporting.
+
+## 3. Scenario authoring
+
+Keep smevals' task/config/grader vocabulary. A **scenario** is a task using
+the interactive Runner; a **target** is a named subject configuration. Authors
+can put brief prose directly in task YAML or reference a Markdown file.
+Fixtures and deterministic checks remain ordinary files beside the task.
+
+Illustrative task file, with paths relative to its eval directory:
+
+```yaml
+schema_version: 1
+id: code-review-catches-planted-bugs
+runner: interactive
+brief_file: scenarios/code-review/user.md
+setup: [bun, scenarios/code-review/setup.ts]
+limits:
+  timeout_seconds: 1800
+resources:
+  class: ordinary
+grader: code-review
+```
+
+`user.md` describes the task from the user's perspective:
+
+> Ask the coding agent to review the change in this repository before merge,
+> using a reviewer subagent. Answer ordinary clarification questions briefly.
+> Do not identify the planted defects. End when it delivers its review and
+> merge recommendation, even when that recommendation is wrong.
+
+The setup seeds the existing two-commit fixture. It is not authored dialogue.
+The corresponding grader file contains independently addressable criteria:
+
+```yaml
+schema_version: 1
+id: code-review
+checks:
+  - id: reviewer-dispatched
+    checker: transcript
+    requires: [subject_transcript]
+    config: {assertion: reviewer_subagent_dispatched}
+  - id: review-quality
+    checker: semantic
+    requires: [subject_transcript, final_response, fixture_diff]
+    config:
+      criteria:
+        - id: sql-injection
+          assertion: Identify the SQL injection and its impact.
+        - id: credential-handling
+          assertion: Identify insecure password handling or credential logging.
+        - id: merge-recommendation
+          assertion: Assign appropriate severity and withhold merge approval.
+```
+
+Each criterion has a stable ID and its own result. A review can be an
+artifact in the transcript; it need not be written to a separate file by the
+subject. The Runner extracts a final-response artifact for convenient reading
+while retaining the full source transcript.
+
+Setup executes from the materialized eval root, with `--request` pointing to
+a JSON file containing the fixture root and isolated destination workspace.
+It receives no grading rubric. Exit 0 means setup finished; a nonzero exit is
+an execution error at stage `setup`, before any subject launch. Reusable
+prerequisite checks follow the same rule. Setup scripts may delegate to the
+existing fixture helpers without retaining Quorum's CLI or environment contract.
+
+The simulated user sees the brief and user-known facts. The private rubric,
+checker implementation, and expected answers are supplied only to grading,
+not to the subject or simulated user. Some facts naturally appear in both the
+brief and rubric; intentional repetition is fine. The worker receives only
+execution material in its subject-visible filesystem. Trusted setup code runs
+before the harness starts; private checks run later in a separate workspace.
+
+Allow optional scenario-specific exact stimuli or response constraints in the
+brief. The purpose-discovery experiment requires those controls. They do not
+become a mandatory persona schema, response graph, or turn DSL for other tasks.
+Setup is optional for conversation-only tasks. Scenario validation checks
+paths, stable IDs, checker configuration, declared evidence requirements,
+limits, and capability constraints without contacting providers.
+
+## 4. Targets, connections, and capacity
+
+A target pins the **harness, requested model, Superpowers selection, effort,
+permission mode, harness settings, and connection reference**. Harness versions
+and Superpowers source refs are resolved before acceptance and recorded.
+Model IDs pass through exactly; the report distinguishes the requested ID
+from a model identity reported by the provider. If a harness supports only
+provider/default selection, that is an explicit selection mode, never a fake
+pinned model name. Malformed configurations reject submission. Valid but
+unsupported scenario/target combinations receive non-runnable dispositions
+while eligible cells proceed; never silently substitute model, provider, or effort.
+
+A connection holds **protocol, endpoint/region, and an auth-source reference**.
+It does not own a model, harness, or concurrency limit. Existing environment,
+file, subscription/OAuth, and appliance-managed Bedrock auth sources remain
+available through the adapters that support them. Credentials are materialized
+privately per run from the selected sources; no new keys are implied. Never
+serialize secret values or whole environments into public config snapshots.
+
+Resource groups express **shared concurrency and launch spacing**, independently
+of auth identity. Targets using the same account can share an account group;
+they can also consume different model groups. Identical endpoint URLs neither
+prove shared quota nor define the pool. Limits come from appliance policy,
+not whichever credential happens to sort first.
+
+Illustrative named selections derived from existing registry entries:
+
+| Target | Role / runtime | Requested model | Connection |
+|---|---|---|---|
+| `claude-opus5` | Subject / Claude | `anthropic.claude-opus-5` | Mantle in `us-east-1`, existing Bedrock bearer source |
+| `codex-sol` | Subject / Codex | `gpt-5.6-sol` | OpenAI Responses, existing OpenAI source |
+| `user-sonnet5` | Simulated user / Gauntlet | `anthropic.claude-sonnet-5` | Existing Mantle route |
+| `judge-sonnet5` | Semantic evaluator | `anthropic.claude-sonnet-5` | May use the same Mantle connection |
+
+These are proposed first-slice choices, based on checked-in configuration,
+not new live qualification claims. Gauntlet's selected model client must
+support that route. Preserve separate role/configuration identities even when
+user and judge use one model or auth source. Deterministic checkers need no LLM.
+
+The eval configuration selects default `user_target: user-sonnet5` and
+`judge_target: judge-sonnet5` for this example. A submission may explicitly
+select different role targets; resolve those choices alongside the subject
+target list and record them. Scenario prose remains model-independent.
+
+All configs use the same target schema, whether selected by name or supplied
+inline. Resolve them once into the batch request; no interacting global model
+overrides. A target capability listing exposes supported harness, connection,
+effort, OS, question/permission interactions, and capture coverage with reasons
+for unsupported combinations. A normalizer's existence is not launch proof.
+Capabilities describe protocol/runtime constraints, not a closed catalog of
+model IDs. A new exact model ID can use an adapter that supports explicit model
+selection; an unqualified route is labeled as such, and provider rejection is
+an execution error rather than silent fallback.
+
+The agreed capacity targets are **8 normal, qualify 16, initially 2 heavy runs
+within the total**. Six concurrent sessions are demonstrated; 8 and 16 are
+not. Sixteen is not a product ceiling. Preserve existing provider limits until
+qualification justifies changes; a request for 8 may initially dispatch fewer.
+
+Admission acquires all of a job's named resource groups together. A live run
+reserves subject and simulated-user demand for its lifetime; if both use the
+same group, count both seats. This deliberately conservative first version
+avoids a per-API-call scheduler. A semantic Checker consumes its judge groups
+only while running. In version one, retain live-run/provider slots through the
+Runner's bounded capture and release them after the Runner and its children
+are stopped. This avoids a second lifecycle handshake. Evidence publication
+and grading happen afterward, with two concurrent jobs each and host CPU/memory
+limits. These queues make progress independently; there is no
+wait-for-the-whole-batch grading barrier. Measure capture time before adding
+earlier slot release as an optimization.
+
+Use resource-class `heavy` for full build/browser tasks. It consumes one total
+run slot and one of two heavy slots. Harness-family caps are optional policy,
+not a default one-session mutex. Compatible queued work may proceed when a
+particular target is quota-blocked; rotate among target and grading queues to
+avoid starving one arm or role. Rate-limit observations delay new admissions
+for the affected group and appear in status. They do not trigger automatic
+replacement runs.
+
+## 5. Appliance submission and supervision
+
+Proposed command surface; these commands do not exist yet:
+
+```sh
+smevals validate evals/superpowers
+smevals submit evals/superpowers --appliance evals \
+  --task code-review-catches-planted-bugs \
+  --target claude-opus5 --target codex-sol --repeat 1 \
+  --jobs 8 --deadline 2h --submission-id review-example-001
+smevals status review-example-001 --appliance evals
+smevals report review-example-001 --appliance evals --format markdown
+smevals cancel review-example-001 --appliance evals
+```
+
+Normal submission generates an ID and saves it locally **before** sending.
+An explicit ID makes the example easy to repeat. The client sends the selected
+eval snapshot, target selections, repeats, limits, and grader specification.
+The appliance resolves repository refs/materializes source, validates the
+request, expands the finite run inventory, and persists it before accepting
+responsibility. The acceptance response gives the stable batch ID and counts.
+An acceptance is not a claim that execution has begun.
+
+The same submission ID and request return the same batch. Compare the submitted
+request before resolving refs again; accepted refs/configs stay frozen even
+when a branch or appliance default later moves. Reusing the ID with a different
+request is an error. Lost acknowledgment means query or retry the
+same ID; never silently submit a new one. Polling is read-only observation.
+SSH disconnects, sleeping laptops, and lost observer context do not affect
+execution. Sources, configuration, and the planned inventory cannot change
+under an accepted batch; a later execution requires a new submission.
+
+Use one active finite batch per appliance initially. Reject a second with the
+active ID; do not add a persistent batch queue or multi-tenant daemon. Parallelism
+is within the batch's arbitrary target matrix. A detached service-manager unit
+owns the batch supervisor. The supervisor alone writes lifecycle records;
+workers return completion facts. Keep an immutable request, atomically replaced
+status, and one run record/evidence directory per planned run. There is no
+event replay or database recovery protocol.
+
+Each live run gets a subject container with its own HOME, workspace, scratch,
+tmux server, and auth projection. Its trusted Runner and simulated-user driver
+run outside that container under the appliance-owned process group, with private
+per-run runtime state. The driver interacts through the prepared harness adapter.
+Its credentials, private user brief, control files, and result-writing authority
+are outside subject-readable/writable mounts. Materialized fixtures can use
+immutable shared caches, but writable homes/workspaces cannot overlap. The
+subject gets only its own needed auth, not user/judge credentials, private
+checks, other runs, or the host Docker socket. Native subject children/subagents
+stay in its container. Cleanup owns both the trusted worker group and container.
+
+Persist the run identity before creating its container, create with exact
+batch/run ownership labels, record the container ID, then start it. This makes
+an interrupted launch identifiable without adopting or restarting it. A host
+ownership lock plus service identity prevents two supervisors; process identity
+must include its birth identity, not merely a recycled PID.
+
+The host adapter prepares this sandbox before invoking the Runner and passes
+its scoped runtime handle in the request. The Runner provisions and launches
+the subject inside that sandbox; it does not allocate an unreported container.
+On return or failure, the host adapter verifies sandbox termination before
+releasing the run slot. This needs no mid-run core/driver conversation protocol.
+
+The runtime enforces a finite run deadline independently of expensive supervisor
+work. The required batch deadline bounds queueing, execution, and grading.
+Cancellation is durable, idempotent, and stop-only: stop admission and owned
+execution/grading workers first, allow a short bounded grace, then force stop.
+Collect whatever evidence is available afterward. Pending runs become
+`not_started` with the reason. Do not declare cleanup done on a timeout alone;
+verify owned runtimes stopped. While cleanup is uncertain, show
+`cleanup_pending` and retain the host ownership lock.
+
+Supervisor loss fails the batch. The service manager's stop hook and independent
+container deadlines terminate children. Status can detect an absent supervisor
+and expose an interrupted batch even when no final status was written. A
+stop-only cleanup operation may stop exact labeled leftovers; it cannot adopt,
+resume, or replace them. Host restart follows the same rule. A fresh batch
+requires a fresh ID after cleanup. There is no restart recovery requirement.
+
+Status includes planned/queued/running counts, runs finished, evidence/checker
+work pending, results so far, resource waiting reasons, and cleanup state.
+Batch `completed` means all planned dispositions and requested grading are
+settled and runtimes stopped; it may contain behavioral or per-run instrument
+errors. `failed` means batch supervision/publication could not finish or its
+deadline expired; `cancelled` means an explicit cancellation stopped it. A
+terminal outcome with `cleanup_pending` is visibly unsettled. Every planned
+run still appears in the report.
+
+The core-owned scheduling disposition is `queued | running | finished |
+unsupported | not_started`. Runs admitted for launch have execution records;
+cells never admitted have a disposition reason and `not_graded` rather than a
+fabricated Runner result. A launch failure has disposition `finished` and an
+execution error at stage `launch`; capture may be absent. Lifecycle writes use
+atomic replacement; the absence of a final Runner envelope never removes a
+planned row.
+
+## 6. Executable boundary and live behavior
+
+Runner and Checker executables share a versioned JSON-file transport:
+
+```text
+<configured argv...> --request <absolute request.json> --result <absolute result.json>
+```
+
+Invoke argv directly. Stdout/stderr are diagnostic files, not a result protocol
+or an implicit answer. Private runtime paths are supplied separately from the
+persisted nonsecret request snapshot. Results and referenced files must remain
+inside the job's evidence directory; reject escaping paths and symlinks.
+
+| Runner request field | Meaning |
 |---|---|
-| The six product requirements above | Agreed requirements from Drew. |
-| Real end-user interaction for Superpowers tests | Agreed requirement; exact interaction controls need design. |
-| Author defines basically none of the exchange | Explicit clarification from Drew; preserve the current prose-brief authoring model. |
-| Modular components and replaceable layers | Agreed direction. |
-| Centralize efforts around one eval product in smevals | Agreed direction. |
-| One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
-| Completion is distinct from behavioral success | Agreed: completed bad implementations and reviews remain runs and important signal. Do not coach toward a passing grade. |
-| Grade the transcript and scenario outputs | Explicit requirement from Drew. Evaluate outputs when the scenario produces them; transcript evaluation remains required. |
-| Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
-| Appliance owns submitted execution; clients poll by ID | Explicitly agreed by Drew, preserving the current submit-and-poll operating model. Polling is observation, not a keepalive. |
-| Eight normal / sixteen qualified / two heavy within the total | Agreed targets after appliance, history, and scenario inspection. Six is demonstrated; eight/sixteen still require qualification. |
-| Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
-| Reuse auth delivery; separate targets, connections, and resource limits | Agreed direction. Exact schemas, target selection, and extraction details remain open. |
-| Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
-| Keep one working document through brainstorming | Requested by Drew to preserve context across compaction. |
-| Specific schemas, command syntax, packaging, deployment, and scenario reuse | Open; not approved. |
-| Implementation, existing-code removal, or paid runs | Not authorized by this design discussion. |
-
-Sealing, restart recovery, deep statistics, and elaborate analysis are
-deferred. They should not return as prerequisites merely because older
-campaign designs required them. Their future value remains a separate
-question. Automatic retries, historical sample top-up, and fleet scheduling
-are also not established requirements.
-
-Quorum is being replaced as an eval product. There is no requirement for
-parallel operation of old and new engines, legacy CLI/result compatibility,
-campaign continuation, or a compatibility bridge. Reuse existing scenarios,
-infrastructure, and code where they serve the new requirements; preserving
-the old product's behavior is not an acceptance criterion.
-
-Basic execution correctness still matters: independent sessions, known
-effective inputs, finite time limits, cancellation/cleanup, retained
-evidence, and a visible distinction between subject failure and instrument
-failure. The mechanisms and first-version scope remain to be designed.
-
-## Proposed user experience
-
-An author writes a natural-language scenario brief and acceptance criteria,
-with starting fixtures and deterministic checks supplied separately. The
-driver reads the brief and conducts the live conversation. The author should
-not have to enumerate questions, answers, approvals, or conversation states.
-They choose target configs and repetition/concurrency settings, start a batch,
-inspect progress, and receive the same report format for every target.
-
-### Start from the existing scenario abstraction
-
-The current format is `story.md` with YAML metadata and prose, `setup.sh`
-for the fixture, and `checks.sh` for deterministic pre/post assertions.
-The story briefs the Gauntlet-Agent and includes semantic acceptance
-criteria; it is not a transcript or a machine-readable dialogue program.
-
-For example, `sdd-go-fractals-opus48/story.md` gives an example initial
-request, then says to let the coding agent proceed autonomously and answer
-clarifications briefly. `code-review-catches-planted-bugs/story.md` gives
-a review request, forbids revealing the planted defects, and says a completed
-bad review is still a completed run. Gauntlet handles the actual interaction.
-
-Some targeted tests pin particular messages or contingent replies because
-those are the stimulus being tested. `brainstorming-todo-purpose-discovery`
-has a detailed response policy, and the current authoring guide encourages
-canned replies. That is evidence of existing experimental controls, not a
-requirement that every new scenario define an exchange. Drew's desired
-default is the lighter prose brief. Exact wording or constraints can remain
-scenario-specific when necessary to express the test.
-
-**Design consequence:** Preserve this level of abstraction when integrating
-with smevals. A story may remain Markdown or be referenced/embedded in YAML;
-file packaging is open. Do not invent a mandatory conversation DSL, persona
-form, or answer-policy schema. Shared driver behavior should carry ordinary
-interaction mechanics. This authoring choice does not yet settle whether
-the user actor and semantic grader share an implementation or model.
-
-The scenario should be reusable across supported targets. Harness, subject
-model/provider, Superpowers version/configuration, and interaction settings
-belong in explicit target configuration rather than per-scenario wrappers.
-The location of those fields and the authoring vocabulary are proposals,
-not a frozen schema.
-
-There are three distinct roles:
-
-- **Simulated user:** interprets the prose brief, supplies the request, and
-  handles the conversation without an author-specified sequence of turns.
-- **Coding agent:** the actual model/harness under test, running Superpowers.
-- **Evaluator:** checks the resulting behavior and artifacts.
-
-These are logical responsibilities, not a requirement for three services
-or three LLMs. Their model/configuration identities must remain distinct.
-A deterministic evaluator may require no LLM. Private grading criteria
-should not become coaching instructions for the simulated user.
-
-Conversational approvals, native question-tool dialogs, and harness tool
-permission prompts are separate behaviors. The intended interaction mode
-must be explicit; a bypass flag should not silently redefine the test.
-
-## Agreed product boundary and candidate implementations
-
-smevals owns scenario/config selection, scheduling, result collection,
-grader invocation, and standard reporting. A replaceable interactive Runner
-reads the prose brief, prepares the workspace, drives the real coding harness,
-handles the whole conversation, and returns execution evidence. Superpowers
-scenarios and checkers describe and evaluate the behavior under test.
-
-Harness-specific dialog handling and Superpowers workflow knowledge belong
-inside workers/checkers rather than the smevals scheduler or core authoring
-schema. smevals can remain a general-purpose eval product: direct model-call
-evals use simpler runners through the same whole-run boundary. Improvements
-to configuration delivery, target selection, supervision, and error/report
-semantics are shared execution capabilities.
-
-The team recommends using smevals' Runner and Checker executable boundaries
-as the starting point. Files and structured input/output can connect Python
-and TypeScript. There is no demonstrated need for a language rewrite or
-a per-turn RPC service in the product core.
-
-| Responsibility | Candidate implementation; not a final selection |
-|---|---|
-| Authoring, target selection, and batch submission | smevals CLI; Studio as an optional client of the same core. |
-| Finite job dispatch, resource caps, and process supervision | One shared core within smevals; existing execution internals may change. |
-| One complete live attempt | A reusable worker that provisions, drives, captures, and cleans up one session. |
-| User interaction | Gauntlet's existing TUI loop initially; CSD or another driver where it preserves the required behavior. |
-| Harness setup, fixtures, capture, and checks | Reuse selected Quorum code behind appropriate boundaries. |
-| Evaluation and reporting | Independent checkers/graders; one selected result set and reader for CLI, UI, and static output. |
-
-Direct model-call runners should remain useful in the same product without
-requiring a simulated user. Superpowers Evals would contribute a scenario
-suite and reusable workers/checkers. Gauntlet and other general-purpose
-components can remain independently useful packages or repositories.
-
-### Proposed live worker implementation
-
-Start with one isolated worker process per attempt. It receives resolved
-inputs, prepares the workspace and selected harness/auth/Superpowers setup,
-uses Gauntlet to conduct the conversation, and returns the transcript,
-workspace artifacts, and execution status. Reuse useful Quorum provisioning
-and capture code at these steps. The driver implementation remains replaceable.
-The supervisor provides a deadline and cancellation that stops the worker's
-process tree; preserve available evidence when a run stops early.
-
-### Agreed completion and grading evidence
-
-Finish the interaction when the requested task has concluded, even when the
-coding agent did it badly. A completed bad implementation or review is a run
-and provides important signal; retain it in the results. Normal questions,
-approvals, and feedback remain part of the simulated user's role. Private
-grading criteria must not drive repeated coaching until the subject passes.
-A scenario can explicitly exercise correction or persistence when that is
-the behavior under test, without requiring ordinary authors to script turns.
-
-Run final evaluation after the interaction, covering the transcript and any
-outputs the scenario produces. The transcript establishes behavior such as
-clarification, approval, skill use, and review reasoning. Outputs establish
-the quality of produced code, reviews, plans, or other deliverables. A review
-or plan may itself appear in the transcript; these are evidence sources, not
-a requirement for two files, two graders, or separate aggregate scores. Correct
-code does not establish that the required workflow was followed, and a good
-conversation does not establish that the resulting implementation works.
-
-**Proposed grading contract:** Use acceptance criteria to select relevant
-transcript and output evidence, with findings tied to that evidence. Some
-criteria need both. Do not require a file artifact for a conversation-only
-scenario. When output capture succeeds but an expected deliverable was never
-created, that absence is behavioral evidence. Failed capture or a broken
-checker is an evaluation/instrument problem, not proof of bad subject behavior.
-
-Gauntlet's own assessment may be retained as evidence, but does not decide
-whether a behavioral failure counts as a completed execution. Deterministic
-checks may suffice, with a model-based checker selected where semantic
-evaluation needs one. The exact grading contract, report representation, and
-adaptation of Gauntlet's current self-grading loop remain open.
-
-## Agreed appliance execution and proposed deployment
-
-Use the existing quorum appliance for most real eval execution. Drew points
-to the shared credentials and Mantle/Bedrock access already available there.
-Keep scenario authoring, static validation, and provider-free development
-checks convenient locally. Local live execution need not reach full parity
-before the first useful appliance-backed version.
-
-### Agreed remote operating model
-
-The appliance owns the submitted batch and the work needed to finish it. The
-client submits, records the returned ID, and polls that ID until the run is
-done, then reads the results. Disconnecting SSH, closing the laptop, or losing
-the observing agent's context must not stop, restart, or duplicate execution.
-Polling reads state; it does not drive work or renew an execution keepalive.
-Explicit cancellation is a separate operation against the identified batch.
-
-Submission acknowledgment is distinct from worker readiness and completion.
-Preparing/running/finished state must remain observable across new client
-connections, including before the first result exists. Completed runs with
-bad behavioral outcomes remain completed runs with failing grades. Process
-loss must not appear as successful completion. This preserves the existing
-operating experience without requiring old command syntax or result formats.
-Automatic recovery after an appliance/controller crash remains deferred.
-
-### Current implementation checked for this decision
-
-Ordinary `run`/`run-all --detach` creates a persisted job before spawning a
-detached appliance worker. The worker ignores stdin, writes stdout/stderr to
-job log files, and is unreferenced by the submitting process. It performs
-preflight and owns the container invocation and final job update. Container
-execution uses its own process session; appliance `run-all` explicitly omits
-SIGHUP from its stop signals while retaining SIGINT/SIGTERM. `status` reads
-job/artifact state, and `show`/`costs` retrieve results by ID. An early wrapper
-exit alone is not completion: the worker also checks terminal run artifacts.
-
-Campaign `run` has a different implementation of the same remote ownership
-model: it persists the start and controller identity, releases the launcher,
-opens the detached controller's start gate, and returns. The controller owns
-subsequent dispatch; status observes the recorded state and process/ownership
-identity. Client polls do not renew its lease. Campaign report publication is
-an explicit later operation, separate from execution. The new design inherits
-the operating behavior, not the campaign's registration, gate, lease, sealing,
-or termination-reconciliation implementation as mandatory machinery.
-
-For the ownership trace, source and existing tests were inspected on 2026-09-07. The focused
-`bun test test/appliance-summary.test.ts test/run-all-shutdown.test.ts` check
-passed all 19 tests, covering status before results, terminal and lost states,
-and stop handling with fake workers. That trace used local source/offline
-evidence. The subsequent capacity inspection below refreshed installed-host
-state read-only; no live eval was performed.
-
-- [Ordinary job submission](../../../src/appliance/cli.ts)
-- [Detached worker, container invocation, and completion](../../../src/appliance/process.ts)
-- [Job and artifact status](../../../src/appliance/summary.ts)
-- [Batch signal handling](../../../src/run-all/index.ts)
-- [Campaign launch and controller handoff](../../../src/appliance/campaign-run.ts)
-- [Campaign status and cancellation](../../../src/campaign/cancellation.ts)
-
-### Proposed implementation and capacity
-
-Start with the smevals batch engine on one appliance, launching independent
-live-session workers there. CLI/UI submission and report retrieval should use
-the same run/config/result contracts. Current operation uses short helper
-invocations over SSH; this is the starting transport to reuse. Exact packaging
-and command syntax remain open; a fleet scheduler or new always-on remote
-service is not a prerequisite for this first host.
-
-Reuse the host, provider access, and useful runtime/provisioning pieces while
-implementing the agreed whole-run boundary. The new engine owns execution on
-the appliance. Quorum's campaign controller, registration, seals, CLI entry
-points, and report policy impose no compatibility requirement on that design.
-
-Credentials remain managed in the execution environment and are supplied to
-workers as needed. Scenario authors should not have to copy the shared bundle
-to their machines or reimplement provider authentication. Verify the actual
-selected auth path when integrating, rather than assuming every provider
-requires a new bearer token or credential arrangement.
-
-Shared access does not establish unlimited parallel capacity. Bound active
-sessions and shared provider/resource use within the new engine. There is no
-old Quorum scheduler or workload to coordinate with. Large artifact handling
-and reporting must not block dispatch or stopping active workers. Exact limits
-require a real workload check and are not set by this discussion.
-
-The appliance is a Linux execution environment. Targets requiring another
-OS or runtime need a separate compatible executor later; the appliance must
-not redefine the full supported-harness requirement. Keep the core host-neutral
-without building multi-host orchestration before it is needed.
-
-The execution location, appliance ownership, and capacity targets are agreed.
-Deployment and capacity qualification details remain proposals.
-
-### Agreed capacity targets and supporting inspection
-
-**Agreed targets:** Eight simultaneous whole runs for normal operation and
-qualify sixteen on the existing appliance. Initially allow two heavy
-build/browser attempts within that total. One run is one scenario × target ×
-repetition, including its coding agent and simulated user. Sixteen is a
-qualification target, not a software ceiling. Drew accepted these targets;
-no runtime limits were changed and no qualification runs were launched.
-
-Read-only Tailscale SSH inspection on September 7 found an idle m6i.2xlarge
-with eight vCPUs, 30.82 GiB RAM, and 147.7 GiB free on its data filesystem.
-The installed helper's doctor passed. Installed evals revision `6c215603`
-has the same scenarios, coding-agent configurations, and credential registry
-as the inspected source baseline. The configured results root retained 743
-verdicts across 29 scenarios for August 10 through partial September 7,
-plus nine run directories missing verdicts and 46 batch records. This is a
-mixed operational corpus, not one comparable model-quality experiment.
-
-The September 4 campaign completed 150 runs in 121 minutes, peaked at six
-occupied attempts, and averaged 5.42. It had at least five outstanding for
-97.9% of its wall time, with load p95 1.22 and at least 26.10 GiB available RAM.
-The latest interrupted five-model campaign also peaked at six; its recorded
-load p95 was 1.38 and available RAM stayed above 25.23 GiB. Its terminal reason
-was stale telemetry. These receipts support host headroom, not demonstrated
-eight- or sixteen-run capacity. An earlier campaign did record CPU overload
-from simultaneous root-filesystem searches, so workload and child-process
-behavior still matter.
-
-The scenario inventory has 84 ready scenarios and three drafts, with five
-full product builds. Recent Go-fractals runs had a 38.7-minute median and
-78.6-minute p90, versus 5.2/15.1 minutes across all retained verdicts. Duration
-is not continuous CPU demand. Both Svelte/browser builds are adhoc and absent
-from ordinary full-tier sweeps; qualify that workload explicitly.
-
-The live user-model pool is an immediate constraint. The current signature
-suites select direct Sonnet with a configured cap of two; PR2258 selects
-Mantle Sonnet with a configured cap of six. These are current settings, not
-verified provider ceilings. Qualify the chosen user route above six to reach
-the proposed targets; raising only global jobs cannot do so. Separate final
-grading does not remove the simulated user's live capacity demand.
-
-After the first functional slice, compare a fixed interaction/workflow mix at
-six and eight, add a Go/Svelte mix with two heavy attempts, then qualify twelve
-and sixteen where observed host/provider behavior supports it. Keep targets,
-effort, user model, grading, and repetitions comparable. Measure wall time,
-per-run durations, completion/errors, resource pressure, and throttling, plus
-disconnect/cancellation behavior. This remains a proposed acceptance shape,
-not a launch or spending plan.
-
-See the [capacity readout and primary evidence](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/evals-capacity/READOUT.md)
-for campaign cohorts, scenario inventory, metadata collection/analysis scripts,
-and limitations. The inspection used existing records and read-only host
-commands; it did not read secret values, launch provider work, or change the
-appliance.
-
-## Target and credential model
-
-**Agreed direction:** Reuse the appliance's existing credential sources and
-the useful harness-specific delivery code. Separate the target being tested,
-its connection/auth configuration, and shared resource limits. No new secret
-manager or provider-authentication service is proposed. The implementation
-details below remain recommendations, not an approved schema or extraction
-plan.
-
-### What the current system combines
-
-`credentials.yaml` is a committable registry of references and metadata, not
-the secret bundle. Its `Credential` record combines model, API/endpoint,
-auth method and source, harness eligibility, region/provider quirks, and
-capacity settings. The file's opening comment and the August platform design
-explicitly identify model-to-credential coupling as a deliberate compromise.
-
-That compromise helped keep the requested model consistent across launch
-and reporting. The new model must preserve that consistency without forcing
-one named credential record per model. Resolve one complete run configuration,
-apply precedence once, and give the worker and report the same non-secret
-effective settings. Keep exact provider request identifiers and observed
-model identities distinct; do not rewrite request IDs using display-name rules.
-
-### Agreed configuration responsibilities
-
-| Concept | Responsibility |
-|---|---|
-| Target | What is tested: harness, exact model, connection reference, effort/settings, and Superpowers selection. |
-| Connection | How the selected model is reached: API/protocol, endpoint or region, provider settings, and reference to appliance-managed authentication. |
-| Resource limits | Named shared capacity and optional launch spacing consumed by resolved work; independent of the secret's name. |
-
-These are configuration responsibilities, not three new services. A named
-target can remain convenient to select while several targets share one
-connection/auth source. The author-facing choice between target presets and
-ad hoc harness/model selections remains open. Ordinary scenarios do not
-contain credentials or provider setup.
-
-The coding agent, simulated user, and any model-based grader have explicit
-model/access selections. Those roles may intentionally share a connection;
-separate roles do not automatically require different keys or accounts.
-Each process receives its selected auth/routing configuration. An API-only
-grader need not have a coding harness or Superpowers settings.
-
-### Reuse the delivery work, change its surrounding contract
-
-Keep or extract the family/auth delivery mappings, selected environment and
-OAuth-file projection, private auth-file writers, isolated HOME/XDG setup,
-and harness-specific configuration generation. Codex subscription and custom
-provider setup, Pi's provider-scoped native login, and Claude's API-key,
-setup-token and Mantle paths contain useful implemented behavior. Replacing
-these with generic API-key injection would lose supported modes.
-
-Accept resolved target/connection information and an explicit credential
-source at the extracted boundary, instead of loading Quorum's registry and
-coding-agent YAML from an evals-root argument. Keep secret values in private
-execution state outside task/config/report artifacts. Retain endpoint and
-reference validation, and reject unsupported harness/auth/protocol combinations
-before launch; a connection's existence does not imply universal compatibility.
-
-The inspected Claude/Mantle route explicitly uses the selected bearer and
-region. This source audit establishes neither live IAM/IMDS readiness nor a
-need to obtain a new bearer. Preserve the available route and verify its
-actual source during integration. Native OAuth also remains in scope:
-`prepareAttemptStage` rejects OAuth as a V2 campaign restriction, despite
-the underlying delivery map supporting it. That restriction does not carry
-into the new product.
-
-Do not import the appliance's fixed staging/active/recovery generation
-lifecycle, campaign authority, route-attestation policy, or registry-wide
-constraints as a credential subsystem. Reuse appropriate file/projection
-primitives inside the new worker lifecycle, with private per-run destinations.
-
-### Quota identity is not credential identity
-
-Current direct execution groups by endpoint/name plus API; the campaign pool
-derivation additionally includes model unless explicitly overridden. Neither
-derivation alone expresses every provider's shared limits. Multiple models
-can use one credential with different limits, and multiple credentials can
-share an account-wide limit. Use explicit resource groups, allowing a run to
-consume more than one where needed. Include user-actor/grader usage when they
-share those resources. One authoritative definition per group avoids
-reconciling repeated limits across credential aliases. Automatic key rotation
-or campaign reservation algorithms are not required by this proposal.
-
-Source inspection on 2026-09-07 covered the public registry/schema,
-resolution, scope projection, Claude/Codex/Pi provisioning, and both quota
-derivations. Existing contract tests were read, not rerun. No secret bundle,
-native auth file, environment values, remote host, or live provider was read
-or exercised. Useful source pointers:
-
-- [Credential schema](../../../src/contracts/credential.ts)
-- [Delivery selection](../../../src/credentials/scope.ts)
-- [Auth resolution and direct limiter](../../../src/credentials/resolve.ts)
-- [Appliance material projection](../../../src/appliance/credential-scope.ts)
-- [Claude provisioning](../../../src/agents/index.ts)
-- [Codex provisioning](../../../src/agents/codex.ts)
-- [Pi provisioning](../../../src/agents/pi.ts)
-- [Campaign pool derivation](../../../src/contracts/campaign/pool.ts)
-- [Campaign-only projection restrictions](../../../src/campaign/attempt-projection.ts)
-
-## Findings that constrain the design
-
-- Main smevals drops nested task values and most config fields before
-  execution. The reusable-runners branch improves config delivery but does
-  not preserve the complete resolved config. A worker and its result need
-  to agree on the actual inputs, including overrides.
-- Quorum's behavioral-failure exit code means execution failure to smevals.
-  A naive wrapper loses valid failing observations. Quorum's standalone
-  launch lock also prevents arbitrary parallel fan-out from another runner.
-- Missing or broken smevals checkers can become behavioral failures.
-  Execution status and evaluation outcomes need distinct representations.
-- Reports differ in result inclusion, and Studio's executive matrix keeps
-  only the busiest config. A common report must retain every selected target,
-  including errors, ungraded work, and partial/all-error batches.
-- The concurrency PR launches parallel subprocesses, but inherits HOME and
-  lacks universal deadlines/process-tree cancellation. Its generation
-  barrier delays grading and completion output. Parallel interactive
-  correctness remains unproved.
-- Gauntlet provides a real interactive TUI driver and currently also
-  self-grades. CSD supports Claude/Codex/Pi, disables Claude's question tool,
-  and lacks a mid-turn question-response state. Neither is automatically
-  the final interaction contract.
-- Existing normalizers, executable extensibility, and adapter names do not
-  prove that every required harness/model/Superpowers combination works.
-
-The team ran a provider-free probe of pinned smevals PR #2. Eight local
-0.3-second jobs completed in 2.938 seconds at concurrency 1 and 0.7615 seconds
-at concurrency 4, with the corresponding peak process counts observed.
-One deliberately nonzero runner left seven successful siblings and grades.
-All workers inherited one HOME. This proves subprocess overlap and ordinary
-nonzero-exit handling, not live-harness fidelity, cancellation, or throughput.
-
-The earlier rejection of smevals emphasized serial dispatch and campaign
-statistics. Those observations do not make its authoring/extension model
-unsuitable for the smaller requirements now under discussion.
-
-## Proposed first proof
-
-One prose scenario requires clarification and approval before implementation.
-Run it through two genuinely different supported harnesses, with repeated
-sessions overlapping within and across them. Use multiple supported model
-selections where available. Produce one report that correctly distinguishes
-behavioral failure, execution error/timeout, and grading error, retaining
-the relevant evidence. Evaluate both the interaction transcript and the
-produced implementation; retain completed failing outcomes in the report.
-
-Use offline workers for bounded supervision and failure cases, then real
-sessions for interaction fidelity. Submit through the appliance interface,
-disconnect the submitting client, and observe continued dispatch and completion
-from a new connection using the same ID. Explicit cancellation must also work
-from a new connection. This is a proposed milestone, not a run plan or spend
-approval. Full supported-target coverage remains part of the goal after the
-initial slice.
-
-## Discussion queue
-
-Develop the next proposed spec around one concrete end-to-end example: a
-scenario brief, selected targets, appliance submission/status, worker evidence,
-and the resulting report. Resolve the following details in that draft for
-review; they are not separate process gates or implementation tasks.
-
-1. **Evaluation/report:** Define criterion results and evidence references
-   for the agreed transcript/output coverage, including deterministic and
-   model-based checks and unavailable evidence.
-2. **Capacity and execution controls:** Define progress, cancellation, and
-   concurrency controls around the agreed eight/sixteen/two targets and
-   appliance-owned submit-and-poll model.
-3. **Target selection:** Choose how users select targets and specify
-   resolution/compatibility behavior within the agreed configuration separation.
-4. **Live worker:** Choose the initial implementation and specify setup,
-   capture, termination, and cleanup within the agreed whole-run boundary.
-5. **Interfaces and reuse:** Derive the Runner/Checker and internal harness
-   boundaries from the agreed experience; decide what existing code fits.
-6. **First slice and scenario reuse:** Pick the actual scenario/targets,
-   define acceptance evidence, and select useful scenarios/adapters to bring
-   across. No old Quorum workload or compatibility migration is required.
-
-## Evidence and history pointers
-
-Pinned source inspected on 2026-09-07:
-
-| Repository / development line | Revision |
-|---|---|
-| smevals main | `0c28dc6298eb0e6c3b47e296e82a6972a01d76d0` |
-| smevals reusable-runners | `45676afdc07eb1c9ad6290a519c2c323f0861a68` |
-| smevals wip/studio | `94a8c20959aa804135b5b45a357aa7f378d44e37` |
-| smevals concurrency PR #2 | `a20b6771bf6bbc5f7dc3f6d24b8c972b26dc7cd4` |
-| Superpowers Evals | `32b403be1018bbbf460ca30dd61f9e16eb8b9b8c` |
-| Gauntlet | `588a81e80fe3cd7b7d3bc2c7f4207bed4ecb14df` |
-| claude-session-driver | `e608d693247b19c4fe2c2e85abe61b29586c24cd` |
-
-- [smevals source](https://github.com/prime-radiant-inc/smevals/tree/0c28dc6298eb0e6c3b47e296e82a6972a01d76d0)
-- [Concurrency PR #2](https://github.com/prime-radiant-inc/smevals/pull/2)
-- [August direction panel](../../experiments/2026-08-17-platform-direction-panel.md)
-- [Current scenario authoring guide](../../scenario-authoring.md)
-- [Current appliance runbook](../../appliance-runbook.md)
-- [Go fractals story](../../../scenarios/sdd-go-fractals-opus48/story.md)
-- [Code review story](../../../scenarios/code-review-catches-planted-bugs/story.md)
-- [Purpose-discovery response controls](../../../scenarios/brainstorming-todo-purpose-discovery/story.md)
-- [Local smevals investigation and five peer reports](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/smevals-unification/READOUT.md)
-- [Local Quorum architecture/history/evidence investigation](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/evals-architecture-audit/READOUT.md)
-
-The local investigation paths are discussion evidence on Drew's machine,
-not portable repository dependencies. Older campaign specs document the
-current system; their requirements do not automatically carry into this one.
-Mutable source and live-environment facts need rechecking when used for
-implementation or operational claims.
-
-## Discussion record
-
-- **2026-09-07:** Drew restated the six core requirements, emphasized the
-  live user loop and modular boundaries, and made every layer replaceable.
-  Sealing/recovery/deep analysis were removed as core prerequisites.
-- **2026-09-07:** A five-agent smevals investigation recommended one product
-  in smevals with reusable harness workers and replaceable execution internals.
-  Drew agreed to brainstorm that direction toward a spec.
-- **2026-09-07:** Drew requested a persistent working design document to
-  avoid losing context to compaction. This draft records the starting point;
-  detailed interfaces and implementation remain open.
-- **2026-09-07:** Drew clarified that he wants to define basically none of
-  the exchange and directed us to the existing scenario format. Reviewed the
-  authoring guide, scaffold, setup/checks, and ordinary and targeted stories.
-  Established prose brief plus acceptance criteria as the authoring baseline;
-  removed authored dialogue mechanics as the default design question.
-- **2026-09-07:** Drew agreed that this remains a good fit for smevals at the
-  whole-run extension boundary. smevals owns scheduling, results, grading
-  invocation, and reporting; a replaceable runner owns the complete live
-  harness interaction. Specific runner implementations remain open.
-- **2026-09-07:** Drew suggested running mostly on the quorum appliance to
-  reuse shared credentials and Mantle/Bedrock access. Bot recommended the
-  appliance as the first execution environment, with local authoring and
-  offline checks. Reuse of infrastructure is distinct from adoption of the
-  existing campaign controller; deployment specifics remain a proposal.
-- **2026-09-07:** Drew agreed with appliance execution and clarified there
-  are no old Quorum workloads. Removed coexistence, backward compatibility,
-  and old-workload migration requirements. The appliance and useful code can
-  be reused while replacing Quorum as a product.
-- **2026-09-07:** Drew asked whether to port or replace the credential system.
-  Inspected its schema, history, resolution, quota semantics, and actual
-  harness delivery with two focused peer audits. Bot recommends reusing auth
-  sources and delivery implementations while separating targets, connections,
-  and resource limits. The configuration design remains a proposal; no secret
-  material or live authentication was inspected.
-- **2026-09-07:** Drew agreed to the target/connection/resource-limit
-  separation and reuse direction. Exact configuration syntax and extraction
-  details remain open. Bot proposed the live worker lifecycle and a completion
-  rule that permits completed bad outcomes, with final evaluation after the
-  interaction rather than coaching toward a passing grade.
-- **2026-09-07:** Drew agreed that completed bad implementations and reviews
-  remain runs and provide important signal. He explicitly required grading
-  both the transcript and outputs when the scenario produces them. Promoted
-  completion and evidence coverage to decisions; the worker implementation
-  and detailed grading/report contract remain open.
-- **2026-09-07:** Drew confirmed that the appliance owns execution and asked
-  Bot to understand the existing submit-and-poll model. Traced ordinary jobs
-  and campaign controllers with a focused peer audit; verified that polls
-  observe execution rather than keep it alive. All 19 focused offline status
-  and shutdown tests passed. Recorded appliance ownership and reconnectable
-  observation as requirements, with a disconnect check in the proposed first
-  proof; no remote execution was performed.
-- **2026-09-07:** Drew asked for a concurrency recommendation grounded in
-  the appliance, recent runs, and scenario set. Read-only host inspection,
-  743 retained verdicts, seven primary campaign cohorts, and the 87-scenario
-  inventory support six as demonstrated capacity with headroom on ordinary
-  workloads. Bot recommends eight as the normal target, sixteen for engine
-  qualification, and initially two heavy attempts within the total. Current
-  user-model route caps of two/six need explicit qualification; this proposal
-  remains open for discussion and no limits or workloads were changed.
-- **2026-09-07:** Drew accepted the eight normal / sixteen qualification /
-  two heavy capacity targets. They are design targets, not newly demonstrated
-  operating capacity. Bot recommends drafting the concrete first-version spec
-  next, resolving the remaining contracts through an end-to-end example.
+| `schema_version`, `run_id` | Protocol version 1 and immutable selected-run identity |
+| `scenario` | Complete execution specification: brief, setup, fixtures, stopping conditions, required evidence; no private rubric |
+| `target`, optional `user_target` | Fully resolved configuration and public connection metadata |
+| `runtime` | Prepared subject sandbox handle and identity for interactive appliance runs |
+| `paths` | Explicit work, runtime-state, fixture, and evidence roots |
+| `limits` | Finite wall deadline; optional scenario-specific interaction limit |
+
+The core persists the resolved request before launch. The Runner prepares the
+fixture, checks prerequisites, provisions the selected Superpowers/harness,
+starts the prepared CLI, drives the conversation, stops all live children,
+and captures evidence. The driver must not bootstrap by guessing shell commands.
+
+Proposed driver interface: `runConversation(preparedHarness, brief, limits)`
+returns a completion reason and interaction evidence. Adapt Gauntlet's existing
+loop and logger, replacing grading-oriented prompts and `report_result` with
+`end_interaction(reason, summary, evidence_refs)`. Merely ignoring Gauntlet's
+current verdict would leave rubric-directed behavior in the experiment.
+
+Ordinary user clarification/approval continues the conversation. A subject
+turn ending is not automatically task completion. A delivered result, conclusive
+refusal, or explicit scenario stopping point ends it even if the later grade
+fails. No post-grade coaching. Hitting the hard deadline or interaction limit
+without a scenario-defined completion produces `timed_out`, not a completed
+bad answer. Record which limit ended the run.
+
+The simulated user can interact with the prepared harness and approved views.
+It cannot inspect hidden fixtures/rubrics or repair the repository directly
+through Gauntlet's general shell tools. Keep native question tools enabled and
+record actual options/answers. Use native structured observations when available
+and TUI interaction for remaining menus/prompts. A screen viewport is not a
+complete transcript. Permission mode must be explicit: the initial slice uses
+permissive tool execution in isolated containers while preserving conversational
+approvals and native question dialogs. Native tool-permission testing requires
+an explicit target/scenario mode and remains a coverage item, not a silent claim.
+
+The Runner's envelope separates interaction outcome from capture:
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "review-example-001/code-review-catches-planted-bugs/claude-opus5/1",
+  "execution": {"status": "completed", "reason": "review_delivered"},
+  "capture": {"status": "complete"},
+  "observed_target": {"harness_version": "recorded-at-launch", "model": null},
+  "evidence": [
+    {"kind": "subject_transcript", "path": "trajectory.json", "media_type": "application/json"},
+    {"kind": "final_response", "path": "final-response.md", "media_type": "text/markdown"},
+    {"kind": "fixture_diff", "path": "fixture.diff", "media_type": "text/plain"}
+  ],
+  "usage": {"subject": null, "user": null}
+}
+```
+
+This example abbreviates the full interactive evidence bundle. Execution is
+`completed | error | timed_out | cancelled`; capture is `complete | partial |
+error`, with structured stage/code/message on errors. Exit 0 means the Runner
+delivered a valid envelope, including any explicitly reported execution error.
+Unexpected nonzero exit, missing/malformed result, or identity mismatch becomes
+an execution error regardless of a claimed success. Core-enforced timeout or
+cancellation is authoritative. The core records timestamps, process exit/signal,
+and observed runtime identity itself. The Runner additionally reports elapsed
+setup, interaction, and capture times; missing measurements remain unknown.
+A missing transcript after an otherwise completed conversation is a capture
+error, not subject failure.
+
+Interactive runs provide an interaction record, final response, declared evidence
+coverage, and a final workspace snapshot/diff when applicable. The first
+Claude/Codex profile additionally requires native subject/subagent logs and a
+normalized ATIF transcript with session/parent links. Preserve source references,
+tool results, approvals, and question responses. Other adapters can supply
+different transcript formats if their checkers can assess the declared criteria;
+ATIF is not a universal harness-support gate. Missing capture capabilities are
+explicit in preflight; required criteria cannot silently disappear. Failed
+normalization retains raw evidence and a capture error. Empty final response
+and absent expected output can be real subject outcomes; successful capture
+must distinguish absence from failed reading. API-only runners declare their
+own evidence profile through the same envelope.
+
+Publish evidence after its writers stop, without recursively scanning mutable
+workspaces in the supervision loop. Copy selected outputs and changed files,
+exclude caches/dependency trees by declared capture rules, and record omissions
+or truncation. Private homes/credentials are not report artifacts. Raw logs
+remain restricted run evidence; default reports expose selected evidence links,
+not credential files or arbitrary raw log dumps. Retention/storage failures are
+visible capture/publication errors, never empty successful evidence.
+
+## 7. Grading and the standard report
+
+Checker requests contain `schema_version`, `run_id`, `grade_id`, `check_id`,
+complete check configuration, required evidence refs, the run record, an isolated
+grade workspace, and optional judge target. Original evidence is read-only.
+Build/test checkers can copy outputs into their workspace and execute there.
+They do not share the live subject's credentials or writable workspace.
+
+Checker results contain the IDs and `outcome: pass | fail | error`, a reason,
+evidence refs, and optional finite score/metrics. Exit 0 covers valid pass,
+fail, and explicit error; nonzero, malformed output, missing required result,
+or invalid score is a checker error. Scores, when present, are in [0, 1]. A
+multi-criterion Checker also returns a `criteria` array keyed by the configured
+criterion IDs, each with outcome, reason, and evidence refs. Missing/duplicate
+IDs are errors, never omitted criteria. Single-criterion checks use the check ID.
+The core derives the aggregate outcome from these records; the Checker cannot
+claim a pass over a failed or missing criterion.
+
+Default checks run independently, so a failed workflow criterion cannot hide
+output quality. Explicit `depends_on` is allowed for genuine prerequisite
+transforms; skipped dependent checks record the dependency and reason.
+
+For completed executions, grade every criterion whose evidence is available,
+including after partial capture. Unavailable required evidence produces a
+criterion error; it never silently passes or becomes a subject failure. A
+missing file proven absent by successful capture can fail a file-existence
+criterion. For interrupted executions, retain partial evidence and mark normal
+behavioral grading `not_graded`, reason `execution_incomplete`; those attempts
+remain useful diagnostics without counting as completed behavioral samples.
+
+Every Superpowers scenario declares transcript criteria and, when it produces
+outputs, output criteria. A criterion may use both. A review or plan expressed
+in chat is still an output. Files passing tests do not prove the required
+workflow, and a good transcript does not prove the implementation works.
+Semantic grading runs after interaction in a fresh context with the rubric and
+read-only evidence. It may use the same model as the simulated user; a third
+LLM or service is not mandatory.
+
+Within a grade, any checker error or required dependency skip makes the grade
+`error`; otherwise any failed criterion makes it `fail`; otherwise it is `pass`.
+Retain all per-criterion outcomes even when the overall grade is error. An empty
+required grader is invalid. Capture errors remain instrument errors in the
+report even if available criteria all pass. Numeric scores are supplemental;
+there is no implicit score aggregation or last-check-wins rule.
+
+Regrading creates a new `grade_id` against retained evidence, saving the resolved
+grader/checker versions and judge config. It never overwrites an earlier grade
+or reruns the subject. A grading revision identifies the resolved grader,
+checker versions, and judge configuration; a grade ID identifies one invocation.
+Reports select one grading revision per scenario across all compared targets.
+Rows without that revision remain visibly ungraded/differently graded and are
+excluded from its behavioral summary; never fall back to an older revision.
+If the same revision was invoked repeatedly, select an explicit grade ID per
+run, defaulting to its latest completed invocation and showing that selection.
+
+The common machine-readable report has one row per selected run, with:
+
+- Scenario, target, repetition, run ID, source/Superpowers/driver/harness identities,
+  requested/effective settings, and whether the combination was supported.
+- Execution status and reason; capture status; grade revision/status; every
+  criterion's outcome and evidence references.
+- Queue, setup, interaction, capture, and grading times, plus total elapsed time.
+- Subject/user/judge usage and cost separately; missing usage/cost as unknown,
+  with coverage counts rather than a misleading zero total.
+- Artifact references and any cleanup or batch-level error.
+
+Illustrative rows, not results of new runs:
+
+| Target | Execution | Capture | Grade | Evidence / meaning |
+|---|---|---|---|---|
+| Claude / Opus 5 | completed | complete | fail | Review delivered but missed injection |
+| Codex / Sol | completed | complete | pass | Review and subagent evidence satisfy criteria |
+| Another repetition | completed | partial | error | Reviewer session missing; review-text criterion still recorded |
+| Another repetition | timed_out | partial | not_graded | Partial transcript retained; runtime stopped |
+
+CLI, JSON, Markdown, and Studio use this same report model. Include every
+selected target and repetition: errors, cancellations, unsupported combinations,
+and runs never started. Preflight reports unsupported cells and submits the
+eligible inventory with those dispositions retained; if none are eligible,
+reject execution with the complete validation report. No successful-sample top-up.
+
+Summaries show pass/fail among fully assessable completed runs, counts of
+instrument errors/incomplete runs, and the total selected denominator alongside
+that breakdown. A report must not imply an error is a behavioral fail or hide
+it by choosing the busiest configuration. Reports are available incrementally;
+completion adds settled totals rather than requiring bespoke analysis.
+
+## 8. First delivery and proof
+
+Deliver a working vertical slice in smevals before porting the entire suite:
+
+| Existing scenario | What it exercises | Required grading |
+|---|---|---|
+| `brainstorming-todo-purpose-discovery` | Real clarification/approval and saved design/plan; stop at first implementation activity | Purpose elicitation/reflection, document contents, approval/order evidence |
+| `code-review-catches-planted-bugs` | Reviewer subagent and a delivered review, including a bad one | Actual defects/severity/merge recommendation plus dispatch/transcript evidence |
+| `sdd-go-fractals-opus48` | Subagent implementation/reviews, real build/tests, delivery | Role/sequence evidence, working CLI/tests, outputs delivered to launch checkout |
+
+Run all three on Claude and Codex using one pinned Superpowers revision. The
+Go scenario's suffix identifies the fixture-plan author, not a required subject
+model. The purpose scenario is explicitly selected despite its current adhoc
+tier. Preserve its controlled replies and 25-minute cutoff. The review example
+uses 30 minutes; propose a 120-minute Go attempt limit based on the observed
+long tail. These limits become resolved task inputs, not global defaults.
+
+The first proof must show:
+
+1. One simple prose scenario drives a real conversation on each harness, including
+   a native question and conversational approval where the scenario calls for it.
+2. Transcript, subagent, and output grading work; completed incorrect outcomes
+   remain completed failures. Offline fault fixtures separately prove execution,
+   capture, checker, missing-output, timeout, and cancellation attribution.
+3. Multiple simultaneous runs of the same harness and mixed harnesses have
+   isolated homes/sessions/workspaces. Resource groups cap actual admission,
+   including the shared simulated-user route.
+4. Appliance submission survives client disconnection. A new client can poll,
+   retrieve the report, and cancel by the same ID. Lost acknowledgment does not
+   duplicate work; supervisor loss terminates children and remains visible.
+5. Slow capture/checking does not stop dispatch or delay cancellation. Fake long
+   jobs exercise deadlines/cleanup without buying live failures. Regrading uses
+   retained evidence and preserves earlier grades.
+6. Every selected cell appears consistently in CLI/JSON/Markdown, including
+   ungraded and errored cells, with no automatic replacement samples.
+
+Then qualify ordinary live load at 8, and 16, with at most 2 heavy attempts
+inside the total. Use a fixed scenario/target mix and fresh measured attempts
+at each level; report wall throughput, queue/resource waits, interaction time,
+error/429 rates, resource peaks, and usage coverage from the standard records.
+Compare equivalent workload mixes; do not claim a speedup from unrelated old
+campaigns. The target is useful concurrency with stable behavior/evidence,
+not merely sixteen containers existing at once. Keep the highest demonstrated
+safe operating setting; qualification may show a provider rather than host
+limit. Define the paid sample count/cost ceiling in the later run plan.
+
+After the first slice, add remaining supported Superpowers harnesses/providers
+through the same adapter/capability contract and qualify each. Browser-heavy
+scenarios and non-Linux harness paths remain explicit coverage work. Claude and
+Codex are the first slice, not fulfillment of the all-harness requirement.
+
+## 9. Why these choices
+
+The inspected appliance supports headroom on ordinary workloads, but the
+refactor has not established the agreed higher capacity. On September 4,
+150 runs occupied six concurrent slots for most of 121 minutes while host load
+stayed low. Another cohort suffered artifact-scan contention despite abundant
+memory; a later cohort stopped on stale telemetry. That supports separating
+supervision from evidence work and removing telemetry freshness as an execution
+ownership condition. It does not establish that every workload is cheap.
+
+Across 743 retained verdicts, Go fractals represented about 4.3% of rows and
+23.2% of run-hours. This supports a small heavy-task cap. Existing simulated-user
+routes have configured caps of two or six; removing post-run grading from the
+conversation does not remove that live user-model demand. Provider ceilings
+were not independently queried in the audit.
+
+smevals supplies the right product concepts and executable extension boundary.
+Its inspected implementations lose structured runner configuration, exclude
+nonzero runs from grading/reporting, replace missing successful samples, and
+blur checker crashes with behavioral failure. Those are changes to make in the
+single core, not reasons to layer Quorum underneath it. Reusable-runner, concurrency,
+and Studio branches contain useful work; none is adopted wholesale as a second
+execution or report implementation.
+
+Gauntlet supplies a real interaction loop and isolated TUI tools, but currently
+mixes simulated-user behavior with self-grading. Its conversation-only seam is
+required work. claude-session-driver offers useful native observations, but its
+current Claude defaults disable native questions and bypass permissions; it is
+not a drop-in driver for this contract. Neither component dictates the design.
+
+Pinned source and longer reasoning are in the
+[research record](2026-09-07-unified-evals-research-notes.md#evidence-and-history-pointers).
+The [capacity readout](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/evals-capacity/READOUT.md)
+contains the sanitized host/run inventory and limitations. It is local discussion
+evidence, not a portable runtime dependency. Recheck mutable host/provider facts
+before implementation claims or any authorized live qualification.
