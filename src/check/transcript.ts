@@ -28,17 +28,16 @@ export function loadCalls(): TranscriptResult {
     return { calls: [], availability: 'unavailable' };
   }
 
-  let traj: AtifTrajectory;
+  let calls: ToolCallView[];
   try {
-    traj = JSON.parse(raw) as AtifTrajectory;
+    const traj = JSON.parse(raw) as AtifTrajectory;
+    if (!validateTrajectory(traj).ok) {
+      return { calls: [], availability: 'unavailable' };
+    }
+    calls = flattenToolCalls(traj);
   } catch {
     return { calls: [], availability: 'unavailable' };
   }
-
-  if (!validateTrajectory(traj).ok) {
-    return { calls: [], availability: 'unavailable' };
-  }
-  const calls = flattenToolCalls(traj);
   const availability = getEnv('QUORUM_CAPTURE_AVAILABILITY');
   if (availability === 'unavailable' || availability === 'errored') {
     return { calls, availability };

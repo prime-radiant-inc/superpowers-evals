@@ -71,7 +71,11 @@ import {
   snapshotDir,
 } from '../capture/index.ts';
 import { readManifest } from '../check/manifest.ts';
-import { parseCodingAgentsDirective, runPhase } from '../checks/index.ts';
+import {
+  parseCodingAgentsDirective,
+  type RunPhaseResult,
+  runPhase,
+} from '../checks/index.ts';
 import { compose } from '../composer.ts';
 import type { AgentConfig } from '../contracts/agent-config.ts';
 import {
@@ -885,6 +889,39 @@ export function codexMisplacedVerdict(
       stage: 'qa-agent-misconfigured',
       message: `misplaced codex rollouts: ${JSON.stringify(rel)}`,
     },
+  });
+}
+
+export interface PostCaptureFailureArgs extends CodexMisplacedArgs {
+  readonly gauntlet: GauntletLayer;
+  readonly checks: readonly CheckRecord[];
+  readonly captureEmpty: boolean;
+  readonly expected: CheckManifest | null;
+  readonly post: RunPhaseResult;
+}
+
+// Resolve capture attribution before the generic check-crash verdict. An
+// unavailable transcript makes trace checks crash deliberately, but a misplaced
+// Codex rollout is the earlier and more useful cause of that unavailable input.
+export function postCaptureFailureVerdict(
+  a: PostCaptureFailureArgs,
+): FinalVerdict | null {
+  const misplaced = codexMisplacedVerdict(a);
+  if (misplaced !== null) {
+    return { ...misplaced, gauntlet: a.gauntlet, checks: [...a.checks] };
+  }
+  if (a.post.exitCode === 0) {
+    return null;
+  }
+  return compose({
+    gauntlet: a.gauntlet,
+    checks: [...a.checks],
+    captureEmpty: a.captureEmpty,
+    error: {
+      stage: 'checks',
+      message: `post-checks crashed (exit ${a.post.exitCode})${crashHint(a.post.stderr)}`,
+    },
+    expected: a.expected,
   });
 }
 
@@ -2343,24 +2380,7 @@ async function runInnerBody(
     superpowers: a.superpowers,
     scratchRoot: a.checkScratchRoot,
   });
-  if (post.exitCode !== 0) {
-    return compose({
-      gauntlet,
-      checks: [...pre.records, ...post.records],
-      captureEmpty,
-      error: {
-        stage: 'checks',
-        message: `post-checks crashed (exit ${post.exitCode})${crashHint(post.stderr)}`,
-      },
-      expected: expectedChecks,
-    });
-  }
-
-  // Codex unavailable-capture qa-agent-misconfigured short-circuit, run after
-  // post-checks: unavailable evidence plus a rollout launched from the wrong
-  // cwd surfaces as its own stage rather than a wall of "never called" trace
-  // checks.
-  const codexMisplaced = codexMisplacedVerdict({
+  const postFailure = postCaptureFailureVerdict({
     captureAvailability: capture.availability,
     normalizer: cfg.normalizer,
     logDir,
@@ -2368,9 +2388,14 @@ async function runInnerBody(
     snapshot,
     runDir,
     launchCwd,
+    gauntlet,
+    checks: [...pre.records, ...post.records],
+    captureEmpty,
+    expected: expectedChecks,
+    post,
   });
-  if (codexMisplaced !== null) {
-    return codexMisplaced;
+  if (postFailure !== null) {
+    return postFailure;
   }
 
   // compose + attach economics (opaque at this layer).

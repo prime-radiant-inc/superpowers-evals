@@ -199,6 +199,49 @@ test('a corrupt trajectory stays unavailable when the environment claims availab
   expect(result.lastRecord?.['detail']).toContain('unavailable');
 });
 
+for (const [name, trajectoryRaw] of [
+  ['null trajectory', 'null'],
+  [
+    'null step',
+    JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'test-agent', version: '0.0.0' },
+      steps: [null],
+    }),
+  ],
+  [
+    'non-array tool calls',
+    JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'test-agent', version: '0.0.0' },
+      steps: [
+        {
+          step_id: 1,
+          source: 'agent',
+          message: 'Captured response.',
+          tool_calls: {},
+        },
+      ],
+    }),
+  ],
+] as const) {
+  test(`${name} is recorded as a broken direct-CLI check`, async () => {
+    const result = await runCLI(
+      ['tool-not-called', 'Edit'],
+      [],
+      'available',
+      trajectoryRaw,
+    );
+
+    expect(result.exitCode).toBe(127);
+    expect(result.lastRecord).toMatchObject({
+      check: 'tool-not-called',
+      passed: false,
+    });
+    expect(result.lastRecord?.['detail']).toContain('unavailable');
+  });
+}
+
 // ---------------------------------------------------------------------------
 // tool-called
 // ---------------------------------------------------------------------------

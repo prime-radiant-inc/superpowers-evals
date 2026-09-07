@@ -2,11 +2,15 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runPhase } from '../src/checks/index.ts';
 import type { GauntletLayer } from '../src/contracts/verdict.ts';
 import {
   captureCascadeVerdict,
   codexMisplacedVerdict,
+  postCaptureFailureVerdict,
 } from '../src/runner/index.ts';
+
+const REPO = join(import.meta.dir, '..');
 
 // Region 4 — per-normalizer strict-capture / diagnostic cascade. captureCascade-
 // Verdict mirrors the Python _run_scenario_inner capture-stage cascade: it
@@ -266,6 +270,57 @@ test('codexMisplacedVerdict: empty capture + misplaced rollout -> qa-agent-misco
   });
   expect(v?.error?.stage).toBe('qa-agent-misconfigured');
   expect(v?.final_reason).toContain('wrong cwd');
+});
+
+test('misplaced Codex attribution wins after an unavailable transcript post-check crashes', async () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const logDir = join(runDir, 'sessions');
+  const workdir = join(runDir, 'coding-agent-workdir');
+  const inside = join(runDir, 'somewhere-else');
+  mkdirSync(logDir, { recursive: true });
+  mkdirSync(workdir, { recursive: true });
+  mkdirSync(inside, { recursive: true });
+  writeFileSync(
+    join(logDir, 'rollout.jsonl'),
+    `${JSON.stringify({ type: 'session_meta', payload: { cwd: inside } })}\n`,
+  );
+  const checksSh = join(runDir, 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() { check-transcript tool-not-called Edit; }\n',
+  );
+
+  const post = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    repoRoot: REPO,
+    transcriptPath: join(runDir, 'trajectory.json'),
+    captureAvailability: 'unavailable',
+  });
+  expect(post.exitCode).toBe(127);
+  expect(post.records).toMatchObject([
+    { check: 'tool-not-called', phase: 'post', passed: false },
+  ]);
+
+  const verdict = postCaptureFailureVerdict({
+    captureAvailability: 'unavailable',
+    normalizer: 'codex',
+    logDir,
+    logGlob: '*.jsonl',
+    snapshot: new Set<string>(),
+    runDir,
+    launchCwd: workdir,
+    gauntlet: GAUNTLET,
+    checks: post.records,
+    captureEmpty: true,
+    expected: null,
+    post,
+  });
+
+  expect(verdict?.error?.stage).toBe('qa-agent-misconfigured');
+  expect(verdict?.gauntlet).toEqual(GAUNTLET);
+  expect(verdict?.checks).toEqual([...post.records]);
 });
 
 test('codexMisplacedVerdict uses unavailable capture evidence rather than tool count', () => {
