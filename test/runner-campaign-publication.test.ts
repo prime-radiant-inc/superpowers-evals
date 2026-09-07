@@ -55,7 +55,8 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   );
   writeFileSync(
     join(scenarioDir, 'setup.sh'),
-    '#!/usr/bin/env bash\nprintf fixture > present.txt\nmkdir -p scratch-empty\nln -s present.txt link-to-present\n',
+    '#!/usr/bin/env bash\nprintf fixture > present.txt\nmkdir -p scratch-empty\nln -s present.txt link-to-present\n' +
+      'mkdir -p node_modules/pkg && printf dep > node_modules/pkg/index.js && mkdir -p .venv/bin && printf py > .venv/bin/python\n',
   );
   chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
   writeFileSync(
@@ -119,6 +120,17 @@ test('a checks-bearing campaign runner result publishes with authenticated check
 
     const publishedDir = join(resultsRoot, published.runId);
     expect(existsSync(publishedDir)).toBe(true);
+    expect(
+      existsSync(join(publishedDir, 'coding-agent-workdir', 'node_modules')),
+    ).toBe(false);
+    expect(
+      existsSync(join(publishedDir, 'coding-agent-workdir', '.venv')),
+    ).toBe(false);
+    expect(
+      manifest.files.some(
+        (f) => f.path.includes('node_modules') || f.path.includes('.venv'),
+      ),
+    ).toBe(false);
     expect(
       JSON.parse(readFileSync(join(publishedDir, 'verdict.json'), 'utf8')),
     ).toMatchObject({ scenario: scenarioName });

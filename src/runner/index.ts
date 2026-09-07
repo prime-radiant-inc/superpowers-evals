@@ -120,6 +120,7 @@ import { gauntletEnvBase } from './gauntlet-env.ts';
 import { writeAttemptManifest } from './manifest.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
 import { collectProvenance } from './provenance.ts';
+import { pruneDependencyTrees } from './prune.ts';
 import { buildStoppedVerdict } from './stopped.ts';
 
 // RunnerError lives in ./errors.ts so context.ts can throw it without a
@@ -1240,6 +1241,7 @@ export async function runScenario(
     `${JSON.stringify(identified, null, 2)}\n`,
   );
   if (a.campaign !== undefined) {
+    pruneDependencyTrees(join(runDir, 'coding-agent-workdir'));
     writeAttemptManifest(runDir, a.campaign);
   }
   return { runDir, verdict: identified };
