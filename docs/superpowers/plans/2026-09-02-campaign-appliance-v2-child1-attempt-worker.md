@@ -724,7 +724,7 @@ export class ContainerAttemptSpawner implements ChildSpawner {
       '--tmpfs',
       `${ATTEMPT_RUNTIME_DIR}:rw,noexec,nosuid,size=${tmpfs}`,
       '--tmpfs',
-      `/tmp:rw,size=${tmpfs}`,
+      `/tmp:rw,exec,size=${tmpfs}`,
     ];
     for (const mount of attempt.mounts) {
       argv.push(
