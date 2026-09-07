@@ -84,14 +84,14 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   Bun.env['AWS_BEARER_TOKEN_BEDROCK'] = 'bedrock-key-test';
   Bun.env['SUPERPOWERS_ROOT'] = superpowersRoot;
 
-  // An unrooted sink lands at os.tmpdir(), which is /tmp itself when TMPDIR is
-  // unset — there the probe would pass without checkScratchRoot. Pin TMPDIR off
-  // /tmp so only the threaded scratch root can satisfy it. A host whose tmpdir()
-  // is already /tmp cannot be pinned away from it, and the probe is then merely
-  // an assertion that both phases ran.
+  // An unrooted sink lands under os.tmpdir(), which is /tmp itself when TMPDIR
+  // is unset — there the probe would pass without checkScratchRoot. Pin TMPDIR
+  // to a fresh directory for the run: a default sink then lands at
+  // <pinned>/sink-*/tmp, which the probe's ${CHECK_SCRATCH_DIR}/sink-*/tmp
+  // pattern cannot match even when the pinned directory is itself under /tmp.
   const savedTmpdir = Bun.env['TMPDIR'];
   const pinnedTmpdir = realpathSync(mkdtempSync(join(tmpdir(), 'not-tmp-')));
-  if (!pinnedTmpdir.startsWith('/tmp/')) Bun.env['TMPDIR'] = pinnedTmpdir;
+  Bun.env['TMPDIR'] = pinnedTmpdir;
 
   try {
     const runResult = await runScenario({
