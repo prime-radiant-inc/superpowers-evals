@@ -3,7 +3,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  quorumModeFromStory,
   readQuorumMaxTime,
+  readQuorumMode,
   readQuorumTier,
   readStoryStatus,
   StoryMetaError,
@@ -29,6 +31,20 @@ test('defaults when frontmatter absent', () => {
   expect(readQuorumMaxTime(p)).toBeNull();
   expect(readQuorumTier(p)).toBe('full');
   expect(readStoryStatus(p)).toBe('ready');
+  expect(readQuorumMode(p)).toBe('qa');
+});
+
+test('conversation mode is opt-in and rejects every explicit alternative', () => {
+  const conversation = '---\nquorum_mode: conversation\n---\nbody';
+  expect(quorumModeFromStory(conversation)).toBe('conversation');
+  expect(readQuorumMode(story(conversation))).toBe('conversation');
+  expect(quorumModeFromStory('body without frontmatter')).toBe('qa');
+  expect(() => quorumModeFromStory('---\nquorum_mode: qa\n---\nbody')).toThrow(
+    StoryMetaError,
+  );
+  expect(() =>
+    quorumModeFromStory('---\nquorum_mode: unknown\n---\nbody'),
+  ).toThrow(StoryMetaError);
 });
 
 test('tolerates single quotes and explicit status', () => {

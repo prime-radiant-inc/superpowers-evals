@@ -154,6 +154,19 @@ test('checkScenario flags an invalid quorum_tier', () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test('checkScenario rejects explicit non-conversation quorum modes', () => {
+  const root = scenariosRoot();
+  const dir = scenario(root, 's');
+  writeFileSync(
+    join(dir, 'story.md'),
+    '---\nid: s\ntitle: t\nquorum_mode: qa\n---\n\nBrief\n\n## Acceptance Criteria\n- x\n',
+  );
+  expect(checkScenario(dir)).toContain(
+    "story.md quorum_mode='qa' is not valid (omit it for qa or use: conversation)",
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('checkScenario flags a non-executable setup.sh', () => {
   const root = scenariosRoot();
   const dir = scenario(root, 's');

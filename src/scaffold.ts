@@ -331,6 +331,13 @@ export function checkScenario(scenarioDir: string): string[] {
           `(expected one of: ${VALID_TIERS.join(', ')})`,
       );
     }
+    const mode = fm['quorum_mode'];
+    if (mode !== undefined && mode !== 'conversation') {
+      problems.push(
+        `story.md quorum_mode=${pyReprValue(mode)} is not valid ` +
+          '(omit it for qa or use: conversation)',
+      );
+    }
   }
 
   const setup = join(scenarioDir, 'setup.sh');

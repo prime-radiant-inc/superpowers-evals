@@ -1,4 +1,9 @@
 import { expect, test } from 'bun:test';
+import {
+  ConversationRecordSchema,
+  EvidenceIndexSchema,
+  GauntletRolesSchema,
+} from '../src/contracts/conversation.ts';
 import { GauntletResultSchema } from '../src/contracts/gauntlet.ts';
 import {
   EXIT_CODE_BY_FINAL,
@@ -56,4 +61,100 @@ test('gauntlet result.json validates status and reads run-relevant fields', () =
   });
   expect(r.status).toBe('fail');
   expect(r.config?.model).toBe('claude-sonnet-4-6');
+});
+
+test('conversation records require a visible reference for completed delivery or refusal', () => {
+  const completed = {
+    status: 'completed',
+    endpoint: 'refusal',
+    reason: 'The requested change conflicts with the stated policy.',
+    timestamp: '2026-09-07T18:30:00.000Z',
+    evidence: {
+      path: 'conversation-agent/run/captures/final.txt',
+      quote: 'I cannot make that change.',
+    },
+  } as const;
+  expect(ConversationRecordSchema.parse(completed)).toEqual(completed);
+  expect(() =>
+    ConversationRecordSchema.parse({ ...completed, endpoint: null }),
+  ).toThrow();
+  expect(() =>
+    ConversationRecordSchema.parse({ ...completed, evidence: null }),
+  ).toThrow();
+  expect(() =>
+    ConversationRecordSchema.parse({
+      ...completed,
+      status: 'timed_out',
+      endpoint: 'delivery',
+    }),
+  ).toThrow();
+});
+
+test('conversation wire records reject malformed paths, timestamps, duplicate files, and partial role exits', () => {
+  expect(() =>
+    ConversationRecordSchema.parse({
+      status: 'errored',
+      endpoint: null,
+      reason: 'child failed',
+      timestamp: 'yesterday',
+      evidence: { path: '../secret', quote: 'last visible text' },
+    }),
+  ).toThrow();
+  expect(() =>
+    EvidenceIndexSchema.parse({ files: ['output/a.js', 'output/a.js'] }),
+  ).toThrow();
+  expect(() => EvidenceIndexSchema.parse({ files: ['/tmp/a'] })).toThrow();
+  expect(() => EvidenceIndexSchema.parse({ files: ['output/../a'] })).toThrow();
+
+  const role = {
+    out_dir: 'conversation-agent/conversation-pricing_20260907T183000Z_ab12',
+    model: 'claude-sonnet-4-6',
+    started_at: null,
+    finished_at: null,
+    process_exit: null,
+    stop_cause: null,
+  };
+  expect(
+    GauntletRolesSchema.parse({ conversation: role, assessment: role }),
+  ).toEqual({ conversation: role, assessment: role });
+  expect(() =>
+    GauntletRolesSchema.parse({
+      conversation: { ...role, process_exit: { code: null, signal: null } },
+      assessment: role,
+    }),
+  ).toThrow();
+});
+
+test('final verdict accepts conversation evidence and criterion-level assessment', () => {
+  const verdict: FinalVerdict = {
+    schema: 1,
+    final: 'pass',
+    final_reason: 'criteria passed',
+    gauntlet: {
+      status: 'pass',
+      summary: 's',
+      reasoning: 'r',
+      run_id: 'conversation-pricing_20260907T183000Z_ab12',
+      criteria: [
+        { criterion: 'Policy followed', verdict: 'pass', evidence: 'oracle' },
+      ],
+    },
+    checks: [],
+    error: null,
+    economics: null,
+    conversation: {
+      status: 'completed',
+      endpoint: 'delivery',
+      reason: 'Delivered a fix.',
+      timestamp: '2026-09-07T18:30:00.000Z',
+      evidence: { path: 'evidence/visible/final.txt', quote: 'Fixed.' },
+    },
+  };
+  expect(FinalVerdictSchema.parse(verdict)).toEqual(verdict);
+  expect(() =>
+    FinalVerdictSchema.parse({
+      ...verdict,
+      gauntlet: { ...verdict.gauntlet, criteria: [] },
+    }),
+  ).toThrow();
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ConversationRecordSchema } from './conversation.ts';
 import { CredentialLabelsSchema } from './credential.ts';
 import { FiniteNumberSchema } from './finite.ts';
 
@@ -73,6 +74,16 @@ export const GauntletLayerSchema = z.object({
   run_id: z.string().nullable(),
   // Runner-owned child facts. Absence supplies no process evidence.
   process_exit: GauntletProcessExitSchema.optional(),
+  criteria: z
+    .array(
+      z.object({
+        criterion: z.string(),
+        verdict: z.string(),
+        evidence: z.string(),
+      }),
+    )
+    .min(1)
+    .optional(),
 });
 export type GauntletLayer = z.infer<typeof GauntletLayerSchema>;
 
@@ -101,6 +112,7 @@ export const FinalVerdictSchema = z.object({
   credential: z.string().optional(),
   os: z.string().optional(),
   labels: CredentialLabelsSchema.optional(),
+  conversation: ConversationRecordSchema.optional(),
   // Best-effort provenance (PRI-2494): what was under test. Optional so old
   // verdicts parse; every inner field is nullable (probe failures).
   provenance: z

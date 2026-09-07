@@ -74,6 +74,21 @@ export function readQuorumTier(
   return quorumTierFromStory(readFileSync(storyPath, 'utf8'));
 }
 
+/** The scenario execution mode. Omission preserves the existing QA flow. */
+export function quorumModeFromStory(story: string): 'qa' | 'conversation' {
+  const v = frontmatterOf(story).get('quorum_mode');
+  if (v === undefined) return 'qa';
+  if (v !== 'conversation') {
+    throw new StoryMetaError(`invalid quorum_mode: ${v}`);
+  }
+  return v;
+}
+
+/** {@link quorumModeFromStory} over the story file at `storyPath`. */
+export function readQuorumMode(storyPath: string): 'qa' | 'conversation' {
+  return quorumModeFromStory(readFileSync(storyPath, 'utf8'));
+}
+
 /** The story's `status`, defaulting to `ready`. */
 export function readStoryStatus(storyPath: string): string {
   return frontmatter(storyPath).get('status') ?? 'ready';
