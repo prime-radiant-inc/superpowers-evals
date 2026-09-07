@@ -340,9 +340,11 @@ failed with `fork/exec .../sink-…/tmp/go-build…/cli.test: permission denied`
 the container mounts the attempt scratch at `/run/quorum/attempt` as a tmpfs
 with `noexec,nosuid`, the execution contract points TMPDIR there, and Go
 builds its test binaries under TMPDIR, so no natively built binary can run
-from the check phase on any model; the container's `/tmp` is a separate
-exec-capable tmpfs, and the agent itself had worked around the same wall
-with `GOMODCACHE` and `GOCACHE` under `/tmp`. Phase-1 fractals runs on this
+from the check phase on any model. The agent itself had worked around the
+same wall by moving its Go caches under `/tmp` while its test binaries ran
+from the exec-capable bind mount of the attempt directory; review of the fix
+later showed that Docker folds its default `noexec` into every `--tmpfs`
+mount, so the container's `/tmp` was noexec too until mounted with `exec`. Phase-1 fractals runs on this
 appliance passed that check 104 times, so the gap is specific to the campaign
 container. And `tool-called Agent` reported the subagent tool never called
 while the grader watched a subagent dispatched per task: the raw rollout
