@@ -90,7 +90,21 @@ Smoke campaign 1 (`d86c1e39-28ef-46eb-9d4d-d247bb863b5e`, suite
   now leaving an empty directory so the gap cannot reopen. Smoke 1's two
   runs remain in the campaign's staging as evidence; they were not repaired
   or counted. A second smoke follows on the fixed source.
-- Smoke campaign 2: to fill.
+- Smoke campaign 2: `f10bb086-aaae-466b-af7f-e13a7ee4de71`, input digest
+  `f13bb330…`, evals `555bbcb5` (the publication fix), gauntlet `588a81e8`,
+  launched 2026-09-07 02:32Z, completed 02:36Z. Both arms pass 1/1 with
+  `publication_valid: true`; the published runs are
+  `00-quorum-smoke-hello-world-claude-opus_bedrock-linux-20260907T023300Z-cdeb`
+  (Opus 4.8: subject $0.193, grader $0.169, wall 105 s) and
+  `00-quorum-smoke-hello-world-codex-openai_responses_56luna-linux-20260907T023301Z-0c98`
+  (Luna: subject $0.008, grader $0.117, wall 108 s); combined $0.487 with
+  complete cost coverage. Both verdicts stamp `provenance.effort: "xhigh"`
+  and price against the 2026-09-06 snapshot with no unpriced models. Codex:
+  root `model_reasoning_effort = "xhigh"` in the generated config and one
+  `"effort":"xhigh"` rollout record. Claude: `CLAUDE_CODE_EFFORT_LEVEL` in
+  the run env file; no in-log observation is possible on 2.1.209 (see Effort
+  evidence). Each published run carries the five empty placeholder
+  directories the publisher now tolerates.
 - Campaign id, `input_digest`, frozen refs (evals, gauntlet, superpowers per
   arm), cell count (50), planned slots (130): to fill.
 
