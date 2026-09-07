@@ -190,8 +190,12 @@ campaigns/results to make them readable by V2.
 
 Campaign runs prune dependency trees (`node_modules`, `.venv`, at any depth
 under the coding-agent workdir) before the attempt manifest is written, since
-they are reproducible from lockfiles and not behavioral evidence; development
-`quorum run` results keep them.
+they are reproducible from the project's dependency declarations (lockfiles,
+`pyproject`) and not behavioral evidence; development `quorum run` results keep
+them. Post checks run before the prune, so a published workdir cannot re-run a
+check that invokes a pruned tree (for example `./.venv/bin/pytest`); the frozen
+check records in `verdict.json` remain the authoritative evidence of check
+outcomes.
 
 Phase 0 `quorum campaign acquire|estimates|simulate` remains available for corpus
 analysis. Ordinary direct `quorum run`/`run-all` remain development workflows with

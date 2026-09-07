@@ -17,6 +17,7 @@ import {
 import {
   runCampaignDispatch,
   type SessionDependencies,
+  STALE_TELEMETRY_WAIT_CADENCES,
 } from '../src/campaign/controller.ts';
 import {
   ExecutionJournalWriter,
@@ -1604,17 +1605,26 @@ test.each([
   'prepare',
 ] as const)('stale telemetry after slow %s waits for a fresh sample and then activates', async (boundary) => {
   const f = fixture();
+  const cadenceS = f.context.experiment.contention.cadence_ms / 1000;
+  const prepareTimes: number[] = [];
+  let staleAt = 0;
+  const prepare = f.deps.prepare;
+  f.deps.prepare = (args) => {
+    prepareTimes.push(f.clock.now());
+    const result = prepare(args);
+    if (boundary === 'prepare') {
+      f.clock.advance(1);
+      if (!staleAt) staleAt = f.clock.now();
+    }
+    return result;
+  };
   if (boundary === 'snapshot') {
     let calls = 0;
     f.deps.verifySnapshot = () => {
-      if (++calls === 2) f.clock.advance(1);
-    };
-  } else {
-    const prepare = f.deps.prepare;
-    f.deps.prepare = (args) => {
-      const result = prepare(args);
-      f.clock.advance(1);
-      return result;
+      if (++calls === 2) {
+        f.clock.advance(1);
+        staleAt = f.clock.now();
+      }
     };
   }
   const run = runCampaignDispatch(f.context, f.deps);
@@ -1627,7 +1637,13 @@ test.each([
     f.clock.setTo(next);
   }
   await flush();
-  expect(f.started.length).toBeGreaterThan(0);
+  expect(f.started).toHaveLength(2);
+  // The gate at this boundary held: the next attempt preparation ran only
+  // once the sampler had refreshed the sidecar, a cadence after telemetry
+  // went stale (the 0.9 factor absorbs float drift on one cadence). Ungated,
+  // that preparation runs in the same tick as the stall.
+  const gated = prepareTimes.find((t) => t >= staleAt)!;
+  expect(gated - staleAt).toBeGreaterThan(cadenceS * 0.9);
   for (let i = 0; i < f.started.length; i++) f.complete(i);
   expect(await settle(f, run)).toMatchObject({
     outcome: 'completed',
@@ -1638,6 +1654,56 @@ test.each([
   );
   expect(f.writer.readProjection().attempts.size).toBe(2);
   expect(f.finished).toBe(true);
+});
+
+test('a breach opening on the sample that releases the wait halts activation', async () => {
+  const f = fixture();
+  const cadenceS = f.context.experiment.contention.cadence_ms / 1000;
+  const sample = f.deps.probe.sample.bind(f.deps.probe);
+  const prepareTimes: number[] = [];
+  const prepare = f.deps.prepare;
+  f.deps.prepare = (args) => {
+    prepareTimes.push(f.clock.now());
+    return prepare(args);
+  };
+  let breachEntryAt = 0;
+  let calls = 0;
+  f.deps.verifySnapshot = () => {
+    if (++calls !== 2) return;
+    const staleTimestamp = f.clock.now() * 1000;
+    f.clock.advance(1);
+    // The sampler is still behind on its first sample, so the fresh sample
+    // that releases the admission wait is the one that sustains the breach.
+    let samples = 0;
+    f.deps.probe.sample = (now) => {
+      const stats = sample(now);
+      if (++samples === 1) return { ...stats, ts_ms: staleTimestamp, load1: 4 };
+      if (samples === 2) {
+        breachEntryAt = f.clock.now();
+        return { ...stats, load1: 4 };
+      }
+      // Milliseconds of controller work separate a sample from the admission
+      // it releases, so the block it admits starts after the breach window.
+      f.clock.advance(0.002);
+      return stats;
+    };
+  };
+  const run = runCampaignDispatch(f.context, f.deps);
+  for (let i = 0; i < 40 && f.started.length < 2; i++) {
+    await flush();
+    const next = f.clock.earliestWaiter();
+    if (next === null) break;
+    f.clock.setTo(next);
+  }
+  await flush();
+  expect(f.started).toHaveLength(2);
+  // A live breach halts admission even when it opens during the wait: the
+  // block is admitted only after the sustained breach exit two cadences on.
+  expect(prepareTimes[0]! - breachEntryAt).toBeGreaterThan(cadenceS * 1.9);
+  for (let i = 0; i < f.started.length; i++) f.complete(i);
+  expect(await settle(f, run)).toMatchObject({ outcome: 'completed' });
+  // The block was never exposed to the breach window, so no reserve is spent.
+  expect(f.writer.readProjection().attempts.size).toBe(2);
 });
 
 test.each([
@@ -1693,10 +1759,14 @@ test('stale producer after asynchronous create refuses start and still stops own
       reason: expect.stringContaining('stale telemetry'),
     },
   );
-  // A sampler that never catches up costs one bounded wait (6 cadences of
-  // 100ms) before admission fails closed.
-  expect(f.clock.now() - staleAt).toBeGreaterThanOrEqual(0.6);
-  expect(f.clock.now() - staleAt).toBeLessThan(1);
+  // A sampler that never catches up costs exactly one bounded wait before
+  // admission fails closed: the clock lands on the wait deadline, and the
+  // tolerance is float slack at epoch scale, not scheduling slack.
+  const cadenceS = f.context.experiment.contention.cadence_ms / 1000;
+  const waitSeconds = STALE_TELEMETRY_WAIT_CADENCES * cadenceS;
+  const waited = f.clock.now() - staleAt;
+  expect(waited).toBeGreaterThan(waitSeconds - cadenceS * 0.01);
+  expect(waited).toBeLessThan(waitSeconds + cadenceS * 0.01);
   expect(f.started).toEqual([]);
   expect(
     [...f.writer.readProjection().attempts.values()].every((a) => a.stopped),
@@ -1706,6 +1776,7 @@ test('stale producer after asynchronous create refuses start and still stops own
 
 test('stale telemetry wait is cut short by operator cancellation', async () => {
   const f = fixture();
+  const cadenceS = f.context.experiment.contention.cadence_ms / 1000;
   const factory = f.deps.runtime;
   const sample = f.deps.probe.sample.bind(f.deps.probe);
   const oldTimestamp = f.clock.now() * 1000;
@@ -1727,12 +1798,15 @@ test('stale telemetry wait is cut short by operator cancellation', async () => {
     const create = runtime.create.bind(runtime);
     runtime.create = async (prepared) => {
       const bound = await create(prepared);
-      f.deps.probe.sample = (now) => {
-        cancelled = true;
-        return { ...sample(now), ts_ms: oldTimestamp };
-      };
       f.clock.advance(1);
       staleAt = f.clock.now();
+      f.deps.probe.sample = (now) => {
+        // Only a sample taken a cadence after the stall can be one the
+        // admission wait is parked on, so the intent provably lands inside
+        // the wait rather than at the guard that precedes it.
+        if (now > (staleAt + cadenceS) * 1000) cancelled = true;
+        return { ...sample(now), ts_ms: oldTimestamp };
+      };
       return bound;
     };
     return runtime;
@@ -1740,9 +1814,11 @@ test('stale telemetry wait is cut short by operator cancellation', async () => {
   const result = await settle(f, runCampaignDispatch(f.context, f.deps));
   expect(result).toMatchObject({ outcome: 'cancelled' });
   // Cancellation is observed by the guard inside the wait: a full cadence of
-  // waiting elapsed (0.09 absorbs float drift on the 100ms cadence), and the
-  // 6-cadence deadline never arrived.
-  expect(f.clock.now() - staleAt).toBeGreaterThan(0.09);
-  expect(f.clock.now() - staleAt).toBeLessThan(0.6);
+  // waiting elapsed (the 0.9 factor absorbs float drift on one cadence), and
+  // the wait deadline never arrived.
+  expect(f.clock.now() - staleAt).toBeGreaterThan(cadenceS * 0.9);
+  expect(f.clock.now() - staleAt).toBeLessThan(
+    STALE_TELEMETRY_WAIT_CADENCES * cadenceS,
+  );
   expect(f.finished).toBe(true);
 });

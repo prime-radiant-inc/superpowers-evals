@@ -795,19 +795,27 @@ export async function runCampaignDispatch(
     }
   };
   /** Admission with a bounded pause for stale telemetry: waits cadence by
-   *  cadence for a fresh sidecar sample, re-running the session guard each
-   *  time so cancellation and halts stay immediate, then applies the fatal
-   *  guard. */
+   *  cadence for a fresh sidecar sample, never past the deadline, re-running
+   *  the session guard each cadence so halts and the abort signal stay
+   *  immediate and a published cancel intent is honoured within one cadence,
+   *  then applies the fatal guard. */
   const admit = async () => {
     const deadline =
       clock.now() +
       (STALE_TELEMETRY_WAIT_CADENCES * experiment.contention.cadence_ms) / 1000;
-    while (
-      telemetryAge() > 2 * experiment.contention.cadence_ms &&
-      clock.now() < deadline
-    ) {
+    for (;;) {
       guard();
-      await sleep(clock.now() + experiment.contention.cadence_ms / 1000);
+      if (
+        telemetryAge() <= 2 * experiment.contention.cadence_ms ||
+        clock.now() >= deadline
+      )
+        break;
+      await sleep(
+        Math.min(
+          clock.now() + experiment.contention.cadence_ms / 1000,
+          deadline,
+        ),
+      );
     }
     admissionGuard();
   };
@@ -1054,6 +1062,10 @@ export async function runCampaignDispatch(
       }
       deps.verifySnapshot();
       await admit();
+      // The sample that releases the wait can be the one that opens a breach,
+      // and a live breach halts admission: re-select instead of activating a
+      // block the audit would then invalidate for contention.
+      if (breach) continue;
       const activation: BlockActivation = {
         block_id: candidate.reserve ?? candidate.primary,
         primary_block_id: candidate.primary,
