@@ -1,6 +1,7 @@
 # Quorum: separate conversation from assessment
 
-**Status:** Proposed for Drew's review.
+**Status:** Approved by Drew for implementation planning on 2026-09-07.
+**Implementation plan:** [Seven scoped tasks](../plans/2026-09-07-quorum-conversation-assessment.md).
 **Scope:** One complete scenario on Linux Claude and Codex, using current Quorum
 workers and appliance execution. This is the next increment, not a replacement
 architecture for Superpowers Evals.
