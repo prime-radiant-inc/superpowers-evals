@@ -257,6 +257,31 @@ publication would otherwise still blind the sampler for about twenty
 seconds and, under the default coverage tolerance, classify every in-flight
 block as missing telemetry.
 
+## Smoke campaign 4 (on the fixes)
+
+`fd230153-aab6-4801-9c30-1f75b16ba2d8`, evals `be6027cf`, the two-cell
+effort smoke, completed 2026-09-07 about 08:27Z after 730 s. Both attempts
+published valid with `effort: xhigh` in provenance and complete pricing;
+subject $0.31, grader $0.68, $1.00 combined. The Claude hello-world cell
+passed. The Luna purpose-discovery cell composed `fail` on the Gauntlet-Agent's
+judgment with every deterministic check passing, which is a behavioral
+result on the cheapest Codex model and the same cell passed in smoke 3. Its
+published run holds 100 manifest files and no symlinks, with `package.json`,
+`package-lock.json`, and `vite.config.js` present and no `node_modules`:
+dependencies were installed and pruned, against 4905 files for the same
+scenario in campaign 3.
+
+## Campaign 4
+
+`847d4d48-bd3c-463c-8154-0827fc6945f3`, input digest
+`62574660ff49…`, registered 2026-09-07 about 08:31Z with `--global-cap 6`
+and launched immediately after. Frozen refs: evals `be6027cf` (the two
+fixes), gauntlet `588a81e8`, superpowers `fd02874a` on every `_base` arm and
+`069edf3f` on every `_head` arm. 50 cells, 130 planned slots, 50 reserve
+slots, no excluded cells; all ten arms at `effort: xhigh`; pricing snapshot
+digest `6423a36b…`; attempt bound 7800 s. Program spend before this campaign
+was about $159 across three smokes and three failed campaigns.
+
 ## Results
 
-Pending campaign 3.
+Pending campaign 4.
