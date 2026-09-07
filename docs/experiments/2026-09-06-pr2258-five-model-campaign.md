@@ -105,8 +105,18 @@ Smoke campaign 1 (`d86c1e39-28ef-46eb-9d4d-d247bb863b5e`, suite
   the run env file; no in-log observation is possible on 2.1.209 (see Effort
   evidence). Each published run carries the five empty placeholder
   directories the publisher now tolerates.
-- Campaign id, `input_digest`, frozen refs (evals, gauntlet, superpowers per
-  arm), cell count (50), planned slots (130): to fill.
+- Campaign: `e7cc05be-894b-44c2-abed-b3cb285cad82`, input digest
+  `57216be7cc7e7bf4fa791c23e5b10223b3fa928f580968d961d45d43a82d2110`,
+  registered 2026-09-07 about 02:39Z with `--global-cap 6`. Frozen refs:
+  evals `7bfa7f56`, gauntlet `588a81e8`, superpowers `fd02874a` on every
+  `_base` arm and `069edf3f` on every `_head` arm. 50 cells, 130 planned
+  slots, 200 reserve slots (the suite's `reserve: 4` per cell; replacement
+  capacity, not planned spend), no excluded cells. All ten execution-surface
+  arms carry `effort: xhigh` with the expected models (gpt-6-astra,
+  gpt-5.6-sol, gpt-5.6-luna, anthropic.claude-opus-5,
+  anthropic.claude-opus-4-8). Pricing snapshot digest `6423a36b…`; attempt
+  bound 7800 s. Pools: the three Codex credentials on one 15-slot Responses
+  pool each, `opus5_bedrock` 4, `opus_bedrock` 6, grader `sonnet5_bedrock` 6.
 
 ## Results
 
