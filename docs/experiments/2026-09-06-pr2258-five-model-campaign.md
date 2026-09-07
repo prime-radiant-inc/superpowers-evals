@@ -50,18 +50,49 @@ must not be compared numerically with the pilot's canonical pass rate.
 Base `fd02874a` is the PR's actual base and `origin/dev`; `origin/main`
 (`b36e0829`, v6.3.0) differs from it only in CODE_OF_CONDUCT.md.
 
-## Effort evidence (to fill from the smoke and the first pair)
+## Effort evidence
 
-- Claude: count of `"effort":"xhigh"` on session-log message records in the
-  smoke attempt and the first campaign attempt.
-- Codex: the `turn_context` effort value in the smoke attempt and the first
-  campaign attempt.
+Smoke campaign 1 (`d86c1e39-28ef-46eb-9d4d-d247bb863b5e`, suite
+`pr2258_effort_smoke`, evals `86d2f594`, gauntlet `588a81e8`, launched
+2026-09-07 01:43Z, both attempts passed inside their containers):
 
-## Registration record (to fill)
+- Codex (`codex_luna_pr2258_head`, gpt-5.6-luna, codex-cli 0.146.0): the
+  generated `config.toml` opens with root `model_reasoning_effort = "xhigh"`
+  and the rollout carries one `"effort":"xhigh"` record. The effective level
+  is observed. Subject $0.016, grader $0.125, pricing as of 2026-09-06.
+- Claude (`claude_opus48_pr2258_head`, Opus 4.8 via Mantle, Claude Code
+  2.1.209): the run-scoped `.claude-env` carries
+  `CLAUDE_CODE_EFFORT_LEVEL='xhigh'` and the launcher forwards it (the
+  launcher isolation test proves the forwarding). Claude Code 2.1.209 records
+  no effort level anywhere in the run home: the session transcript has no
+  effort field (2.1.258 does record one on message records), the state file
+  has none, and the TUI shows none in the Gauntlet screen captures. The
+  Claude arms therefore rest on proven delivery of the documented variable,
+  not on an observed level. Subject $0.195, grader $0.154, pricing as of
+  2026-09-06.
+- Both verdicts stamp `provenance.effort: "xhigh"`; neither role reports
+  unpriced models.
 
-- Smoke campaign id, verdicts, costs, effort evidence.
+## Registration record
+
+- Smoke campaign 1: `d86c1e39-28ef-46eb-9d4d-d247bb863b5e`, input digest
+  `f47d3b22…`, 2 cells, 2 slots. Both attempts ran and passed, but the
+  campaign recorded both as `no_usable_result`: the attempt publisher
+  refused every run directory holding an empty placeholder directory
+  (Gauntlet's `screenshots/` and `artifacts/`, git's `refs/tags`,
+  `objects/pack`, `objects/info`) as an unlisted artifact, and the
+  controller recorded "invalid or missing published evidence". This is a
+  platform defect in the strict manifest publisher that landed on
+  2026-09-03; no campaign attempt could have published since, which also
+  explains the two negative parallel-diagnostic campaigns. Fixed by
+  tolerating empty, non-symlinked unlisted directories only
+  (`src/campaign/attempt-publish.ts`), with the end-to-end publication test
+  now leaving an empty directory so the gap cannot reopen. Smoke 1's two
+  runs remain in the campaign's staging as evidence; they were not repaired
+  or counted. A second smoke follows on the fixed source.
+- Smoke campaign 2: to fill.
 - Campaign id, `input_digest`, frozen refs (evals, gauntlet, superpowers per
-  arm), cell count (50), planned slots (130).
+  arm), cell count (50), planned slots (130): to fill.
 
 ## Results
 
