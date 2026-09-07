@@ -451,3 +451,19 @@ starvation by publication, read-only Go module caches in the check sink, the
 noexec check scratch, and the prefixed Codex subagent verbs; a seventh, the
 synchronous staleness guard on the runtime authorization path, ended this
 campaign. Fractals remains deferred to its own campaign.
+
+## Fix after campaign 5
+
+`6c215603` on main: the runtime authorization callbacks no longer apply the
+telemetry-staleness rule. They still verify session halts, cancellation,
+admission context, writer ownership, credential authority, and the exact
+committed intent; staleness is enforced only at the admission points, each
+of which runs the bounded wait immediately before `runtime.create` and
+`runtime.start`. A session test reproduces campaign 5's race by advancing the
+clock inside the runtime's start, after admission has passed, and failed
+with the campaign's exact reason before the fix. In production the coverage
+tolerance is four cadences against a two-cadence staleness bound, so a stall
+of campaign 5's size neither ends the campaign nor invalidates the block.
+The appliance was prepared on this ref at 14:00Z; a sixth campaign on the
+nine behavioral scenarios and the deferred fractals campaign both await the
+operator's decision.
