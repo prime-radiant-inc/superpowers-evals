@@ -1521,6 +1521,45 @@ test('a run effort refuses a scenario fragment that already sets model_reasoning
   }
 });
 
+test('a run effort on a stock subscription arm stands as the whole config', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const scenarioDir = stageScenarioDir(base.workdir);
+  const home = {
+    ...base,
+    scenarioDir,
+    effort: 'xhigh' as const,
+    superpowers: { mode: 'none' } as const,
+  };
+  const authParent = join(base.workdir, '..', 'host-auth-effort-stock');
+  const codexAuthDir = join(authParent, '.codex');
+  mkdirSync(codexAuthDir, { recursive: true });
+  writeFileSync(
+    join(codexAuthDir, 'auth.json'),
+    `${JSON.stringify(SUBSCRIPTION_AUTH)}\n`,
+  );
+
+  try {
+    withEnv(
+      { CODEX_AUTH_HOME: codexAuthDir, SUPERPOWERS_ROOT: undefined },
+      () => {
+        const agent = new CodexAgent(CODEX_CONFIG, new FakeAppServerClient());
+        agent.provision(home, unusedRunner(), SUBSCRIPTION_CRED);
+        const configToml = readFileSync(
+          join(home.configDir, 'config.toml'),
+          'utf8',
+        );
+        // The effort block stands as the whole file (no generated content
+        // follows on the stock subscription arm).
+        expect(configToml).toBe(
+          `${EFFORT_PROVENANCE}model_reasoning_effort = "xhigh"\n\n`,
+        );
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test('fragment content lands byte-exact, including a no-trailing-newline fragment', () => {
   const { home: base, cleanup } = makeTempHome();
   const fragment =
