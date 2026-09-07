@@ -566,8 +566,10 @@ timing").
   timestamp for that evaluation. Completion/outcome arrival order is never
   an overlap input.
 - **Dead-sampler liveness:** at every admission wave the dispatcher checks
-  the sidecar's last-sample age; staleness > 2× `cadence_ms` halts admission
-  (a dead sampler must not look like a quiet host).
+  the sidecar's last-sample age; staleness > 2× `cadence_ms` pauses admission
+  for up to `STALE_TELEMETRY_WAIT_CADENCES` (6) cadences awaiting a fresh
+  sample, then fails closed (a dead sampler must not look like a quiet host,
+  and a controller busy publishing must not look like a dead sampler).
 - **Missing-sample policy:** a missed sample (probe error, scheduler stall)
   records a gap line `{ ts_ms, missing: true }`; gaps count against coverage
   and neither extend nor interrupt a sustain run.
@@ -1766,7 +1768,8 @@ everything in flight across the window + admitted-unspawned; kill all;
 authorized repair = removal + re-create under D2's lock; E7 rerun re-entry).
 Same halt semantics serve the contention live breach (Decision D-3):
 admission-only halt, in-flight runs to service end, loud at entry and
-resolution; plus the dead-sampler liveness halt (>2× cadence staleness).
+resolution; plus the dead-sampler liveness halt (>2× cadence staleness, after
+a bounded 6-cadence wait for a fresh sample).
 Contention never inherits drift's kill/rerun mapping: overlapped processes
 are analytically superseded, never killed for contention, and their slots
 release only at service end.
@@ -1964,8 +1967,9 @@ both the dispatcher and D4; there is no second seal-time implementation.
 When `sustain_k` in-bounds samples close a breach, sensors append and **fsync
 the exit sample before** notifying the dispatcher of the closed window. The
 dispatcher owns the R-DSP-11 resolution batch and its resolution/resume
-output; sensors never mint or journal. Dead-sampler liveness halts admission
-on staleness > 2× cadence. The sidecar remains non-replay evidence — replay
+output; sensors never mint or journal. Dead-sampler liveness pauses admission
+on staleness > 2× cadence and halts it once six cadences pass with no fresh
+sample. The sidecar remains non-replay evidence — replay
 of landed journal events is self-sufficient — but recovery may re-read its
 durable closed windows to derive an unlanded batch suffix. Sidecar loss never
 reverses a landed mint; it becomes an attribution caveat plus

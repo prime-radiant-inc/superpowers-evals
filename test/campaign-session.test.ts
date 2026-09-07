@@ -1602,7 +1602,7 @@ test.each([
 test.each([
   'snapshot',
   'prepare',
-] as const)('stale telemetry after slow %s cannot activate or launch a block', async (boundary) => {
+] as const)('stale telemetry after slow %s waits for a fresh sample and then activates', async (boundary) => {
   const f = fixture();
   if (boundary === 'snapshot') {
     let calls = 0;
@@ -1617,13 +1617,26 @@ test.each([
       return result;
     };
   }
-  const result = await settle(f, runCampaignDispatch(f.context, f.deps));
-  expect(result).toMatchObject({
-    outcome: 'interrupted',
-    reason: expect.stringContaining('stale telemetry'),
+  const run = runCampaignDispatch(f.context, f.deps);
+  // The admission wait parks on the clock until the sampler's next sample, so
+  // the block only activates once the fixture steps time forward.
+  for (let i = 0; i < 40 && f.started.length < 2; i++) {
+    await flush();
+    const next = f.clock.earliestWaiter();
+    if (next === null) break;
+    f.clock.setTo(next);
+  }
+  await flush();
+  expect(f.started.length).toBeGreaterThan(0);
+  for (let i = 0; i < f.started.length; i++) f.complete(i);
+  expect(await settle(f, run)).toMatchObject({
+    outcome: 'completed',
+    reason: expect.not.stringContaining('stale telemetry'),
   });
-  expect(f.started).toEqual([]);
-  expect(f.writer.readProjection().attempts.size).toBe(0);
+  expect(f.writer.readProjection().ended?.reason).not.toContain(
+    'stale telemetry',
+  );
+  expect(f.writer.readProjection().attempts.size).toBe(2);
   expect(f.finished).toBe(true);
 });
 
@@ -1661,6 +1674,7 @@ test('stale producer after asynchronous create refuses start and still stops own
   const factory = f.deps.runtime;
   const sample = f.deps.probe.sample.bind(f.deps.probe);
   const oldTimestamp = f.clock.now() * 1000;
+  let staleAt = 0;
   f.deps.runtime = (authority) => {
     const runtime = factory(authority);
     const create = runtime.create.bind(runtime);
@@ -1668,6 +1682,7 @@ test('stale producer after asynchronous create refuses start and still stops own
       const bound = await create(prepared);
       f.deps.probe.sample = (now) => ({ ...sample(now), ts_ms: oldTimestamp });
       f.clock.advance(1);
+      staleAt = f.clock.now();
       return bound;
     };
     return runtime;
@@ -1678,9 +1693,56 @@ test('stale producer after asynchronous create refuses start and still stops own
       reason: expect.stringContaining('stale telemetry'),
     },
   );
+  // A sampler that never catches up costs one bounded wait (6 cadences of
+  // 100ms) before admission fails closed.
+  expect(f.clock.now() - staleAt).toBeGreaterThanOrEqual(0.6);
+  expect(f.clock.now() - staleAt).toBeLessThan(1);
   expect(f.started).toEqual([]);
   expect(
     [...f.writer.readProjection().attempts.values()].every((a) => a.stopped),
   ).toBe(true);
+  expect(f.finished).toBe(true);
+});
+
+test('stale telemetry wait is cut short by operator cancellation', async () => {
+  const f = fixture();
+  const factory = f.deps.runtime;
+  const sample = f.deps.probe.sample.bind(f.deps.probe);
+  const oldTimestamp = f.clock.now() * 1000;
+  let staleAt = 0;
+  let cancelled = false;
+  f.deps.cancelIntent = () =>
+    cancelled
+      ? {
+          ref: {
+            path: 'cancel-intent.json',
+            sha256: 'a'.repeat(64),
+            bytes: 12,
+          },
+          controllerLoss: false,
+        }
+      : null;
+  f.deps.runtime = (authority) => {
+    const runtime = factory(authority);
+    const create = runtime.create.bind(runtime);
+    runtime.create = async (prepared) => {
+      const bound = await create(prepared);
+      f.deps.probe.sample = (now) => {
+        cancelled = true;
+        return { ...sample(now), ts_ms: oldTimestamp };
+      };
+      f.clock.advance(1);
+      staleAt = f.clock.now();
+      return bound;
+    };
+    return runtime;
+  };
+  const result = await settle(f, runCampaignDispatch(f.context, f.deps));
+  expect(result).toMatchObject({ outcome: 'cancelled' });
+  // Cancellation is observed by the guard inside the wait: a full cadence of
+  // waiting elapsed (0.09 absorbs float drift on the 100ms cadence), and the
+  // 6-cadence deadline never arrived.
+  expect(f.clock.now() - staleAt).toBeGreaterThan(0.09);
+  expect(f.clock.now() - staleAt).toBeLessThan(0.6);
   expect(f.finished).toBe(true);
 });

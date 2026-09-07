@@ -116,6 +116,13 @@ export interface SessionResult {
   outcome: 'completed' | 'cancelled' | 'interrupted';
   reason: string;
 }
+/** How long admission waits for the contention sampler to catch up before
+ *  treating it as dead. The sampler shares the controller's event loop, so
+ *  one long synchronous stretch (publishing a large run) delays its next
+ *  sample without meaning the host is unobserved; one fresh sample proves it
+ *  alive. A sampler still silent after this many cadences fails admission
+ *  closed exactly as before. */
+export const STALE_TELEMETRY_WAIT_CADENCES = 6;
 const INTRINSIC_GRADER_SIGNALS = new Set([
   'SIGABRT',
   'SIGSEGV',
@@ -348,14 +355,15 @@ export async function runCampaignDispatch(
     writer.assertCurrentOwner();
     assertCredentialAuthority(deps.registry(), experiment);
   };
+  const telemetryAge = () =>
+    samplerStaleMs(parseSidecar(context.campaignDir).lines, clock.now() * 1000);
   const admissionGuard = () => {
     guard();
-    const age = samplerStaleMs(
-      parseSidecar(context.campaignDir).lines,
-      clock.now() * 1000,
-    );
+    const age = telemetryAge();
     if (age > 2 * experiment.contention.cadence_ms)
-      throw Error(`stale telemetry (${age}ms); refusing admission`);
+      throw Error(
+        `stale telemetry (${age}ms) after ${STALE_TELEMETRY_WAIT_CADENCES} cadences; refusing admission`,
+      );
   };
   const assertIntent = (prepared: PreparedExecution) => {
     admissionGuard();
@@ -786,6 +794,23 @@ export async function runCampaignDispatch(
       wake = undefined;
     }
   };
+  /** Admission with a bounded pause for stale telemetry: waits cadence by
+   *  cadence for a fresh sidecar sample, re-running the session guard each
+   *  time so cancellation and halts stay immediate, then applies the fatal
+   *  guard. */
+  const admit = async () => {
+    const deadline =
+      clock.now() +
+      (STALE_TELEMETRY_WAIT_CADENCES * experiment.contention.cadence_ms) / 1000;
+    while (
+      telemetryAge() > 2 * experiment.contention.cadence_ms &&
+      clock.now() < deadline
+    ) {
+      guard();
+      await sleep(clock.now() + experiment.contention.cadence_ms / 1000);
+    }
+    admissionGuard();
+  };
   const nextStart = (pool: string) => {
     let last = 0;
     for (const a of projection().attempts.values())
@@ -1028,7 +1053,7 @@ export async function runCampaignDispatch(
         continue;
       }
       deps.verifySnapshot();
-      admissionGuard();
+      await admit();
       const activation: BlockActivation = {
         block_id: candidate.reserve ?? candidate.primary,
         primary_block_id: candidate.primary,
@@ -1090,7 +1115,7 @@ export async function runCampaignDispatch(
           ...(graderKeyEnv ? { graderKeyEnv } : {}),
         });
         guard();
-        admissionGuard();
+        await admit();
         activation.attempts.push(prepared.intent);
         keyGrants.set(prepared.intent.identity.execution_attempt_id, [
           ...(subjectKeyEnv
@@ -1099,7 +1124,7 @@ export async function runCampaignDispatch(
           ...(graderKeyEnv ? [{ pool: graderPool, env: graderKeyEnv }] : []),
         ]);
       }
-      admissionGuard();
+      await admit();
       commit(
         candidate.reason ? 'block_replaced' : 'block_activated',
         candidate.reason
@@ -1114,7 +1139,7 @@ export async function runCampaignDispatch(
         )
           continue;
         guard();
-        admissionGuard();
+        await admit();
         const bound = await runtime.create({ intent });
         guard();
         commit('runtime_bound', {
@@ -1148,7 +1173,7 @@ export async function runCampaignDispatch(
         )
           continue;
         guard();
-        admissionGuard();
+        await admit();
         const monitor = await runtime.start(bound);
         writer.assertCurrentOwner();
         const receiptAttempt = projection().attempts.get(

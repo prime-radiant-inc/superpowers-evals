@@ -111,8 +111,11 @@ When dispatch priorities tie, the scheduler considers the first repetition
 across comparisons and scenarios before later repetitions. Resource and
 credential limits still determine which blocks can actually start.
 Admission checks live resource floors and the registered CPU/memory/disk fingerprint.
-Stale host telemetry refuses further activation or worker launch, including after
-slow preparation; it does not prevent termination of already owned workers.
+Stale host telemetry pauses further activation or worker launch, including after
+slow preparation: a slow controller stretch, such as publishing a large run,
+holds launches until the next host sample lands, and a sampler silent for six
+cadences ends the campaign as before. It does not prevent termination of already
+owned workers.
 Credential aliases share key loads by logical pool and public key environment name.
 Within a pool, an overlapping key must have the same derived per-key limit
 (`ceil(frozen pool capacity / inventory size)`) for every alias. Different or
