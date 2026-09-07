@@ -378,7 +378,7 @@ on the same appliance passed that check), and the Codex normalizer does not
 surface `spawn_agent` calls made inside unified `exec` scripts, so
 `tool-called Agent` is a false negative on the Codex arms. The nine behavioral
 scenarios are unaffected. The five-model campaign therefore runs the nine
-behavioral scenarios (40 cells, 100 planned slots, 40 reserve slots), and
+behavioral scenarios (45 cells, 100 planned slots, 45 reserve slots), and
 fractals at n=3 runs as a separate campaign on the same arms and effort once
 both gaps are fixed, which preserves the longitudinal comparison the fractals
 cells were added for.

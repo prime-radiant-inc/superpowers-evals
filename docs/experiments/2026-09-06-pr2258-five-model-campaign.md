@@ -324,6 +324,48 @@ not pinned by a prune-level test, and inside attempt containers Go splits
 `GOPATH` on the colons in attempt directory names, so the agent's own module
 cache lands outside the attempt directory.
 
+## Smoke campaign 5 (on the check-sink fix)
+
+`e6dbb27b-c231-4aac-b594-e5941bae04a5`, evals `9fc5cdc1`, three cells,
+completed 2026-09-07 at 11:05Z after about 40 minutes for $4.44 with every
+attempt published valid, priced, at effort xhigh, with no dependency trees
+and no leftover sink directories. The Claude hello-world cell passed. The
+Luna purpose-discovery cell composed a behavioral fail: the grader found the
+learning purpose never elicited and the spec grep post check agreed. The
+Luna fractals cell is the one that mattered: its post checks ran to
+completion and published twelve check records under a passing grader
+status, so the check-sink fix holds in the non-root container. But two of
+those checks failed for reasons that are not the model's. `go test ./...`
+failed with `fork/exec .../sink-…/tmp/go-build…/cli.test: permission denied`:
+the container mounts the attempt scratch at `/run/quorum/attempt` as a tmpfs
+with `noexec,nosuid`, the execution contract points TMPDIR there, and Go
+builds its test binaries under TMPDIR, so no natively built binary can run
+from the check phase on any model; the container's `/tmp` is a separate
+exec-capable tmpfs, and the agent itself had worked around the same wall
+with `GOMODCACHE` and `GOCACHE` under `/tmp`. Phase-1 fractals runs on this
+appliance passed that check 104 times, so the gap is specific to the campaign
+container. And `tool-called Agent` reported the subagent tool never called
+while the grader watched a subagent dispatched per task: the raw rollout
+spawns subagents as `tools.multi_agent_v1__spawn_agent({ model, reasoning_effort,
+fork_context, message })` inside unified `exec` scripts, and the normalizer's
+script regex accepts only the unprefixed `tools.spawn_agent(`. Those
+subagents ran at `reasoning_effort: medium` while the parent ran xhigh, a
+fact for the effort readout. Neither gap touches the nine behavioral
+scenarios, whose post checks are transcript and file checks and a shell
+grep. Ruling recorded in the spec amendment: fractals runs as its own
+campaign once both are fixed.
+
+## Campaign 5
+
+`7b8205fa-3b02-4901-ab1d-97242f7bbcc3`, input digest `7463500abf05…`,
+registered 2026-09-07 at about 11:15Z with `--global-cap 6` and launched
+immediately after. Frozen refs: evals `aaf8989c` (all four fixes, suite
+without fractals), gauntlet `588a81e8`, superpowers `fd02874a` on every
+`_base` arm and `069edf3f` on every `_head` arm. Nine behavioral scenarios,
+45 cells, 100 planned slots, 45 reserve slots, no excluded cells; all ten
+arms at `effort: xhigh`; pricing snapshot digest `6423a36b…`; attempt bound
+7800 s. Program spend before this campaign was about $291.
+
 ## Results
 
 Pending campaign 5.
