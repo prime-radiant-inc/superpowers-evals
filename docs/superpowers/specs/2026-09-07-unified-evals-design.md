@@ -27,9 +27,10 @@ Drew confirms there are no old Quorum workloads to support. The new product
 has no Quorum coexistence or backward-compatibility requirement. Drew agrees
 to reuse existing auth sources and useful harness delivery code, with separate
 responsibilities for targets, connections, and shared resource limits. Exact
-schemas and target-selection UX remain open. We are now discussing the live
-worker's lifecycle and completion behavior; the proposal below is not yet
-agreed. Evaluation/report details also remain open.
+schemas and target-selection UX remain open. Drew agrees that a completed
+bad implementation or review is a valid run and important signal. Evaluate
+the transcript and any scenario outputs after the interaction. Worker
+implementation, grading/report shape, and execution controls remain open.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -64,6 +65,8 @@ no component should dictate the whole product.
 | Modular components and replaceable layers | Agreed direction. |
 | Centralize efforts around one eval product in smevals | Agreed direction. |
 | One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
+| Completion is distinct from behavioral success | Agreed: completed bad implementations and reviews remain runs and important signal. Do not coach toward a passing grade. |
+| Grade the transcript and scenario outputs | Explicit requirement from Drew. Evaluate outputs when the scenario produces them; transcript evaluation remains required. |
 | Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
 | Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
 | Reuse auth delivery; separate targets, connections, and resource limits | Agreed direction. Exact schemas, target selection, and extraction details remain open. |
@@ -182,7 +185,7 @@ requiring a simulated user. Superpowers Evals would contribute a scenario
 suite and reusable workers/checkers. Gauntlet and other general-purpose
 components can remain independently useful packages or repositories.
 
-### Proposed live worker lifecycle and completion
+### Proposed live worker implementation
 
 Start with one isolated worker process per attempt. It receives resolved
 inputs, prepares the workspace and selected harness/auth/Superpowers setup,
@@ -192,20 +195,37 @@ and capture code at these steps. The driver implementation remains replaceable.
 The supervisor provides a deadline and cancellation that stops the worker's
 process tree; preserve available evidence when a run stops early.
 
-The proposed completion rule is to finish the interaction when the requested
-task has concluded, even when the coding agent did it badly. Normal questions,
+### Agreed completion and grading evidence
+
+Finish the interaction when the requested task has concluded, even when the
+coding agent did it badly. A completed bad implementation or review is a run
+and provides important signal; retain it in the results. Normal questions,
 approvals, and feedback remain part of the simulated user's role. Private
 grading criteria must not drive repeated coaching until the subject passes.
 A scenario can explicitly exercise correction or persistence when that is
 the behavior under test, without requiring ordinary authors to script turns.
 
-Run final evaluation against the collected evidence after the interaction.
+Run final evaluation after the interaction, covering the transcript and any
+outputs the scenario produces. The transcript establishes behavior such as
+clarification, approval, skill use, and review reasoning. Outputs establish
+the quality of produced code, reviews, plans, or other deliverables. A review
+or plan may itself appear in the transcript; these are evidence sources, not
+a requirement for two files, two graders, or separate aggregate scores. Correct
+code does not establish that the required workflow was followed, and a good
+conversation does not establish that the resulting implementation works.
+
+**Proposed grading contract:** Use acceptance criteria to select relevant
+transcript and output evidence, with findings tied to that evidence. Some
+criteria need both. Do not require a file artifact for a conversation-only
+scenario. When output capture succeeds but an expected deliverable was never
+created, that absence is behavioral evidence. Failed capture or a broken
+checker is an evaluation/instrument problem, not proof of bad subject behavior.
+
 Gauntlet's own assessment may be retained as evidence, but does not decide
-whether a behavioral failure counts as a completed execution. This separation
-does not require another LLM: deterministic checks may suffice, with a
-model-based checker selected where semantic evaluation needs one. The exact
-grading contract and how to adapt Gauntlet's current self-grading loop remain
-open. This lifecycle and completion policy are proposals for discussion.
+whether a behavioral failure counts as a completed execution. Deterministic
+checks may suffice, with a model-based checker selected where semantic
+evaluation needs one. The exact grading contract, report representation, and
+adaptation of Gauntlet's current self-grading loop remain open.
 
 ## First execution environment and proposed deployment
 
@@ -392,7 +412,8 @@ Run it through two genuinely different supported harnesses, with repeated
 sessions overlapping within and across them. Use multiple supported model
 selections where available. Produce one report that correctly distinguishes
 behavioral failure, execution error/timeout, and grading error, retaining
-the relevant evidence.
+the relevant evidence. Evaluate both the interaction transcript and the
+produced implementation; retain completed failing outcomes in the report.
 
 Use offline workers for bounded supervision and failure cases, then real
 sessions for interaction fidelity. This is a proposed milestone, not a run
@@ -404,14 +425,15 @@ goal after the initial slice.
 Discuss these in the order that helps the design; they are questions, not
 separate process gates or implementation tasks.
 
-1. **Live worker:** Settle the lifecycle and completion proposal above,
-   including Gauntlet's initial role and the boundary with final evaluation.
+1. **Evaluation/report:** Define criterion results and evidence references
+   for the agreed transcript/output coverage, including deterministic and
+   model-based checks and unavailable evidence.
 2. **Execution experience:** What progress, cancellation, and concurrency
    controls does Drew need for appliance execution?
 3. **Target selection:** Choose how users select targets and specify
    resolution/compatibility behavior within the agreed configuration separation.
-4. **Evaluation/report:** What is the minimum useful result, what evidence
-   supports it, and which expected outcomes require deterministic or LLM checks?
+4. **Live worker:** Choose the initial implementation and specify setup,
+   capture, termination, and cleanup within the agreed whole-run boundary.
 5. **Interfaces and reuse:** Derive the Runner/Checker and internal harness
    boundaries from the agreed experience; decide what existing code fits.
 6. **First slice and scenario reuse:** Pick the actual scenario/targets,
@@ -489,3 +511,8 @@ implementation or operational claims.
   details remain open. Bot proposed the live worker lifecycle and a completion
   rule that permits completed bad outcomes, with final evaluation after the
   interaction rather than coaching toward a passing grade.
+- **2026-09-07:** Drew agreed that completed bad implementations and reviews
+  remain runs and provide important signal. He explicitly required grading
+  both the transcript and outputs when the scenario produces them. Promoted
+  completion and evidence coverage to decisions; the worker implementation
+  and detailed grading/report contract remain open.
