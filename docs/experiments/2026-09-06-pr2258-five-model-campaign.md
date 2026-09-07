@@ -214,6 +214,29 @@ arm. 50 cells, 130 planned slots, 50 reserve slots, no excluded cells; all
 ten arms at `effort: xhigh`; pricing snapshot digest `6423a36b…`; attempt
 bound 7800 s.
 
+The controller ended the campaign as `interrupted` at 05:48:05Z with
+`stale telemetry (20005ms); refusing admission`, killing seven in-flight
+attempts (fractals Astra and Sol, both arms; `user-pref-corp-no-brainstorm-met`
+Sol, both arms; `user-pref-no-brainstorm` Sol head). Known spend $106.93; the
+seven killed runs' cost is not in that figure. The host was healthy throughout
+(load 0.37, 28 GB free, no OOM) and no lock or credential fault was involved.
+The mechanism is in the controller itself: the contention sampler is a loop
+inside the controller process at a 10 s cadence, and admission refuses (and
+by design ends the campaign) when the newest sidecar sample is older than
+twice the cadence. Publication of an attempt runs in that same process with
+blocking reads and hashing of every artifact. The two Sol
+`brainstorming-todo-purpose-discovery` runs carried 5217 and 4905 files each,
+about 97% of them the Vite scaffold's `node_modules` (80 MB per run), which
+only became publishable after campaign 1's symlink fix. While those two
+published (05:40:46 and 05:44:10) the sampler's gaps widened from 10 s to 12
+s, 15 s, and 22.6 s, and the next admission saw a stale sample. Campaign 1's
+manifest-writer refusal had been hiding this: unpublishable dependency trees
+never reached the publisher. Third platform defect of the program; recorded
+in the ledger with the timeline. Usable verdicts from campaign 3 before the
+interruption: 24 pass, 2 fail (`writing-plans-no-spec-conversational` Astra
+base and head, post-check), 2 indeterminate (`user-pref-no-brainstorm` Astra,
+grader `investigate`), all Astra and Sol; no Luna or Claude cells had started.
+
 ## Results
 
 Pending campaign 3.
