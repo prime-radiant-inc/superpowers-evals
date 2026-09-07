@@ -501,3 +501,39 @@ test('provision (oauth credential) re-enforces 0600 on a pre-existing looser-per
     cleanup();
   }
 });
+
+test('provision appends CLAUDE_CODE_EFFORT_LEVEL to .claude-env when the run requests an effort', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const home = { ...base, effort: 'xhigh' as const };
+  try {
+    withEnv({ ANTHROPIC_API_KEY: undefined, [API_KEY_ENV]: API_KEY }, () => {
+      const agent = resolveAgent(claudeConfig());
+      agent.provision(home, undefined as never, apiKeyCredential);
+      const envFile = join(home.configDir, '.claude-env');
+      const env = readFileSync(envFile, 'utf8');
+      expect(env).toContain(`ANTHROPIC_API_KEY='${API_KEY}'`);
+      expect(env.endsWith("CLAUDE_CODE_EFFORT_LEVEL='xhigh'\n")).toBe(true);
+      expect(statSync(envFile).mode & 0o777).toBe(0o600);
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('provision writes no effort line when the run requests none', () => {
+  const { home, cleanup } = makeTempHome();
+  try {
+    withEnv({ ANTHROPIC_API_KEY: undefined, [API_KEY_ENV]: API_KEY }, () => {
+      resolveAgent(claudeConfig()).provision(
+        home,
+        undefined as never,
+        apiKeyCredential,
+      );
+      expect(
+        readFileSync(join(home.configDir, '.claude-env'), 'utf8'),
+      ).not.toContain('CLAUDE_CODE_EFFORT_LEVEL');
+    });
+  } finally {
+    cleanup();
+  }
+});

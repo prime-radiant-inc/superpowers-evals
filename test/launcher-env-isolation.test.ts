@@ -282,6 +282,7 @@ const HOSTILE = {
   AWS_BEARER_TOKEN_BEDROCK: 'host-bearer-EVIL',
   CLAUDECODE: '1',
   CLAUDE_CODE_SESSION_ID: 'host-session',
+  CLAUDE_CODE_EFFORT_LEVEL: 'host-evil-effort',
   OPENAI_API_KEY: 'sk-host-openai',
   OPENAI_BASE_URL: 'http://evil-openai.example',
   OPENAI_ORG_ID: 'evil-org',
@@ -366,6 +367,26 @@ test('claude launcher: Mantle .claude-env forwards seeded vars, drops the key, s
   expect(env['AWS_ACCESS_KEY_ID']).toBe(undefined);
   expect(env['AWS_SESSION_TOKEN']).toBe(undefined);
   expect(env['AWS_PROFILE']).toBe(undefined);
+});
+
+test('claude launcher: effort forwards only from .claude-env, never from the host', () => {
+  const { launcher, binDir, envDump } = installLauncher('claude', {
+    envFileContent:
+      "ANTHROPIC_API_KEY='sk-test-launcher'\nCLAUDE_CODE_EFFORT_LEVEL='xhigh'\n",
+  });
+  const proc = spawnSync('bash', [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...HOSTILE,
+      PATH: `${binDir}:/usr/bin:/bin`,
+      HOME: '/host/home',
+    },
+  });
+  expect(proc.status).toBe(0);
+  const env = parseEnvDump(envDump);
+  // The file's level reaches the agent; the hostile host level never does.
+  expectHostileScrubbed(env, { CLAUDE_CODE_EFFORT_LEVEL: 'xhigh' });
+  expect(env['ANTHROPIC_API_KEY']).toBe('sk-test-launcher');
 });
 
 test('codex launcher: subscription path (no env file) forwards no provider key', () => {

@@ -2,9 +2,10 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seedClaudeMantle } from '../src/agents/index.ts';
+import { resolveAgent, seedClaudeMantle } from '../src/agents/index.ts';
 import { CredentialSchema } from '../src/contracts/credential.ts';
 import { setProcessEnv } from '../src/env.ts';
+import { makeTempHome } from './provision-helpers.ts';
 
 const CRED = CredentialSchema.parse({
   model: 'anthropic.claude-opus-4-8',
@@ -50,4 +51,29 @@ test('seedClaudeMantle throws when the credential has no region', () => {
     region: undefined,
   });
   expect(() => seedClaudeMantle(dir, cred)).toThrow('region');
+});
+
+test('provision on the Mantle path appends the effort line after the Bedrock env', () => {
+  const { home: base, cleanup } = makeTempHome();
+  const home = { ...base, effort: 'xhigh' as const };
+  setProcessEnv('A2_TEST_MANTLE_BEARER', 'bedrock-key-xyz');
+  try {
+    const agent = resolveAgent({
+      name: 'claude',
+      binary: 'claude',
+      home_config_subdir: '.claude',
+      session_log_dir: '${QUORUM_AGENT_HOME}/.claude/projects',
+      session_log_glob: '*.jsonl',
+      normalizer: 'claude',
+      required_env: ['SUPERPOWERS_ROOT'],
+      os_support: ['linux'],
+      runtime_family: 'claude',
+    });
+    agent.provision(home, undefined as never, CRED);
+    expect(readFileSync(join(home.configDir, '.claude-env'), 'utf8')).toBe(
+      "CLAUDE_CODE_USE_MANTLE=1\nAWS_REGION='us-east-1'\nAWS_BEARER_TOKEN_BEDROCK='bedrock-key-xyz'\nCLAUDE_CODE_EFFORT_LEVEL='xhigh'\n",
+    );
+  } finally {
+    cleanup();
+  }
 });

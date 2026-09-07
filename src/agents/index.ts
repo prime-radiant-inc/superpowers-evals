@@ -203,6 +203,13 @@ class ClaudeAgent implements CodingAgent {
         throw new ProvisionError(e instanceof Error ? e.message : String(e));
       }
     }
+    // Effort is a run property (arm-level in campaigns). It travels in the
+    // run-scoped env file the launcher sources and forwards — not in
+    // settings.json (Opus 4.8 can hold a model default across sessions
+    // despite settings) and never through host env (the env -i wall).
+    if (home.effort !== undefined) {
+      appendClaudeEnvLine(configDir, 'CLAUDE_CODE_EFFORT_LEVEL', home.effort);
+    }
     return {};
   }
 }
@@ -296,6 +303,22 @@ export function seedClaudeMantle(
   writePrivateFileNoFollow(
     envFile,
     `CLAUDE_CODE_USE_MANTLE=1\nAWS_REGION=${shellSingleQuote(region)}\nAWS_BEARER_TOKEN_BEDROCK=${shellSingleQuote(bearer)}\n`,
+  );
+}
+
+/** Append one `NAME='value'` line to the run-scoped .claude-env, creating the
+ *  file when no auth seeder wrote one, through the same O_NOFOLLOW 0600 writer
+ *  the seeders use so the file never loosens. */
+function appendClaudeEnvLine(
+  configDir: string,
+  name: string,
+  value: string,
+): void {
+  const envFile = join(configDir, CLAUDE_ENV_FILE_NAME);
+  const existing = existsSync(envFile) ? readFileSync(envFile, 'utf8') : '';
+  writePrivateFileNoFollow(
+    envFile,
+    `${existing}${name}=${shellSingleQuote(value)}\n`,
   );
 }
 
