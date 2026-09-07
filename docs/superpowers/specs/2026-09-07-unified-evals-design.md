@@ -33,10 +33,12 @@ the transcript and any scenario outputs after the interaction. Submitted
 batches belong to the appliance: the client records an ID and polls until
 completion, as in current evals. Client disconnects do not stop execution.
 Worker implementation, grading/report shape, and detailed execution controls
-remain open. After inspecting the appliance and August 10–September 7 records,
-Bot proposes eight concurrent runs as the normal target, qualification at
-sixteen, and initially two heavy build/browser attempts within the total.
-Six is demonstrated; the higher targets are open for Drew to discuss/adjust.
+remain open. Drew agreed to eight concurrent runs as the normal target,
+qualification at sixteen, and initially two heavy build/browser attempts
+within the total. Six is demonstrated; the agreed higher targets still need
+qualification. Next, turn the working decisions into a concrete proposed spec,
+using an end-to-end example to settle inputs, worker/checker contracts, and
+the report. Detailed implementation and first-slice choices remain proposals.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -75,7 +77,7 @@ no component should dictate the whole product.
 | Grade the transcript and scenario outputs | Explicit requirement from Drew. Evaluate outputs when the scenario produces them; transcript evaluation remains required. |
 | Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
 | Appliance owns submitted execution; clients poll by ID | Explicitly agreed by Drew, preserving the current submit-and-poll operating model. Polling is observation, not a keepalive. |
-| Eight normal / sixteen qualified / two heavy within the total | Evidence-based proposal after appliance, history, and scenario inspection; not yet agreed or demonstrated. |
+| Eight normal / sixteen qualified / two heavy within the total | Agreed targets after appliance, history, and scenario inspection. Six is demonstrated; eight/sixteen still require qualification. |
 | Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
 | Reuse auth delivery; separate targets, connections, and resource limits | Agreed direction. Exact schemas, target selection, and extraction details remain open. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
@@ -325,18 +327,17 @@ OS or runtime need a separate compatible executor later; the appliance must
 not redefine the full supported-harness requirement. Keep the core host-neutral
 without building multi-host orchestration before it is needed.
 
-The execution location and appliance ownership are agreed. Deployment and
-capacity details remain proposals.
+The execution location, appliance ownership, and capacity targets are agreed.
+Deployment and capacity qualification details remain proposals.
 
-### Capacity recommendation after appliance and run-history inspection
+### Agreed capacity targets and supporting inspection
 
-**Proposal:** Target eight simultaneous whole runs for normal operation and
+**Agreed targets:** Eight simultaneous whole runs for normal operation and
 qualify sixteen on the existing appliance. Initially allow two heavy
 build/browser attempts within that total. One run is one scenario × target ×
 repetition, including its coding agent and simulated user. Sixteen is a
-qualification target, not a software ceiling. These numbers remain open for
-Drew to adjust; no runtime limits were changed and no qualification runs were
-launched.
+qualification target, not a software ceiling. Drew accepted these targets;
+no runtime limits were changed and no qualification runs were launched.
 
 Read-only Tailscale SSH inspection on September 7 found an idle m6i.2xlarge
 with eight vCPUs, 30.82 GiB RAM, and 147.7 GiB free on its data filesystem.
@@ -523,7 +524,7 @@ unsuitable for the smaller requirements now under discussion.
 
 ## Proposed first proof
 
-One YAML scenario requires clarification and approval before implementation.
+One prose scenario requires clarification and approval before implementation.
 Run it through two genuinely different supported harnesses, with repeated
 sessions overlapping within and across them. Use multiple supported model
 selections where available. Produce one report that correctly distinguishes
@@ -541,15 +542,17 @@ initial slice.
 
 ## Discussion queue
 
-Discuss these in the order that helps the design; they are questions, not
-separate process gates or implementation tasks.
+Develop the next proposed spec around one concrete end-to-end example: a
+scenario brief, selected targets, appliance submission/status, worker evidence,
+and the resulting report. Resolve the following details in that draft for
+review; they are not separate process gates or implementation tasks.
 
 1. **Evaluation/report:** Define criterion results and evidence references
    for the agreed transcript/output coverage, including deterministic and
    model-based checks and unavailable evidence.
-2. **Capacity and execution controls:** Discuss the eight/sixteen/two proposal
-   above, then define progress, cancellation, and concurrency controls within
-   the agreed appliance-owned submit-and-poll model.
+2. **Capacity and execution controls:** Define progress, cancellation, and
+   concurrency controls around the agreed eight/sixteen/two targets and
+   appliance-owned submit-and-poll model.
 3. **Target selection:** Choose how users select targets and specify
    resolution/compatibility behavior within the agreed configuration separation.
 4. **Live worker:** Choose the initial implementation and specify setup,
@@ -651,3 +654,7 @@ implementation or operational claims.
   qualification, and initially two heavy attempts within the total. Current
   user-model route caps of two/six need explicit qualification; this proposal
   remains open for discussion and no limits or workloads were changed.
+- **2026-09-07:** Drew accepted the eight normal / sixteen qualification /
+  two heavy capacity targets. They are design targets, not newly demonstrated
+  operating capacity. Bot recommends drafting the concrete first-version spec
+  next, resolving the remaining contracts through an end-to-end example.
