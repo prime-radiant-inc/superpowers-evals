@@ -39,6 +39,18 @@ Claude, Codex, Pi and Copilot support ref and none. Kimi supports ref only; the
 fake adapter supports none only. Other adapters require their declared capability;
 registration refuses unsupported combinations rather than assuming support.
 
+An arm may declare `effort: <level>` to pin the coding agent's effort for
+every run of that arm. Codex accepts `minimal | low | medium | high | xhigh`
+and receives it as the root `model_reasoning_effort` in its generated
+config; Claude accepts `low | medium | high | xhigh | max` and receives it
+as `CLAUDE_CODE_EFFORT_LEVEL` through the run-scoped env file its launcher
+forwards. Any other harness refuses `effort` at `quorum check` and at
+registration. The declared level is frozen with the arm bytes and stamped
+into each verdict's `provenance.effort`; the effective level is only proven
+by the raw session log. A scenario `codex.config.toml` that also sets
+`model_reasoning_effort` makes the attempt a setup error rather than a
+duplicate-key TOML failure inside Codex.
+
 ## Credentials and machine prerequisites
 
 Use the prepared Linux container runtime and the installed helper/configuration
