@@ -282,6 +282,31 @@ slots, no excluded cells; all ten arms at `effort: xhigh`; pricing snapshot
 digest `6423a36b…`; attempt bound 7800 s. Program spend before this campaign
 was about $159 across three smokes and three failed campaigns.
 
+Cancelled by the operator at about 10:15Z with $81.99 known across 36
+attempts, 30 of them published: Astra 13 pass, 4 indeterminate, 2 fail;
+Sol 10 pass, 1 fail; no block invalidated, telemetry gaps at most 14.6 s
+under load 3.3, every verdict at effort xhigh. The guard scenarios were
+behaving: the two Astra fails are the no-spec writing-plans post-check in
+both arms as in campaign 3, three of the indeterminates are the grader's
+`investigate` status on `cost-spec-plan-duplication` and
+`user-pref-no-brainstorm` for Astra as in campaigns 2 and 3, and the Sol
+fail is the companion-just-in-time scenario on the grader's judgment. The
+fourth indeterminate was the first `sdd-go-fractals-opus48` attempt to
+finish (Astra base): the Gauntlet-Agent recorded `run_end` with status pass
+after 56 minutes, and the runner then failed with
+`EACCES: permission denied, rm '/run/quorum/attempt/sink-…'`, an
+unknown-stage error that left no grader status and no check records. The
+check phase creates a private sink directory under the attempt mount and
+gives the check subprocess a HOME inside it; the fractals post checks run
+`go test ./...`, the project has module dependencies, and Go extracts its
+module cache under that HOME with read-only directories, which a non-root
+container cannot remove. Every fractals attempt on every model would have
+died the same way after about an hour of xhigh spend, thirty planned
+attempts plus ten reserves, so the campaign was cancelled rather than let
+that spend run. Fourth platform defect of the program; fixed next by making
+the sink removal tolerate read-only trees and adding a Luna fractals cell to
+the smoke suite as the live proof.
+
 ## Results
 
-Pending campaign 4.
+Pending campaign 5.
