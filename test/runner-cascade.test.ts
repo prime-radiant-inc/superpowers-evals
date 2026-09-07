@@ -35,7 +35,12 @@ function base(
     logGlob: '*.jsonl',
     snapshot: new Set<string>(),
     launchCwd: logDir,
-    captureResult: { sourceLogs: [], rowCount: 0 },
+    captureResult: {
+      sourceLogs: [],
+      rowCount: 0,
+      availability: 'unavailable',
+      errors: [],
+    },
     gauntlet: GAUNTLET,
     preRecords: [],
     runDir: logDir,
@@ -59,7 +64,12 @@ test('strict-capture: gemini with source logs but zero rows -> capture indetermi
     base({
       normalizer: 'gemini',
       logDir,
-      captureResult: { sourceLogs: [logPath], rowCount: 0 },
+      captureResult: {
+        sourceLogs: [logPath],
+        rowCount: 0,
+        availability: 'unavailable',
+        errors: [],
+      },
     }),
   );
   expect(v?.final_reason).toContain(
@@ -76,7 +86,31 @@ test('strict-capture: claude WITH rows -> null (proceed)', () => {
     base({
       normalizer: 'claude',
       logDir,
-      captureResult: { sourceLogs: [logPath], rowCount: 3 },
+      captureResult: {
+        sourceLogs: [logPath],
+        rowCount: 3,
+        availability: 'available',
+        errors: [],
+      },
+    }),
+  );
+  expect(v).toBe(null);
+});
+
+test('strict-capture: Claude message-only evidence is available and proceeds', () => {
+  const logDir = freshLogDir();
+  const logPath = join(logDir, 'chat.jsonl');
+  writeFileSync(logPath, '{}');
+  const v = captureCascadeVerdict(
+    base({
+      normalizer: 'claude',
+      logDir,
+      captureResult: {
+        sourceLogs: [logPath],
+        rowCount: 0,
+        availability: 'available',
+        errors: [],
+      },
     }),
   );
   expect(v).toBe(null);
@@ -103,7 +137,12 @@ test('strict-capture: copilot with source logs but zero rows -> capture indeterm
     base({
       normalizer: 'copilot',
       logDir,
-      captureResult: { sourceLogs: [logPath], rowCount: 0 },
+      captureResult: {
+        sourceLogs: [logPath],
+        rowCount: 0,
+        availability: 'unavailable',
+        errors: [],
+      },
     }),
   );
   expect(v?.final).toBe('indeterminate');
@@ -134,7 +173,12 @@ test('pi: misplaced session -> qa-agent-misconfigured', () => {
       logDir,
       launchCwd: logDir,
       // capture filtered it out (cwd mismatch) -> no source logs
-      captureResult: { sourceLogs: [], rowCount: 0 },
+      captureResult: {
+        sourceLogs: [],
+        rowCount: 0,
+        availability: 'unavailable',
+        errors: [],
+      },
     }),
   );
   expect(v?.error?.stage).toBe('qa-agent-misconfigured');
@@ -157,7 +201,12 @@ test('kimi: source logs with rows but no session-start -> capture indeterminate'
     base({
       normalizer: 'kimi',
       logDir,
-      captureResult: { sourceLogs: [logPath], rowCount: 2 },
+      captureResult: {
+        sourceLogs: [logPath],
+        rowCount: 2,
+        availability: 'available',
+        errors: [],
+      },
     }),
   );
   expect(v?.final_reason).toContain('plugin_session_start');
@@ -181,7 +230,12 @@ test('kimi: source logs with rows AND session-start -> null (proceed)', () => {
     base({
       normalizer: 'kimi',
       logDir,
-      captureResult: { sourceLogs: [logPath], rowCount: 2 },
+      captureResult: {
+        sourceLogs: [logPath],
+        rowCount: 2,
+        availability: 'available',
+        errors: [],
+      },
     }),
   );
   expect(v).toBe(null);
@@ -202,7 +256,7 @@ test('codexMisplacedVerdict: empty capture + misplaced rollout -> qa-agent-misco
     `${JSON.stringify({ type: 'session_meta', payload: { cwd: inside } })}\n`,
   );
   const v = codexMisplacedVerdict({
-    captureEmpty: true,
+    captureAvailability: 'unavailable',
     normalizer: 'codex',
     logDir,
     logGlob: '*.jsonl',
@@ -214,12 +268,38 @@ test('codexMisplacedVerdict: empty capture + misplaced rollout -> qa-agent-misco
   expect(v?.final_reason).toContain('wrong cwd');
 });
 
+test('codexMisplacedVerdict uses unavailable capture evidence rather than tool count', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const logDir = join(runDir, 'sessions');
+  mkdirSync(logDir, { recursive: true });
+  const launchCwd = join(runDir, 'coding-agent-workdir');
+  const inside = join(runDir, 'somewhere-else');
+  mkdirSync(launchCwd, { recursive: true });
+  mkdirSync(inside, { recursive: true });
+  writeFileSync(
+    join(logDir, 'rollout.jsonl'),
+    `${JSON.stringify({ type: 'session_meta', payload: { cwd: inside } })}\n`,
+  );
+
+  const v = codexMisplacedVerdict({
+    captureAvailability: 'unavailable',
+    normalizer: 'codex',
+    logDir,
+    logGlob: '*.jsonl',
+    snapshot: new Set<string>(),
+    runDir,
+    launchCwd,
+  });
+
+  expect(v?.error?.stage).toBe('qa-agent-misconfigured');
+});
+
 test('codexMisplacedVerdict: empty capture but no misplaced rollout -> null', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));
   const logDir = join(runDir, 'sessions');
   mkdirSync(logDir, { recursive: true });
   const v = codexMisplacedVerdict({
-    captureEmpty: true,
+    captureAvailability: 'unavailable',
     normalizer: 'codex',
     logDir,
     logGlob: '*.jsonl',
@@ -233,7 +313,7 @@ test('codexMisplacedVerdict: empty capture but no misplaced rollout -> null', ()
 test('codexMisplacedVerdict: non-codex normalizer -> null', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));
   const v = codexMisplacedVerdict({
-    captureEmpty: true,
+    captureAvailability: 'unavailable',
     normalizer: 'claude',
     logDir: runDir,
     logGlob: '*.jsonl',

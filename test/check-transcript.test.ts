@@ -47,6 +47,7 @@ function makeTrajectory(calls: ToolCallView[]): AtifTrajectory {
       {
         step_id: 1,
         source: 'agent',
+        message: 'Captured response.',
         tool_calls: calls.map((c, i) => ({
           tool_call_id: `tc${i}`,
           function_name: c.tool,
@@ -69,17 +70,20 @@ interface SpawnResult {
 async function runCLI(
   verbAndArgs: string[],
   calls: ToolCallView[],
+  availability: 'available' | 'unavailable' | 'errored' = 'available',
+  trajectoryRaw = JSON.stringify(makeTrajectory(calls)),
 ): Promise<SpawnResult> {
   const dir = mkdtempSync(join(tmpdir(), 'check-transcript-test-'));
   const trajectoryPath = join(dir, 'trajectory.json');
   const sinkPath = join(dir, 'sink.jsonl');
 
-  await Bun.write(trajectoryPath, JSON.stringify(makeTrajectory(calls)));
+  await Bun.write(trajectoryPath, trajectoryRaw);
 
   const proc = Bun.spawn(['bun', 'run', CLI_PATH, ...verbAndArgs], {
     env: {
       ...process.env,
       QUORUM_TRANSCRIPT_PATH: trajectoryPath,
+      QUORUM_CAPTURE_AVAILABILITY: availability,
       QUORUM_RECORD_SINK: sinkPath,
     },
     stdout: 'pipe',
@@ -119,6 +123,7 @@ async function runCLIEmpty(verbAndArgs: string[]): Promise<SpawnResult> {
     env: {
       ...process.env,
       QUORUM_TRANSCRIPT_PATH: join(dir, 'nonexistent.json'),
+      QUORUM_CAPTURE_AVAILABILITY: 'available',
       QUORUM_RECORD_SINK: sinkPath,
     },
     stdout: 'pipe',
@@ -148,6 +153,51 @@ async function runCLIEmpty(verbAndArgs: string[]): Promise<SpawnResult> {
   rmSync(dir, { recursive: true });
   return { exitCode, stdout, stderr, lastRecord };
 }
+
+test('valid zero-tool evidence makes a positive requirement fail normally and a negative requirement pass', async () => {
+  const positive = await runCLI(['tool-called', 'Edit'], []);
+  const negative = await runCLI(['tool-not-called', 'Edit'], []);
+
+  expect(positive.exitCode).toBe(1);
+  expect(positive.lastRecord).toMatchObject({
+    check: 'tool-called',
+    passed: false,
+  });
+  expect(negative.exitCode).toBe(0);
+  expect(negative.lastRecord).toMatchObject({
+    check: 'tool-not-called',
+    passed: true,
+  });
+});
+
+for (const availability of ['unavailable', 'errored'] as const) {
+  test(`${availability} transcript evidence is a broken check before a negative predicate runs`, async () => {
+    const result = await runCLI(['tool-not-called', 'Edit'], [], availability);
+
+    expect(result.exitCode).toBe(127);
+    expect(result.lastRecord).toMatchObject({
+      check: 'tool-not-called',
+      passed: false,
+    });
+    expect(result.lastRecord?.['detail']).toContain(availability);
+  });
+}
+
+test('a corrupt trajectory stays unavailable when the environment claims available', async () => {
+  const result = await runCLI(
+    ['tool-not-called', 'Edit'],
+    [],
+    'available',
+    '{not json',
+  );
+
+  expect(result.exitCode).toBe(127);
+  expect(result.lastRecord).toMatchObject({
+    check: 'tool-not-called',
+    passed: false,
+  });
+  expect(result.lastRecord?.['detail']).toContain('unavailable');
+});
 
 // ---------------------------------------------------------------------------
 // tool-called
@@ -208,11 +258,11 @@ test('tool-not-called: fail on empty transcript (C1 contract)', () => {
   expect(result.detail).toBe('tool-calls file missing or empty');
 });
 
-test('tool-not-called: empty → exit 1 (E2E)', async () => {
+test('tool-not-called: unavailable evidence → exit 127 (E2E)', async () => {
   const r = await runCLIEmpty(['tool-not-called', 'Edit']);
-  expect(r.exitCode).toBe(1);
+  expect(r.exitCode).toBe(127);
   expect(r.lastRecord!['passed']).toBe(false);
-  expect(r.lastRecord!['detail']).toBe('tool-calls file missing or empty');
+  expect(r.lastRecord!['detail']).toContain('unavailable');
 });
 
 // ---------------------------------------------------------------------------
@@ -410,14 +460,14 @@ test('skill-not-called: fail on empty transcript (C1 contract)', () => {
   expect(result.detail).toBe('tool-calls file missing or empty');
 });
 
-test('skill-not-called: empty → exit 1 (E2E)', async () => {
+test('skill-not-called: unavailable evidence → exit 127 (E2E)', async () => {
   const r = await runCLIEmpty([
     'skill-not-called',
     'superpowers:brainstorming',
   ]);
-  expect(r.exitCode).toBe(1);
+  expect(r.exitCode).toBe(127);
   expect(r.lastRecord!['passed']).toBe(false);
-  expect(r.lastRecord!['detail']).toBe('tool-calls file missing or empty');
+  expect(r.lastRecord!['detail']).toContain('unavailable');
 });
 
 // ---------------------------------------------------------------------------
@@ -463,15 +513,15 @@ test('skill-before-tool: fail on empty transcript (C1 contract)', () => {
   expect(result.detail).toBe('tool-calls file missing or empty');
 });
 
-test('skill-before-tool: empty → exit 1 (E2E)', async () => {
+test('skill-before-tool: unavailable evidence → exit 127 (E2E)', async () => {
   const r = await runCLIEmpty([
     'skill-before-tool',
     'superpowers:writing-plans',
     'Edit',
   ]);
-  expect(r.exitCode).toBe(1);
+  expect(r.exitCode).toBe(127);
   expect(r.lastRecord!['passed']).toBe(false);
-  expect(r.lastRecord!['detail']).toBe('tool-calls file missing or empty');
+  expect(r.lastRecord!['detail']).toContain('unavailable');
 });
 
 // ---------------------------------------------------------------------------

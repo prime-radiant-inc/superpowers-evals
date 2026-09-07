@@ -582,7 +582,11 @@ function normalizeToolCallPayload(
  *   - tool_search_call → tool-call step with function_name "ToolSearch"; tool_search_output pairs by call_id
  *   - session_meta → session_id, agent.version, agent.extra (cwd/git/originator/instructions)
  */
-export function normalizeCodex(raw: string, version: string): AtifTrajectory {
+export function normalizeCodex(
+  raw: string,
+  version: string,
+  onMalformedLine?: (line: number, message: string) => void,
+): AtifTrajectory {
   const steps: AtifStep[] = [];
   let stepId = 1;
 
@@ -614,12 +618,16 @@ export function normalizeCodex(raw: string, version: string): AtifTrajectory {
   const pendingCallStepIndex = new Map<string, number>();
   const completedCallIds = new Set<string>();
 
-  for (const line of raw.split('\n')) {
+  for (const [index, line] of raw.split('\n').entries()) {
     if (!line.trim()) continue;
     let entry: Record<string, unknown>;
     try {
       entry = JSON.parse(line) as Record<string, unknown>;
-    } catch {
+    } catch (error) {
+      onMalformedLine?.(
+        index + 1,
+        error instanceof Error ? error.message : String(error),
+      );
       continue;
     }
 

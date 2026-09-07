@@ -333,7 +333,15 @@ export function verbCommandSucceeds(
   if (proc.error) {
     throw proc.error;
   }
-  if ((proc.status ?? 0) === 0) {
+  if (proc.signal !== null || proc.status === null) {
+    return broken(
+      `command-succeeds: child did not settle normally (${proc.signal ?? 'no status'})`,
+    );
+  }
+  if (proc.status === 126 || proc.status === 127 || proc.status >= 128) {
+    return broken(`command-succeeds: checker exited ${proc.status}`);
+  }
+  if (proc.status === 0) {
     return pass();
   }
   // Take the first 500 bytes of combined stdout+stderr, then strip trailing

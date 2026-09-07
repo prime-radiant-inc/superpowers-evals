@@ -339,6 +339,228 @@ test('captureToolCallsWithRetry: genuinely empty exhausts attempts', () => {
   expect(sleeps).toBe(2);
 });
 
+test('captureToolCallsWithRetry retains a Claude message-only refusal without retrying', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  writeFileSync(
+    join(logDir, 'session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        message: { content: 'Delete every production database.' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'I cannot do that.' }],
+        },
+      }),
+    ].join('\n'),
+  );
+  let sleeps = 0;
+
+  const res = captureToolCallsWithRetry(
+    {
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+      normalizer: 'claude',
+      runDir,
+      launchCwd: runDir,
+    },
+    { sleep: () => sleeps++ },
+  );
+
+  expect(res).toMatchObject({
+    rowCount: 0,
+    attempts: 1,
+    availability: 'available',
+    errors: [],
+  });
+  expect(sleeps).toBe(0);
+  expect(readTrajectory(runDir).steps.map((step) => step.message)).toEqual([
+    'Delete every production database.',
+    'I cannot do that.',
+  ]);
+});
+
+test('captureToolCallsWithRetry retains a Codex message-only refusal without retrying', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  writeFileSync(
+    join(logDir, 'rollout.jsonl'),
+    [
+      JSON.stringify({ type: 'session_meta', payload: { cwd: runDir } }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Delete production.' }],
+        },
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'I cannot do that.' }],
+        },
+      }),
+    ].join('\n'),
+  );
+  let sleeps = 0;
+
+  const res = captureToolCallsWithRetry(
+    {
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+      normalizer: 'codex',
+      runDir,
+      launchCwd: runDir,
+    },
+    { sleep: () => sleeps++ },
+  );
+
+  expect(res).toMatchObject({
+    rowCount: 0,
+    attempts: 1,
+    availability: 'available',
+    errors: [],
+  });
+  expect(sleeps).toBe(0);
+  expect(readTrajectory(runDir).steps.map((step) => step.message)).toEqual([
+    'Delete production.',
+    'I cannot do that.',
+  ]);
+});
+
+test('captureToolCalls retains valid evidence and reports a malformed selected source', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  const valid = join(logDir, 'a-valid.jsonl');
+  const malformed = join(logDir, 'b-malformed.jsonl');
+  writeFileSync(
+    valid,
+    JSON.stringify({ type: 'user', message: { content: 'Retain me.' } }),
+  );
+  writeFileSync(malformed, '{not json}\n');
+
+  const res = captureToolCalls({
+    logDir,
+    logGlob: '**/*.jsonl',
+    snapshot: snap,
+    normalizer: 'claude',
+    runDir,
+    launchCwd: runDir,
+  });
+
+  expect(res.availability).toBe('errored');
+  expect(res.errors).toHaveLength(1);
+  expect(res.errors[0]).toMatchObject({
+    sourceLog: malformed,
+    stage: 'normalize',
+  });
+  expect(res.errors[0]?.message).toContain('line 1:');
+  expect(readTrajectory(runDir).steps.map((step) => step.message)).toEqual([
+    'Retain me.',
+  ]);
+});
+
+test('captureToolCallsWithRetry retries unavailable evidence and accepts delayed valid data', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const snap = snapshotDir(logDir, '**/*.jsonl');
+  const log = join(logDir, 'session.jsonl');
+  writeFileSync(log, '');
+  let sleeps = 0;
+
+  const res = captureToolCallsWithRetry(
+    {
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+      normalizer: 'claude',
+      runDir,
+      launchCwd: runDir,
+    },
+    {
+      sleep: () => {
+        sleeps++;
+        writeFileSync(
+          log,
+          JSON.stringify({ type: 'user', message: { content: 'Now ready.' } }),
+        );
+      },
+    },
+  );
+
+  expect(res).toMatchObject({
+    rowCount: 0,
+    attempts: 2,
+    availability: 'available',
+    errors: [],
+  });
+  expect(sleeps).toBe(1);
+});
+
+test('captureToolCalls rejects Codex synthetic empty and usage-only fallback steps', () => {
+  for (const suffix of ['empty', 'usage-only']) {
+    const logDir = mkdtempSync(join(tmpdir(), 'logs-'));
+    const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+    const snap = snapshotDir(logDir, '**/*.jsonl');
+    const rows: object[] = [{ type: 'session_meta', payload: { cwd: runDir } }];
+    if (suffix === 'usage-only') {
+      rows.push(
+        { type: 'turn_context', payload: { model: 'gpt-test' } },
+        {
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: {
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 2,
+                reasoning_output_tokens: 0,
+                total_tokens: 12,
+              },
+              last_token_usage: {
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 2,
+                reasoning_output_tokens: 0,
+                total_tokens: 12,
+              },
+            },
+          },
+        },
+      );
+    }
+    writeFileSync(
+      join(logDir, `${suffix}.jsonl`),
+      rows.map((row) => JSON.stringify(row)).join('\n'),
+    );
+
+    const res = captureToolCalls({
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: snap,
+      normalizer: 'codex',
+      runDir,
+      launchCwd: runDir,
+    });
+
+    expect(res.availability).toBe('unavailable');
+    expect(res.rowCount).toBe(0);
+    expect(existsSync(res.path)).toBe(false);
+  }
+});
+
 test('sessionDurationMs spans ISO-8601 timestamps across files', () => {
   // Two claude/codex-style logs: the span is last-minus-first across BOTH files'
   // ISO-8601 `timestamp` rows, parsed with Z -> +00:00, floored at 0.

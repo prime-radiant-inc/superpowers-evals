@@ -594,8 +594,19 @@ const READ_ONLY_TRAJECTORY = JSON.stringify({
   ],
 });
 
-// An empty capture is the absence of a trajectory.json: capture removes the file
-// on a zero-row run, so check-transcript reads a missing path → empty:true.
+const MESSAGE_ONLY_TRAJECTORY = JSON.stringify({
+  schema_version: 'ATIF-v1.7',
+  agent: { name: 'claude-code', version: 'test' },
+  steps: [
+    {
+      step_id: 1,
+      source: 'agent',
+      message: 'I cannot perform that request.',
+    },
+  ],
+});
+
+// Unavailable evidence is represented by an absent trajectory.json.
 function missingTranscriptPath(workdir: string): string {
   return join(workdir, 'trajectory.json');
 }
@@ -692,6 +703,77 @@ test('skill-not-called PASSes on a non-empty trace that lacks the skill (positiv
   });
 });
 
+test('runPhase treats valid zero-tool evidence as an ordinary positive failure and negative pass', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const transcriptPath = join(workdir, 'trajectory.json');
+  writeFileSync(transcriptPath, MESSAGE_ONLY_TRAJECTORY);
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() {\n  check-transcript tool-called Edit\n  check-transcript tool-not-called Edit\n}\n',
+  );
+
+  const result = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    repoRoot: REPO,
+    transcriptPath,
+    captureAvailability: 'available',
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.records.map((record) => record.passed)).toEqual([false, true]);
+});
+
+test('runPhase makes unavailable transcript evidence a non-invertible check death under not', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+  const transcriptPath = join(workdir, 'trajectory.json');
+  writeFileSync(transcriptPath, MESSAGE_ONLY_TRAJECTORY);
+  const checksSh = join(mkdtempSync(join(tmpdir(), 'scn-')), 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() { :; }\npost() {\n  not check-transcript tool-not-called Edit\n}\n',
+  );
+
+  const result = await runPhase({
+    checksSh,
+    phase: 'post',
+    workdir,
+    repoRoot: REPO,
+    transcriptPath,
+    captureAvailability: 'unavailable',
+  });
+
+  expect(result.exitCode).toBe(127);
+  expect(result.records).toHaveLength(1);
+  expect(result.records[0]).toMatchObject({
+    check: 'not',
+    passed: false,
+  });
+});
+
+for (const command of [
+  "command-succeeds 'kill -TERM $$'",
+  "not command-succeeds 'kill -TERM $$'",
+]) {
+  test(`runPhase preserves the broken record and fails when ${command}`, async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
+    const checksSh = checksShWith(`pre() {\n  ${command}\n}\npost() { :; }\n`);
+
+    const result = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+    });
+
+    expect(result.exitCode).toBe(127);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]).toMatchObject({ passed: false });
+  });
+}
+
 // PRI-2494: a crashed verb MID-phase must abort the phase (previously the last
 // command's rc masked it — the false-pass hole).
 test("a typo'd verb mid-phase crashes the phase even when later checks pass", async () => {
@@ -733,8 +815,8 @@ test('an honest check failure mid-phase does not abort the phase', async () => {
   expect(records[1]?.passed).toBe(true);
 });
 
-// `not` of an honest fail passes and continues (not's exit-1-never-127 contract
-// must survive the trap).
+// `not` of an honest fail passes and continues; only a broken inner check enters
+// the 127 crash band.
 test('not-inverted checks still flow through a trapped phase', async () => {
   const workdir = mkdtempSync(join(tmpdir(), 'wd-'));
   writeFileSync(join(workdir, 'present.txt'), 'x');

@@ -34,8 +34,8 @@ const NONINVERTIBLE_EXIT = 127;
 // wrapper name.
 const verbName = verb ?? 'check-transcript';
 
-const { calls, empty } = loadCalls();
-const outcome = transcriptOutcome(verb ?? '', cliArgs, calls, empty);
+const { calls, availability } = loadCalls();
+const outcome = transcriptOutcome(verb ?? '', cliArgs, calls, availability);
 
 if (outcome.broken) {
   console.error(outcome.detail);

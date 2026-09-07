@@ -94,15 +94,15 @@ test('empty capture + trace check -> indeterminate', () => {
     detail: null,
     phase: 'post',
   };
-  expect(
-    compose({
-      gauntlet: G('pass'),
-      checks: [trace],
-      captureEmpty: true,
-      error: null,
-      expected: null,
-    }).final,
-  ).toBe('indeterminate');
+  const verdict = compose({
+    gauntlet: G('pass'),
+    checks: [trace],
+    captureEmpty: true,
+    error: null,
+    expected: null,
+  });
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.final_reason).toContain('transcript evidence was unavailable');
 });
 
 // Every check-transcript verb that reads the transcript must be guarded: on an

@@ -6,6 +6,30 @@ import { isImplementationPath } from '../src/detect/implementation.ts';
 import { isSkillInvocation } from '../src/detect/skill.ts';
 import { normalizeCodex } from '../src/normalize/codex.ts';
 
+test('reports malformed JSONL lines while preserving valid messages', () => {
+  const malformed: Array<{ line: number; message: string }> = [];
+  const raw = [
+    '{not json}',
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'I cannot do that.' }],
+      },
+    }),
+  ].join('\n');
+
+  const traj = normalizeCodex(raw, 'test', (line, message) =>
+    malformed.push({ line, message }),
+  );
+
+  expect(traj.steps.map((step) => step.message)).toEqual(['I cannot do that.']);
+  expect(malformed).toHaveLength(1);
+  expect(malformed[0]?.line).toBe(1);
+  expect(malformed[0]?.message.length).toBeGreaterThan(0);
+});
+
 test('codex apply_patch (function_call) exposes file paths for implementation-path checks', () => {
   const line = JSON.stringify({
     type: 'response_item',

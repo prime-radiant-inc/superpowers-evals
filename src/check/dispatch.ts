@@ -127,8 +127,8 @@ export function runVerb(
   if (verb === 'check-transcript') {
     const sub = args[0] ?? '';
     const subArgs = args.slice(1);
-    const { calls, empty } = loadCalls();
-    return transcriptOutcome(sub, subArgs, calls, empty);
+    const { calls, availability } = loadCalls();
+    return transcriptOutcome(sub, subArgs, calls, availability);
   }
   const fn = Object.hasOwn(FS_VERBS, verb) ? FS_VERBS[verb] : undefined;
   if (!fn) {
@@ -145,14 +145,12 @@ export function runVerb(
  *      check=<inner>, negated:true, passed=<inverted>, detail=null. Exit 0 iff
  *      the inner FAILED (the negation passed).
  *   2. Refuse to invert a MISSING tool (unknown inner verb). Record a FAIL under
- *      `not`'s own name and exit 1 — an honest failed check, NOT the 127 crash
- *      band (a 127 would crash the whole phase via runPhase's heuristic; `not`
- *      deliberately uses exit 1).
+ *      `not`'s own name and preserve the 127 crash band.
  *   3. Refuse to invert a CRASH (the inner verb returned broken, or threw).
- *      Same handling as rule 2: record FAIL under `not`, exit 1.
+ *      Same handling as rule 2: record FAIL under `not`, exit 127.
  *
- * The CLI maps `refused:true` to exit 1 (not 127); a non-refused result exits 0
- * iff `passed`.
+ * The CLI maps `refused:true` to exit 127; a non-refused result exits 0 iff
+ * `passed`.
  */
 export interface NegateResult {
   /** The record's `check` field. */
@@ -167,7 +165,7 @@ export interface NegateResult {
   detail: string;
   /**
    * The negation refused to invert (missing inner tool / inner crash). Recorded
-   * under `not` with passed:false; the CLI exits 1, NOT 127.
+   * under `not` with passed:false; the CLI exits 127.
    */
   refused: boolean;
 }
@@ -177,7 +175,7 @@ export function negate(args: string[], ctx: CheckContext): NegateResult {
   const innerArgs = args.slice(1);
 
   // Rule 2: a missing inner tool must not be invertible. Record under
-  // `not`'s own name with a fail, and exit 1.
+  // `not`'s own name with a fail, and preserve the crash band.
   const known = inner === 'check-transcript' || Object.hasOwn(FS_VERBS, inner);
   if (!known) {
     return {

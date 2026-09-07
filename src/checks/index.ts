@@ -6,6 +6,7 @@ import {
   projectSuperpowersEnv,
   type SuperpowersSpec,
 } from '../agents/superpowers.ts';
+import type { CaptureAvailability } from '../capture/index.ts';
 import {
   type CheckPhase,
   type CheckRecord,
@@ -50,6 +51,8 @@ export interface RunPhaseArgs {
   readonly repoRoot: string;
   /** Optional: path to the ATIF trajectory.json, exposed to transcript checks. */
   readonly transcriptPath?: string;
+  /** Capture evidence state, exposed to transcript checks. */
+  readonly captureAvailability?: CaptureAvailability;
   /** Optional: the run dir, exposed to post-checks that read sibling artifacts. */
   readonly runDir?: string;
   /** Optional: scenario directory, exposed to baseline-manifest checks. */
@@ -130,6 +133,9 @@ export async function runPhase(args: RunPhaseArgs): Promise<RunPhaseResult> {
     QUORUM_RECORD_SINK: sink,
     ...(args.transcriptPath !== undefined
       ? { QUORUM_TRANSCRIPT_PATH: args.transcriptPath }
+      : {}),
+    ...(args.captureAvailability !== undefined
+      ? { QUORUM_CAPTURE_AVAILABILITY: args.captureAvailability }
       : {}),
     ...(args.runDir !== undefined ? { QUORUM_RUN_DIR: args.runDir } : {}),
     ...(args.scenarioDir !== undefined

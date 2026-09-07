@@ -298,15 +298,20 @@ function dedupByUuid(entries: Entry[]): Entry[] {
 export function normalizeClaudeLegacy(
   raw: string,
   version: string,
+  onMalformedLine?: (line: number, message: string) => void,
 ): AtifTrajectory {
   // Parse all lines first so uuid dedup and the usage map see the same events.
   const parsed: Entry[] = [];
-  for (const line of raw.split('\n')) {
+  for (const [index, line] of raw.split('\n').entries()) {
     if (!line.trim()) continue;
     try {
       parsed.push(JSON.parse(line) as Entry);
-    } catch {
+    } catch (error) {
       // Tolerate blank / unparseable lines — skip them.
+      onMalformedLine?.(
+        index + 1,
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
   const entries = dedupByUuid(parsed);

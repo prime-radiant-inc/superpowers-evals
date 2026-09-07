@@ -89,7 +89,8 @@ export function compose({
     return {
       ...base,
       final: 'indeterminate',
-      final_reason: 'tool-call capture was empty; trace checks meaningless',
+      final_reason:
+        'transcript evidence was unavailable; trace checks meaningless',
       error: null,
     };
   }

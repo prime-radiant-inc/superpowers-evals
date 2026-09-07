@@ -216,14 +216,32 @@ test('file-contains: POSIX bracket class is translated ([[:space:]])', () => {
 
 test('command-succeeds: exit 0 passes', () => {
   const wd = workdir();
-  expect(verbCommandSucceeds(['true'], ctxFor(wd)).passed).toBe(true);
+  const result = verbCommandSucceeds(['true'], ctxFor(wd));
+  expect(result.passed).toBe(true);
+  expect(result.broken).toBeUndefined();
 });
 
 test('command-succeeds: non-zero fails with truncated, newline-stripped detail', () => {
   const wd = workdir();
   const r = verbCommandSucceeds(['printf boom; false'], ctxFor(wd));
   expect(r.passed).toBe(false);
+  expect(r.broken).toBeUndefined();
   expect(r.detail).toBe('exit non-zero: boom');
+});
+
+test('command-succeeds: a signalled child is broken', () => {
+  const result = verbCommandSucceeds(['kill -TERM $$'], ctxFor(workdir()));
+  expect(result.passed).toBe(false);
+  expect(result.broken).toBe(true);
+});
+
+test('command-succeeds: exec of a nonexistent interpreter is broken', () => {
+  const result = verbCommandSucceeds(
+    ['exec /definitely/not/a/quorum-interpreter'],
+    ctxFor(workdir()),
+  );
+  expect(result.passed).toBe(false);
+  expect(result.broken).toBe(true);
 });
 
 test('command-succeeds: runs from the workdir cwd', () => {
@@ -432,7 +450,7 @@ test('negate: inverts an inner PASS to a fail', () => {
   expect(r.check).toBe('file-exists');
 });
 
-test('negate: refuses to invert a MISSING inner tool (records under not, exit-1 semantics)', () => {
+test('negate: refuses to invert a MISSING inner tool (records under not)', () => {
   const wd = workdir();
   const r = negate(['file-exits', 'a'], ctxFor(wd));
   expect(r.refused).toBe(true);
@@ -451,13 +469,32 @@ test('negate: refuses to invert a CRASH (inner broken check)', () => {
   expect(r.check).toBe('not');
 });
 
-test('negate: wraps check-transcript under the wrapper name (TRACE_PRIMITIVES guard)', () => {
-  // With no transcript loaded, an empty capture makes tool-not-called FAIL, so
-  // the negation passes; the record's check is the inner tool name.
+test('negate: wraps an available check-transcript under the wrapper name', () => {
   const wd = workdir();
-  const r = negate(['check-transcript', 'tool-called', 'Edit'], ctxFor(wd));
-  expect(r.check).toBe('check-transcript');
-  expect(r.negated).toBe(true);
+  const transcriptPath = join(wd, 'trajectory.json');
+  writeFileSync(
+    transcriptPath,
+    JSON.stringify({
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'test', version: 'test' },
+      steps: [{ step_id: 1, source: 'agent', message: 'No tools needed.' }],
+    }),
+  );
+  const result = runShim(
+    'not',
+    ['check-transcript', 'tool-called', 'Edit'],
+    wd,
+    {
+      QUORUM_TRANSCRIPT_PATH: transcriptPath,
+      QUORUM_CAPTURE_AVAILABILITY: 'available',
+    },
+  );
+  expect(result.exitCode).toBe(0);
+  expect(result.record).toMatchObject({
+    check: 'check-transcript',
+    negated: true,
+    passed: true,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -512,10 +549,10 @@ test('E2E: not file-exists (miss) inverts to pass, single negated record', () =>
   });
 });
 
-test('E2E: not on a typo tool exits 1 (NOT 127) with a fail record under not', () => {
+test('E2E: not on a typo tool preserves exit 127 with a fail record under not', () => {
   const wd = workdir();
   const r = runShim('not', ['file-exits', 'a'], wd);
-  expect(r.exitCode).toBe(1);
+  expect(r.exitCode).toBe(127);
   expect(r.record).toMatchObject({
     check: 'not',
     negated: false,

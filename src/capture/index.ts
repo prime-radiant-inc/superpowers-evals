@@ -38,7 +38,11 @@ import { filterLogsByCwd } from './cwd-filter.ts';
 // openclaw/openhands/qwen/swe-agent/trae/cline normalizers are ported
 // from Harbor (see docs/superpowers/reference/porting-harbor-converters.md and
 // src/normalize/harbor-pin.ts).
-type AtifNormalizer = (raw: string, version: string) => AtifTrajectory;
+type AtifNormalizer = (
+  raw: string,
+  version: string,
+  onMalformedLine?: (line: number, message: string) => void,
+) => AtifTrajectory;
 
 export const ATIF_NORMALIZERS: Record<string, AtifNormalizer> = {
   acp: normalizeAcp,
@@ -126,15 +130,24 @@ function capturedLogs(args: CaptureArgs): string[] {
 }
 
 export interface CaptureResult {
-  // Path to the emitted ATIF trajectory.json. The file may be absent on a
-  // zero-row capture: emission failures and trajectories with no tool calls
-  // leave no file (so downstream loaders fail closed and the retry fires).
+  // Path to the emitted ATIF trajectory.json. The file is absent when no
+  // meaningful message or tool evidence was captured.
   readonly path: string;
   readonly sourceLogs: readonly string[];
   readonly rowCount: number;
+  readonly availability: CaptureAvailability;
+  readonly errors: readonly CaptureError[];
   // How many capture passes ran (PRI-2081): 1 = first pass succeeded;
   // >1 = the empty-capture retry re-diffed after a delay.
   readonly attempts: number;
+}
+
+export type CaptureAvailability = 'available' | 'unavailable' | 'errored';
+
+export interface CaptureError {
+  readonly sourceLog: string;
+  readonly stage: 'read' | 'normalize';
+  readonly message: string;
 }
 
 // A normalized trajectory tagged with its source-file order, carried into the
@@ -244,25 +257,55 @@ function mergeTrajectories(perFile: AtifTrajectory[]): AtifTrajectory | null {
 }
 
 /**
- * Normalize one source log to an ATIF trajectory in-process, or null on any
- * failure — missing/unreadable log or a normalizer throw. The same fail-closed
- * signal a missing log gives, which keeps the empty-capture retry intact.
+ * Normalize one source log to an ATIF trajectory in-process. Read and
+ * normalization failures are returned alongside any tolerant normalizer's
+ * successfully recovered trajectory.
  */
 function emitTrajectory(
   sourceLog: string,
   normalize: AtifNormalizer,
-): AtifTrajectory | null {
+): { trajectory: AtifTrajectory | null; errors: CaptureError[] } {
   let raw: string;
   try {
     raw = readFileSync(sourceLog, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      trajectory: null,
+      errors: [
+        {
+          sourceLog,
+          stage: 'read',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    };
   }
+  const errors: CaptureError[] = [];
   try {
-    return normalize(raw, ATIF_AGENT_VERSION);
-  } catch {
-    return null;
+    const trajectory = normalize(raw, ATIF_AGENT_VERSION, (line, message) => {
+      errors.push({
+        sourceLog,
+        stage: 'normalize',
+        message: `line ${line}: ${message}`,
+      });
+    });
+    return { trajectory, errors };
+  } catch (error) {
+    errors.push({
+      sourceLog,
+      stage: 'normalize',
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { trajectory: null, errors };
   }
+}
+
+function hasMeaningfulEvidence(trajectory: AtifTrajectory): boolean {
+  return trajectory.steps.some(
+    (step) =>
+      (typeof step.message === 'string' && step.message.trim() !== '') ||
+      (Array.isArray(step.tool_calls) && step.tool_calls.length > 0),
+  );
 }
 
 /**
@@ -271,10 +314,10 @@ function emitTrajectory(
  *
  * A run can produce more than one session log; capture normalizes EVERY new log
  * and merges their steps into a single trajectory ordered by step timestamp (see
- * mergeTrajectories). rowCount is the number of tool calls in the merged
- * trajectory. When there is no source log, all emissions fail, or the merge has
- * no tool calls, rowCount is 0 and any stale trajectory.json is removed — so
- * downstream loaders fail closed and the empty-capture retry (PRI-2081) fires.
+ * mergeTrajectories). rowCount remains the number of tool calls in the merged
+ * trajectory. A message-only trajectory is retained as available evidence.
+ * When there is no meaningful message or tool evidence, any stale
+ * trajectory.json is removed so downstream loaders fail closed.
  */
 export function captureToolCalls(args: CaptureArgs): CaptureResult {
   const { normalizer, runDir } = args;
@@ -286,35 +329,43 @@ export function captureToolCalls(args: CaptureArgs): CaptureResult {
   const outPath = join(runDir, ATIF_TRAJECTORY_FILENAME);
 
   const perFile: AtifTrajectory[] = [];
+  const errors: CaptureError[] = [];
   for (const log of newLogs) {
-    const traj = emitTrajectory(log, normalize);
-    if (traj !== null) {
-      perFile.push(traj);
+    const emitted = emitTrajectory(log, normalize);
+    errors.push(...emitted.errors);
+    if (emitted.trajectory !== null) {
+      perFile.push(emitted.trajectory);
     }
   }
 
   const merged = mergeTrajectories(perFile);
   const rowCount = merged === null ? 0 : flattenToolCalls(merged).length;
-  if (merged !== null && rowCount > 0) {
+  const meaningful = merged !== null && hasMeaningfulEvidence(merged);
+  if (merged !== null && meaningful) {
     writeFileSync(outPath, `${JSON.stringify(merged, null, 2)}\n`);
   } else {
-    // A zero-row capture must not leave a stale trajectory behind: a later
+    // Unavailable evidence must not leave a stale trajectory behind: a later
     // retry pass (or a downstream loader) must see "nothing captured".
     rmSync(outPath, { force: true });
   }
+
+  const availability: CaptureAvailability =
+    errors.length > 0 ? 'errored' : meaningful ? 'available' : 'unavailable';
 
   return {
     path: outPath,
     sourceLogs: newLogs,
     rowCount,
+    availability,
+    errors,
     attempts: 1,
   };
 }
 
-/** captureToolCalls with an empty-capture retry/guard (PRI-2081).
+/** captureToolCalls with an unavailable-capture retry/guard (PRI-2081).
  *
- *  A run that produced no new source logs — or logs that normalize to zero
- *  tool calls — is usually a real failure, but it is sometimes a transient
+ *  A run that produced no new source logs — or logs without meaningful message
+ *  or tool evidence — is usually a real failure, but it is sometimes a transient
  *  race: the Coding-Agent's session log is still being flushed (or renamed into
  *  place) when the post-drive diff runs. Those races turned whole runs into
  *  permanent stage="capture" indeterminates, paying full Gauntlet + subject
@@ -323,7 +374,7 @@ export function captureToolCalls(args: CaptureArgs): CaptureResult {
  *  Re-run the same snapshot diff up to `attempts` times, `delayMs` apart, until
  *  something normalizes. Each pass rewrites trajectory.json, so the artifact
  *  always reflects the final capture. The returned `attempts` field records how
- *  many passes ran; a genuinely-empty run still comes back empty (and the
+ *  many passes ran; genuinely unavailable evidence remains unavailable (and the
  *  runner's per-backend diagnostic cascade proceeds unchanged), just
  *  `delayMs * (attempts - 1)` ms later. The sleep is synchronous
  *  (Bun.sleepSync) so the runner stays sync; tests inject a spy. */
@@ -340,7 +391,7 @@ export function captureToolCallsWithRetry(
   const sleep = opts.sleep ?? ((ms) => Bun.sleepSync(ms));
   let result = captureToolCalls(args);
   let used = 1;
-  while (result.rowCount === 0 && used < attempts) {
+  while (result.availability !== 'available' && used < attempts) {
     sleep(delayMs);
     used += 1;
     result = captureToolCalls(args);

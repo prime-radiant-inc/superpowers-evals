@@ -71,6 +71,20 @@ test('tolerates blank and unparseable lines', () => {
   expect(traj.steps[0]!.message).toBe('hi');
 });
 
+test('reports malformed JSONL lines while preserving valid messages', () => {
+  const malformed: Array<{ line: number; message: string }> = [];
+  const traj = normalizeClaudeLegacy(
+    '{not json}\n{"type":"user","message":{"content":"hello"}}\n',
+    '2.1.175',
+    (line, message) => malformed.push({ line, message }),
+  );
+
+  expect(traj.steps.map((step) => step.message)).toEqual(['hello']);
+  expect(malformed).toHaveLength(1);
+  expect(malformed[0]?.line).toBe(1);
+  expect(malformed[0]?.message.length).toBeGreaterThan(0);
+});
+
 test('step timestamp is carried from the source entry when present', () => {
   // The multi-log merge in quorum/capture.py orders steps by this timestamp,
   // so the normalizer must surface the source entry's timestamp on its step.

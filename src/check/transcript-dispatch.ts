@@ -10,6 +10,7 @@
 // to the original check-transcript.ts dispatch.
 
 import type { ToolCallView } from '../atif/project.ts';
+import type { CaptureAvailability } from '../capture/index.ts';
 import type { CheckOutcome } from './fs-verbs.ts';
 import {
   verbImplementationToolNotCalled,
@@ -70,14 +71,14 @@ export function transcriptOutcome(
   verb: string,
   args: string[],
   calls: ToolCallView[],
-  empty: boolean,
+  availability: CaptureAvailability,
 ): CheckOutcome {
   if (!verb) {
     return broken('usage: check-transcript <verb> [args...]');
   }
 
   try {
-    return dispatchInner(verb, args, calls, empty);
+    return dispatchInner(verb, args, calls, availability);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return broken(`tool error: ${message}`);
@@ -88,7 +89,7 @@ function dispatchInner(
   verb: string,
   args: string[],
   calls: ToolCallView[],
-  empty: boolean,
+  availability: CaptureAvailability,
 ): CheckOutcome {
   const need = REQUIRED_ARGS[verb];
   if (need !== undefined && args.length < need) {
@@ -126,17 +127,21 @@ function dispatchInner(
     }
   }
 
+  if (availability !== 'available') {
+    return broken(`transcript evidence ${availability}`);
+  }
+
   switch (verb) {
     case 'tool-called': {
-      const r = verbToolCalled(calls, empty, args);
+      const r = verbToolCalled(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'tool-not-called': {
-      const r = verbToolNotCalled(calls, empty, args);
+      const r = verbToolNotCalled(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'tool-count': {
-      const r = verbToolCount(calls, empty, args);
+      const r = verbToolCount(calls, false, args);
       if (r === null) {
         return broken(
           `Unknown operator: ${args[1] ?? ''} (expected: eq, gt, gte, lt, lte)`,
@@ -145,43 +150,43 @@ function dispatchInner(
       return ok(r.passed, r.detail);
     }
     case 'tool-before': {
-      const r = verbToolBefore(calls, empty, args);
+      const r = verbToolBefore(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'skill-called': {
-      const r = verbSkillCalled(calls, empty, args);
+      const r = verbSkillCalled(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'skill-not-called': {
-      const r = verbSkillNotCalled(calls, empty, args);
+      const r = verbSkillNotCalled(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'skill-before-tool': {
-      const r = verbSkillBeforeTool(calls, empty, args);
+      const r = verbSkillBeforeTool(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'skill-before-implementation-tool': {
-      const r = verbSkillBeforeImplementationTool(calls, empty, args);
+      const r = verbSkillBeforeImplementationTool(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'implementation-tool-not-called': {
-      const r = verbImplementationToolNotCalled(calls, empty, args);
+      const r = verbImplementationToolNotCalled(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'investigated': {
-      const r = verbInvestigated(calls, empty, args);
+      const r = verbInvestigated(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'worktree-created': {
-      const r = verbWorktreeCreated(calls, empty, args);
+      const r = verbWorktreeCreated(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'tool-match-before-tool-match': {
-      const r = verbToolMatchBeforeToolMatch(calls, empty, args);
+      const r = verbToolMatchBeforeToolMatch(calls, false, args);
       return ok(r.passed, r.detail);
     }
     case 'tool-arg-match': {
-      const r = verbToolArgMatch(calls, empty, args);
+      const r = verbToolArgMatch(calls, false, args);
       return ok(r.passed, r.detail);
     }
     default:

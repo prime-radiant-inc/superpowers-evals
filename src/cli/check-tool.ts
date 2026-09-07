@@ -20,8 +20,7 @@
 // `not <inner> [args...]` is handled in-process (no subprocess, no jq): it runs
 // the inner verb via the shared dispatch table and emits one negated record. It
 // refuses to invert a missing inner tool or an inner crash — recording a FAIL
-// under `not` and exiting 1 (NOT 127: a 127 would crash the whole phase via
-// runPhase's heuristic; `not` deliberately uses exit 1).
+// under `not` and exiting 127 so the broken checker remains a phase crash.
 
 import { negate, runVerb } from '../check/dispatch.ts';
 import { defaultContext } from '../check/fs-verbs.ts';
@@ -52,8 +51,7 @@ const ctx = defaultContext();
 if (verbName === 'not') {
   const r = negate(args, ctx);
   recordWith(r.check, r.args, r.passed, r.negated, r.detail);
-  // refused (missing inner / inner crash) and normal failure both exit 1; only
-  // a successful inversion exits 0. None of these is the 127 crash band.
+  if (r.refused) process.exit(NONINVERTIBLE_EXIT);
   process.exit(r.passed ? 0 : 1);
 }
 

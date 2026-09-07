@@ -60,6 +60,8 @@ import { WindowsHost } from '../agents/windows-host.ts';
 import type { AtifTrajectory } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
 import {
+  type CaptureAvailability,
+  type CaptureError,
   captureTokenUsage,
   captureToolCallsWithRetry,
   detectMisplacedCodexRollouts,
@@ -621,16 +623,14 @@ function relToLogDir(logDir: string, paths: readonly string[]): string[] {
   return paths.map((p) => relative(logDir, p));
 }
 
-// Strict-capture dialects whose run is uninterpretable without a transcript:
-// no source logs OR zero normalized rows is a capture indeterminate, regardless
-// of whether any deterministic check is present. codex is NOT here — its empty
-// case is the post-checks misplaced-rollout guard. copilot's leak/session-state
-// checks run first in
+// Strict-capture dialects still defined by tool rows. Claude is handled below
+// using explicit capture availability so a message-only refusal remains valid.
+// Codex's unavailable case is the post-checks misplaced-rollout guard.
+// Copilot's leak/session-state checks run first in
 // copilotCascadeVerdict; its no-transcript/zero-row floor lives here (the
 // copilot branch is guarded by source_logs, so it cannot cover the empty case).
 const STRICT_CAPTURE_NAMES: Readonly<Record<string, string>> = {
   antigravity: 'Antigravity',
-  claude: 'Claude',
   copilot: 'Copilot',
   gemini: 'Gemini',
 };
@@ -644,6 +644,8 @@ export interface CaptureCascadeArgs {
   readonly captureResult: {
     readonly sourceLogs: readonly string[];
     readonly rowCount: number;
+    readonly availability: CaptureAvailability;
+    readonly errors: readonly CaptureError[];
   };
   readonly gauntlet: GauntletLayer;
   readonly preRecords: readonly CheckRecord[];
@@ -659,7 +661,7 @@ export function captureCascadeVerdict(
   a: CaptureCascadeArgs,
 ): FinalVerdict | null {
   const { normalizer, captureResult, gauntlet, preRecords, logDir } = a;
-  const { sourceLogs, rowCount } = captureResult;
+  const { sourceLogs, rowCount, availability, errors } = captureResult;
   const indeterminate = (finalReason: string, error: RunError): FinalVerdict =>
     writeIndeterminate({
       finalReason,
@@ -667,6 +669,36 @@ export function captureCascadeVerdict(
       checks: preRecords,
       error,
     });
+
+  if (normalizer === 'claude') {
+    if (sourceLogs.length === 0) {
+      return indeterminate(
+        `no Claude transcript appeared under isolated ${logDir}; cannot evaluate this run`,
+        { stage: 'capture', message: 'no Claude transcript captured' },
+      );
+    }
+    if (availability === 'errored') {
+      const details = errors.map(
+        (error) =>
+          `${relative(logDir, error.sourceLog)} (${error.stage}): ${error.message}`,
+      );
+      return indeterminate(
+        `Claude transcript capture errored: ${details.join('; ')}`,
+        { stage: 'capture', message: 'Claude transcript capture errored' },
+      );
+    }
+    if (availability === 'unavailable') {
+      const rel = relToLogDir(logDir, sourceLogs);
+      return indeterminate(
+        `Claude transcript(s) contained no meaningful message or tool evidence: ${rel.join(', ')}`,
+        {
+          stage: 'capture',
+          message: 'Claude transcript evidence unavailable',
+        },
+      );
+    }
+    return null;
+  }
 
   if (normalizer === 'pi') {
     if (sourceLogs.length === 0) {
@@ -813,7 +845,7 @@ export function captureCascadeVerdict(
 }
 
 export interface CodexMisplacedArgs {
-  readonly captureEmpty: boolean;
+  readonly captureAvailability: CaptureAvailability;
   readonly normalizer: string;
   readonly logDir: string;
   readonly logGlob: string;
@@ -822,15 +854,15 @@ export interface CodexMisplacedArgs {
   readonly launchCwd: string;
 }
 
-// Codex empty-capture qa-agent-misconfigured short-circuit, run AFTER
-// post-checks. An empty capture plus a codex rollout sitting under run_dir but
+// Codex unavailable-capture qa-agent-misconfigured short-circuit, run AFTER
+// post-checks. Unavailable evidence plus a codex rollout sitting under run_dir but
 // launched in a subdir other than launch_cwd means the QA agent skipped
 // `cd $QUORUM_AGENT_CWD`. Surfaced as its own stage so downstream trace checks
 // (all "never called") don't bury the cause.
 export function codexMisplacedVerdict(
   a: CodexMisplacedArgs,
 ): FinalVerdict | null {
-  if (!a.captureEmpty || a.normalizer !== 'codex') {
+  if (a.captureAvailability === 'available' || a.normalizer !== 'codex') {
     return null;
   }
   const misplaced = detectMisplacedCodexRollouts({
@@ -2204,7 +2236,7 @@ async function runInnerBody(
       throw error;
     }
   }
-  const captureEmpty = capture.rowCount === 0;
+  const captureEmpty = capture.availability !== 'available';
 
   // opencode export/capture snapshot mismatch, checked before the strict
   // cascade: the export wrote session files but the file-diff capture saw none as
@@ -2281,6 +2313,8 @@ async function runInnerBody(
     captureResult: {
       sourceLogs: capture.sourceLogs,
       rowCount: capture.rowCount,
+      availability: capture.availability,
+      errors: capture.errors,
     },
     gauntlet,
     preRecords: pre.records,
@@ -2301,6 +2335,7 @@ async function runInnerBody(
     workdir,
     repoRoot: checksRepoRoot,
     transcriptPath: capture.path,
+    captureAvailability: capture.availability,
     runDir,
     scenarioDir: a.scenarioDir,
     configDir,
@@ -2321,12 +2356,12 @@ async function runInnerBody(
     });
   }
 
-  // Codex empty-capture qa-agent-misconfigured short-circuit, run after
-  // post-checks: an empty codex capture plus a rollout launched from the wrong
+  // Codex unavailable-capture qa-agent-misconfigured short-circuit, run after
+  // post-checks: unavailable evidence plus a rollout launched from the wrong
   // cwd surfaces as its own stage rather than a wall of "never called" trace
   // checks.
   const codexMisplaced = codexMisplacedVerdict({
-    captureEmpty,
+    captureAvailability: capture.availability,
     normalizer: cfg.normalizer,
     logDir,
     logGlob: cfg.session_log_glob,
