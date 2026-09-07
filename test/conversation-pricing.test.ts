@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
@@ -16,6 +16,11 @@ import { runSetup } from '../src/setup-step.ts';
 
 const SCENARIO = join(import.meta.dir, '../scenarios/conversation-pricing');
 const ORACLE = join(SCENARIO, 'oracle.cjs');
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
+});
 function requireNode(): string {
   const node = Bun.which('node');
   if (node === null)
@@ -34,6 +39,7 @@ function runOracle(
   output: string;
 } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'pricing-oracle-')));
+  roots.push(root);
   const output = join(root, 'output');
   const scratch = join(root, 'scratch');
   mkdirSync(join(output, 'src'), { recursive: true });
