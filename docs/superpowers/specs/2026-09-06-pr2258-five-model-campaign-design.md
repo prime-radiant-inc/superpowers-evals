@@ -178,8 +178,9 @@ the declared effort participates in the experiment digest.
   settings.json because the docs say Opus 4.8 can hold its model default
   across sessions despite settings, and over the `--effort` flag because the
   Gauntlet-Agent types the launcher name with no arguments. The Windows
-  launcher (`claude-windows.ts`) is out of scope; a Windows run with `effort`
-  set is a loud `ProvisionError`.
+  launcher (`claude-windows.ts`) is out of scope; `quorum run` refuses
+  `--effort` together with `--os windows` at the CLI boundary as a
+  setup-stage error, before any run dir, lock, or provider token exists.
 - **Codex** (`CodexAgent.provision`): when `home.effort` is set, emit
   `model_reasoning_effort = "<level>"` as a root-level key at the top of the
   generated `config.toml` on both auth paths (before the first table header,

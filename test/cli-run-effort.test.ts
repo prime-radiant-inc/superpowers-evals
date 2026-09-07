@@ -84,10 +84,18 @@ function readVerdict(runDir: string): { provenance: { effort: unknown } } {
   return JSON.parse(readFileSync(join(runDir, 'verdict.json'), 'utf8'));
 }
 
-test('--effort xhigh on claude stamps the requested level into provenance', () => {
+test('--effort xhigh on claude stamps the requested level into provenance and reaches the run env file', () => {
   const r = runCli('claude', ['--effort', 'xhigh']);
   expect(r.status).toBe(0);
-  expect(readVerdict(soleRunDir(r.outRoot)).provenance.effort).toBe('xhigh');
+  const runDir = soleRunDir(r.outRoot);
+  expect(readVerdict(runDir).provenance.effort).toBe('xhigh');
+  // The runner -> RunHome seam: provisioning only sees the level through
+  // RunHome.effort, so the env file proves the threading, not just the stamp.
+  const envFile = readFileSync(
+    join(runDir, 'home', '.claude', '.claude-env'),
+    'utf8',
+  );
+  expect(envFile.endsWith("CLAUDE_CODE_EFFORT_LEVEL='xhigh'\n")).toBe(true);
 });
 
 test('no --effort leaves provenance effort null', () => {
@@ -111,4 +119,13 @@ test('--effort with a level the family rejects is refused with the accepted list
   expect(r.stderr + r.stdout).toMatch(
     /harness claude does not accept effort minimal \(accepts low, medium, high, xhigh, max\)/,
   );
+});
+
+test('--effort with the windows target is refused before any run dir exists', () => {
+  const r = runCli('claude', ['--effort', 'xhigh', '--os', 'windows']);
+  expect(r.status).not.toBe(0);
+  expect(r.stderr + r.stdout).toMatch(
+    /--effort is unsupported on the windows target/,
+  );
+  expect(readdirSync(r.outRoot).filter((d) => !d.startsWith('.'))).toEqual([]);
 });
