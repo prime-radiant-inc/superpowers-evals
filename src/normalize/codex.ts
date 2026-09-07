@@ -301,8 +301,11 @@ function parseOutputBlob(raw: unknown): string | undefined {
 // Segmentation is regex-based, not a JS parse: each tools.<verb>( starts a new
 // segment, and the JS preamble (often `const p = ".../SKILL.md"`) rides with
 // the first segment so content-matching verbs still see referenced paths.
+// Subagent verbs arrive under the `multi_agent_v1__` tool prefix (PRI-3097);
+// the prefix is optional and non-capturing so the captured verb — and every
+// segment offset — stays the same whether or not the rollout carries it.
 const EXEC_SCRIPT_VERB_RE =
-  /tools\.(exec_command|apply_patch|update_plan|write_stdin|spawn_agent)\s*\(/g;
+  /tools\.(?:multi_agent_v1__)?(exec_command|apply_patch|update_plan|write_stdin|spawn_agent|wait_agent|close_agent|send_input)\s*\(/g;
 
 function unescapeJsLiteral(body: string): string {
   return body.replace(/\\(.)/g, (_, ch: string) => {
@@ -411,8 +414,11 @@ function normalizeExecScript(callId: string, input: string): AtifToolCall[] {
       continue;
     }
     if (verb === 'spawn_agent') {
+      // The dispatch instruction is `message` on the multi_agent_v1 tools.
       const prompt =
-        plainStringProp(segment, 'prompt') ?? plainStringProp(segment, 'task');
+        plainStringProp(segment, 'prompt') ??
+        plainStringProp(segment, 'task') ??
+        plainStringProp(segment, 'message');
       calls.push(
         stampProvenance(
           {

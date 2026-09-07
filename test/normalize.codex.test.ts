@@ -1051,3 +1051,38 @@ test('56-exec: real gpt-5.6-sol rollout slice — skill read via JS variable is 
   // The whole point of PRI-2584: no raw `exec` calls survive normalization.
   expect(calls.some((c) => c.tool === 'exec')).toBe(false);
 });
+
+// codex ≥0.144 spawns subagents from inside the same exec script, under the
+// `multi_agent_v1__` tool prefix (PRI-3097). Without the prefix the segmenter
+// saw no verbs at all and a 21-subagent run reported "Agent never called".
+
+test('56-exec: a multi_agent_v1__spawn_agent call inside an exec script surfaces as Agent with the message as prompt', () => {
+  const input =
+    'const a = await tools.multi_agent_v1__spawn_agent({\n' +
+    '  model:"gpt-5.6-luna",\n' +
+    '  reasoning_effort:"medium",\n' +
+    '  fork_context:false,\n' +
+    '  message:`You are the implementer for task 1.`\n' +
+    '});\n' +
+    'await tools.multi_agent_v1__wait_agent({ target: a.agent_id });\n';
+  const calls = flattenToolCalls(normalizeCodex(execScriptLine(input), 'test'));
+  expect(calls.map((c) => c.tool)).toEqual(['Agent', 'wait_agent']);
+  expect(calls[0]?.args['prompt']).toBe('You are the implementer for task 1.');
+});
+
+test('56-exec: multi_agent_v1__close_agent and send_input keep their unprefixed names', () => {
+  const input =
+    'await tools.multi_agent_v1__send_input({ target:"a1", message:"continue" });\n' +
+    'await tools.multi_agent_v1__close_agent({ target:"a1" });\n';
+  const calls = flattenToolCalls(normalizeCodex(execScriptLine(input), 'test'));
+  expect(calls.map((c) => c.tool)).toEqual(['send_input', 'close_agent']);
+});
+
+test('56-exec: a spawn with a quoted message string also canonicalizes to prompt', () => {
+  const input =
+    'await tools.multi_agent_v1__spawn_agent({ model:"gpt-5.6-luna", message:"Do the thing" });\n';
+  const call = flattenToolCalls(
+    normalizeCodex(execScriptLine(input), 'test'),
+  ).find((c) => c.tool === 'Agent')!;
+  expect(call.args['prompt']).toBe('Do the thing');
+});
