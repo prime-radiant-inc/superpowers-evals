@@ -118,6 +118,47 @@ Smoke campaign 1 (`d86c1e39-28ef-46eb-9d4d-d247bb863b5e`, suite
   bound 7800 s. Pools: the three Codex credentials on one 15-slot Responses
   pool each, `opus5_bedrock` 4, `opus_bedrock` 6, grader `sonnet5_bedrock` 6.
 
+## Campaign 1: cancelled after a second publication defect
+
+Campaign `e7cc05be-894b-44c2-abed-b3cb285cad82` launched 2026-09-07 02:40Z
+and was cancelled at 03:27Z (cancellation verified 03:29Z) after $26.91 of
+known spend (22 attempts prepared, 14 observed). It is recorded here as
+negative instrument evidence, not as results.
+
+What published: fourteen Codex Astra verdicts across seven scenarios, all
+`pass` on both base and head, all priced against the 2026-09-06 snapshot,
+all with `provenance.effort: "xhigh"` and the xhigh level observed in every
+Codex rollout (`brainstorming-companion-just-in-time`,
+`brainstorming-resists-jump-to-implementation`,
+`cost-spec-plan-duplication`, `user-pref-corp-no-brainstorm-met`,
+`user-pref-corp-no-brainstorm-unmet`, `user-pref-sdd-no-strategy-prompt`,
+plus the two smoke-verified scenarios). Nothing else reached a verdict
+before cancellation; the Astra fractals and writing-plans attempts in flight
+were terminated.
+
+What failed: every `brainstorming-todo-purpose-discovery` attempt (four,
+including the block's replacement) and the first `user-pref-no-brainstorm`
+attempt ended "invalid or missing authenticated verdict" although the runs
+completed (the head purpose-discovery run had passed all five post-checks).
+Cause, from the attempt stderr: the runner's attempt-manifest writer
+(`src/runner/manifest.ts`) refuses any symlink under the run directory, and
+the agent's Vite scaffold leaves `node_modules/.bin/*` symlinks, so the
+manifest was never written and the run could not publish. Any campaign run
+that installs npm dependencies or creates a Python venv fails the same way.
+This is the second publication defect found by this campaign (the first,
+empty placeholder directories, was fixed before launch) and is likewise a
+pre-existing platform issue, not an effect of the arm-level effort work.
+
+Why cancel rather than continue: the controller replaces an invalidated
+block up to four times, so the fifteen React-scenario blocks would have
+burned roughly 120 further attempts without producing the headline
+measurement, and a second campaign for those scenarios would still have been
+needed. Cancelling and re-running everything on the fixed source is cheaper
+and yields one coherent campaign. The fix (record symlinks verbatim in the
+manifest as inventory; the publisher accepts only listed, unaltered
+symlinks; nothing follows a link) is documented in the ledger and lands as a
+separate commit before campaign 2.
+
 ## Results
 
-Pending.
+Pending campaign 2.
