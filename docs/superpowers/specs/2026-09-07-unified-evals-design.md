@@ -21,8 +21,11 @@ on the new design.
 Use the current prose scenario brief and acceptance criteria as the starting
 point; the driver conducts the conversation. No authored turn sequence or
 mandatory reply/persona schema. The complete interaction is one smevals run;
-the core does not manage individual exchanges. Next, discuss where the first
-useful version executes and how target configuration reaches that runner.
+the core does not manage individual exchanges. Drew proposes doing most live
+runs on the existing quorum appliance for its shared credentials and
+Mantle/Bedrock access; Bot recommends that as the first execution environment.
+That deployment proposal and the details of target configuration are the
+current discussion, not yet approved implementation choices.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -57,6 +60,7 @@ no component should dictate the whole product.
 | Modular components and replaceable layers | Agreed direction. |
 | Centralize efforts around one eval product in smevals | Agreed direction. |
 | One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
+| Most live execution on the existing quorum appliance | Proposed by Drew and recommended by Bot; deployment details remain open. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
 | Keep one working document through brainstorming | Requested by Drew to preserve context across compaction. |
 | Specific schemas, command syntax, packaging, deployment, and migration | Open; not approved. |
@@ -166,6 +170,48 @@ requiring a simulated user. Superpowers Evals would contribute a scenario
 suite and reusable workers/checkers. Gauntlet and other general-purpose
 components can remain independently useful packages or repositories.
 
+## Proposed first execution environment
+
+Use the existing quorum appliance for most real eval execution. Drew points
+to the shared credentials and Mantle/Bedrock access already available there.
+Keep scenario authoring, static validation, and provider-free development
+checks convenient locally. Local live execution need not reach full parity
+before the first useful appliance-backed version.
+
+The proposed initial deployment is the smevals batch engine on one appliance,
+launching independent live-session workers there. CLI/UI submission and
+report retrieval should use the same run/config/result contracts. The exact
+submission transport remains open; a fleet scheduler or new always-on remote
+service is not a prerequisite for this first host.
+
+Reuse the host, provider access, and useful runtime/provisioning pieces while
+implementing the agreed whole-run boundary. Hosting on the same appliance
+does not make Quorum's current campaign controller, registration, seals, or
+report policy part of the new engine. Existing operational entry points and
+authorization rules still apply until an explicit deployment changes them.
+
+Credentials remain managed in the execution environment and are supplied to
+workers as needed. Scenario authors should not have to copy the shared bundle
+to their machines or reimplement provider authentication. Verify the actual
+selected auth path when integrating, rather than assuming every provider
+requires a new bearer token or credential arrangement.
+
+Shared access does not establish unlimited parallel capacity. Bound active
+sessions and shared provider/resource use, and explicitly account for old
+Quorum jobs during coexistence so independent schedulers do not each assume
+they own the whole host. Large artifact handling and reporting must not block
+dispatch or stopping active workers. Exact limits require a real workload
+check and are not set by this discussion.
+
+The appliance is a Linux execution environment. Targets requiring another
+OS or runtime need a separate compatible executor later; the appliance must
+not redefine the full supported-harness requirement. Keep the core host-neutral
+without building multi-host orchestration before it is needed.
+
+This is a deployment recommendation based on the user's context, the current
+runbook, and the earlier source/operational investigation. No new live health,
+credential, quota, or capacity check was performed for this discussion.
+
 ## Findings that constrain the design
 
 - Main smevals drops nested task values and most config fields before
@@ -252,6 +298,7 @@ Pinned source inspected on 2026-09-07:
 - [Concurrency PR #2](https://github.com/prime-radiant-inc/smevals/pull/2)
 - [August direction panel](../../experiments/2026-08-17-platform-direction-panel.md)
 - [Current scenario authoring guide](../../scenario-authoring.md)
+- [Current appliance runbook](../../appliance-runbook.md)
 - [Go fractals story](../../../scenarios/sdd-go-fractals-opus48/story.md)
 - [Code review story](../../../scenarios/code-review-catches-planted-bugs/story.md)
 - [Purpose-discovery response controls](../../../scenarios/brainstorming-todo-purpose-discovery/story.md)
@@ -284,3 +331,8 @@ implementation or operational claims.
   whole-run extension boundary. smevals owns scheduling, results, grading
   invocation, and reporting; a replaceable runner owns the complete live
   harness interaction. Specific runner implementations remain open.
+- **2026-09-07:** Drew suggested running mostly on the quorum appliance to
+  reuse shared credentials and Mantle/Bedrock access. Bot recommended the
+  appliance as the first execution environment, with local authoring and
+  offline checks. Reuse of infrastructure is distinct from adoption of the
+  existing campaign controller; deployment specifics remain a proposal.
