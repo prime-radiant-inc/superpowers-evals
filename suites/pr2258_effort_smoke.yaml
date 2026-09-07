@@ -1,0 +1,27 @@
+# Two-cell smoke proving the arm-level effort reaches both harnesses on the
+# appliance before the PR 2258 campaign spends (PRI-3097). Cheapest model
+# per harness; the smoke scenario finishes in minutes. Register with
+# --global-cap 2. Verify "effort":"xhigh" in the Claude session log and the
+# Codex turn_context, and empty unpriced_models on both roles.
+schema_version: 2
+name: pr2258_effort_smoke
+grader:
+  credential: sonnet5_bedrock
+  model: anthropic.claude-sonnet-5
+pricing_snapshot:
+  path: docs/experiments/2026-09-06-pr2258-pricing/current.json
+  sha256: 6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b
+comparisons:
+  - arm: claude_opus48_pr2258_head
+    scenarios:
+      - 00-quorum-smoke-hello-world
+    n: 1
+  - arm: codex_luna_pr2258_head
+    scenarios:
+      - 00-quorum-smoke-hello-world
+    n: 1
+reserve: 0
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 2
+  max_time_s: 900

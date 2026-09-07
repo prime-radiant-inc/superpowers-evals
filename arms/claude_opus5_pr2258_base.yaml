@@ -1,0 +1,8 @@
+# claude subject via opus5_bedrock (Mantle); credential owns model and endpoint.
+schema_version: 1
+name: claude_opus5_pr2258_base
+agent: claude
+os: linux
+credential: opus5_bedrock
+superpowers: fd02874aa5c55ba3c2bca431253b48e0e4c8be5a
+effort: xhigh

@@ -1,7 +1,7 @@
 schema_version: 1
-name: codex_sol_pr2258_base
+name: codex_luna_pr2258_base
 agent: codex
 os: linux
-credential: openai_responses_56sol
+credential: openai_responses_56luna
 superpowers: fd02874aa5c55ba3c2bca431253b48e0e4c8be5a
 effort: xhigh
