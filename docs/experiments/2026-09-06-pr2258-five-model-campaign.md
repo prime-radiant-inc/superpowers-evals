@@ -370,4 +370,84 @@ arms at `effort: xhigh`; pricing snapshot digest `6423a36b…`; attempt bound
 
 ## Results
 
-Pending campaign 5.
+Campaign 5 ended `interrupted` at 13:24Z on 2026-09-07 after 2 h 13 min with
+81 of 100 planned attempts published and 6 in-flight attempts killed; known
+cost $131.69 (subject $102.16, grader $29.53). The report is not sealed and
+`complete` is false. The three Codex comparisons finished their first
+repetition of every cell (18 attempts each); the purpose-discovery second
+repetition and 13 Claude attempts were still pending. Everything below is
+read from the 81 published verdicts (`main5-aggregate.txt` in the SDD
+workspace) with denominators shown; n is 1 per cell unless stated.
+
+**Why it ended.** The same class as campaign 3, through the one path the
+fix left untouched. `admit()` waited as designed, but the runtime's
+authorization callbacks around `docker create` and `docker start` re-run the
+synchronous `admissionGuard()` with no wait; the sampler's effective period
+was 12.4 s, docker latency was about two seconds, and the age crossed 20 s
+between an admission that passed at 13:23:53 and the callback at 13:23:55.
+The sidecar shows 717 clean samples and no sampler error. The fix removes
+the staleness check from that synchronous path, since every admission point
+already runs `admit()` milliseconds earlier.
+
+**Per arm** (pass / fail / indeterminate, subject cost, grader cost):
+
+| Arm | n | P / F / I | Subject $ | Grader $ |
+|---|---|---|---|---|
+| codex_astra base | 9 | 6 / 1 / 2 | 18.57 | 2.70 |
+| codex_astra head | 9 | 7 / 1 / 1 | 19.39 | 2.95 |
+| codex_sol base | 9 | 7 / 0 / 2 | 8.36 | 2.99 |
+| codex_sol head | 9 | 7 / 0 / 2 | 8.74 | 3.02 |
+| codex_luna base | 9 | 5 / 4 / 0 | 0.50 | 2.77 |
+| codex_luna head | 9 | 5 / 3 / 1 | 0.48 | 2.69 |
+| claude_opus5 base | 8 | 4 / 3 / 1 | 13.46 | 3.88 |
+| claude_opus5 head | 8 | 6 / 1 / 1 | 17.90 | 3.93 |
+| claude_opus48 base | 6 | 2 / 0 / 4 | 5.30 | 2.29 |
+| claude_opus48 head | 5 | 4 / 0 / 1 | 5.98 | 2.30 |
+
+Two of the Opus 4.8 base indeterminates and one Opus 5 base indeterminate
+are the killed in-flight attempts, not behavior. Eleven of the remaining
+indeterminates are the Gauntlet-Agent's `investigate` status with every
+deterministic check passing, concentrated on `user-pref-no-brainstorm`,
+`cost-spec-plan-duplication`, `writing-plans-no-spec-conversational`, and
+`brainstorming-companion-just-in-time`; that grader quirk is now recorded
+across campaigns 2 through 5 and is the largest single loss of signal.
+
+**Purpose discovery, base to head, first repetition.** Astra pass to pass,
+Sol pass to pass, Luna fail to fail, Opus 5 fail to pass, Opus 4.8 pass to
+pass. The PR's target behavior therefore shows a difference only on Opus 5,
+at n=1, where the base run never elicited the learning purpose and the head
+run did; Astra, Sol, and Opus 4.8 already passed on the base skill, and Luna
+failed on both. The Luna base fail also failed the spec grep post check.
+
+**Guards, base to head.** No Codex cell changed from pass to fail or fail
+to pass. Astra `cost-spec-plan-duplication` went indeterminate to pass, Luna
+went fail to indeterminate, and both arms of Astra
+`writing-plans-no-spec-conversational` failed the post check with a passing
+grader, as in campaigns 3 and 4. Opus 5 `cost-spec-plan-duplication` went
+fail to pass and `user-pref-no-brainstorm` indeterminate to pass; its
+`brainstorming-companion-just-in-time` went pass to indeterminate; both Opus 5
+arms failed `user-pref-sdd-no-strategy-prompt` because the agent asked a
+question the scenario forbids. Opus 4.8's five paired cells are pass or
+indeterminate on both sides. No cell regressed from pass to fail under the
+PR on any model.
+
+**Instrument caveats.** The Luna `user-pref-sdd-no-strategy-prompt` fails in
+both arms are the `tool-called Agent` false negative: this campaign ran on
+the ref before the normalizer fix, and Luna dispatches subagents through the
+prefixed verb. Astra and Sol passed that check. One Opus 4.8 run produced no
+Claude transcript (capture stage), a class seen before. Codex subagents were
+spawned at `reasoning_effort: medium` while the parent ran xhigh, so the arm
+effort does not reach spawned subagents on Codex. Every published verdict
+carries `effort: xhigh` in provenance except the killed runs.
+
+**Cost.** Head cost more than base on Astra (+4%), Sol (+5%), Opus 5 (+33%,
+n=8, where the head runs did more of the asked-for work) and less on Luna
+(−4%). Program spend to date is about $425 across five smokes and five
+campaigns against the $1,500 ledger cap; no campaign has sealed.
+
+**Negatives at equal billing.** Six platform defects surfaced and were fixed
+before any complete dataset existed: empty unlisted dirs, symlinks, sampler
+starvation by publication, read-only Go module caches in the check sink, the
+noexec check scratch, and the prefixed Codex subagent verbs; a seventh, the
+synchronous staleness guard on the runtime authorization path, ended this
+campaign. Fractals remains deferred to its own campaign.
