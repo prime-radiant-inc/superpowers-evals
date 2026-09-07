@@ -608,6 +608,72 @@ test('publish still refuses an unlisted symlink', () => {
   }
 });
 
+test('publish refuses a manifest-listed symlink that is missing from staging', () => {
+  const paths = staged('run-pub-23', {
+    files: [
+      { path: 'verdict.json', body: '{"final":"pass"}\n' },
+      { path: 'coding-agent-workdir/node_modules/vite-bin.js', body: 'x\n' },
+    ],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-23');
+  mkdirSync(join(runDir, 'coding-agent-workdir', 'node_modules', '.bin'));
+  const manifestPath = join(runDir, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.symlinks = [
+    {
+      path: 'coding-agent-workdir/node_modules/.bin/vite',
+      target: '../vite-bin.js',
+    },
+  ];
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(
+      /manifest lists a missing or non-symlink entry: coding-agent-workdir\/node_modules\/\.bin\/vite/,
+    );
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-23'))).toBe(false);
+    expect(existsSync(runDir)).toBe(true);
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish refuses a manifest-listed symlink path that is a regular file', () => {
+  const paths = staged('run-pub-24', {
+    files: [
+      { path: 'verdict.json', body: '{"final":"pass"}\n' },
+      { path: 'coding-agent-workdir/node_modules/vite-bin.js', body: 'x\n' },
+    ],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-24');
+  mkdirSync(join(runDir, 'coding-agent-workdir', 'node_modules', '.bin'));
+  writeFileSync(
+    join(runDir, 'coding-agent-workdir', 'node_modules', '.bin', 'vite'),
+    'not a symlink\n',
+  );
+  const manifestPath = join(runDir, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.symlinks = [
+    {
+      path: 'coding-agent-workdir/node_modules/.bin/vite',
+      target: '../vite-bin.js',
+    },
+  ];
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(
+      /manifest lists a missing or non-symlink entry: coding-agent-workdir\/node_modules\/\.bin\/vite/,
+    );
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-24'))).toBe(false);
+    expect(existsSync(runDir)).toBe(true);
+  } finally {
+    clean(paths);
+  }
+});
+
 test('publish requires the explicit expected attempt id', () => {
   const paths = staged('run-pub-10');
   try {
