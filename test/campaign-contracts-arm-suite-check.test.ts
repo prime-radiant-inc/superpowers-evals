@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkArmSuiteFiles } from '../src/campaign/arm-suite-check.ts';
 import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 
 function repo(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), 'arm-suite-check-'));
+  // realpath: on macOS tmpdir() lives under /var -> /private/var, and the
+  // pricing-snapshot reader refuses symlinked path components by design.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'arm-suite-check-')));
   for (const [rel, body] of Object.entries(files)) {
     const path = join(root, rel);
     mkdirSync(join(path, '..'), { recursive: true });
