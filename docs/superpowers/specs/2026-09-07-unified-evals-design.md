@@ -29,8 +29,11 @@ to reuse existing auth sources and useful harness delivery code, with separate
 responsibilities for targets, connections, and shared resource limits. Exact
 schemas and target-selection UX remain open. Drew agrees that a completed
 bad implementation or review is a valid run and important signal. Evaluate
-the transcript and any scenario outputs after the interaction. Worker
-implementation, grading/report shape, and execution controls remain open.
+the transcript and any scenario outputs after the interaction. Submitted
+batches belong to the appliance: the client records an ID and polls until
+completion, as in current evals. Client disconnects do not stop execution.
+Worker implementation, grading/report shape, and detailed execution controls
+remain open.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -68,6 +71,7 @@ no component should dictate the whole product.
 | Completion is distinct from behavioral success | Agreed: completed bad implementations and reviews remain runs and important signal. Do not coach toward a passing grade. |
 | Grade the transcript and scenario outputs | Explicit requirement from Drew. Evaluate outputs when the scenario produces them; transcript evaluation remains required. |
 | Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
+| Appliance owns submitted execution; clients poll by ID | Explicitly agreed by Drew, preserving the current submit-and-poll operating model. Polling is observation, not a keepalive. |
 | Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
 | Reuse auth delivery; separate targets, connections, and resource limits | Agreed direction. Exact schemas, target selection, and extraction details remain open. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
@@ -227,7 +231,7 @@ checks may suffice, with a model-based checker selected where semantic
 evaluation needs one. The exact grading contract, report representation, and
 adaptation of Gauntlet's current self-grading loop remain open.
 
-## First execution environment and proposed deployment
+## Agreed appliance execution and proposed deployment
 
 Use the existing quorum appliance for most real eval execution. Drew points
 to the shared credentials and Mantle/Bedrock access already available there.
@@ -235,10 +239,63 @@ Keep scenario authoring, static validation, and provider-free development
 checks convenient locally. Local live execution need not reach full parity
 before the first useful appliance-backed version.
 
-The proposed initial deployment is the smevals batch engine on one appliance,
-launching independent live-session workers there. CLI/UI submission and
-report retrieval should use the same run/config/result contracts. The exact
-submission transport remains open; a fleet scheduler or new always-on remote
+### Agreed remote operating model
+
+The appliance owns the submitted batch and the work needed to finish it. The
+client submits, records the returned ID, and polls that ID until the run is
+done, then reads the results. Disconnecting SSH, closing the laptop, or losing
+the observing agent's context must not stop, restart, or duplicate execution.
+Polling reads state; it does not drive work or renew an execution keepalive.
+Explicit cancellation is a separate operation against the identified batch.
+
+Submission acknowledgment is distinct from worker readiness and completion.
+Preparing/running/finished state must remain observable across new client
+connections, including before the first result exists. Completed runs with
+bad behavioral outcomes remain completed runs with failing grades. Process
+loss must not appear as successful completion. This preserves the existing
+operating experience without requiring old command syntax or result formats.
+Automatic recovery after an appliance/controller crash remains deferred.
+
+### Current implementation checked for this decision
+
+Ordinary `run`/`run-all --detach` creates a persisted job before spawning a
+detached appliance worker. The worker ignores stdin, writes stdout/stderr to
+job log files, and is unreferenced by the submitting process. It performs
+preflight and owns the container invocation and final job update. Container
+execution uses its own process session; appliance `run-all` explicitly omits
+SIGHUP from its stop signals while retaining SIGINT/SIGTERM. `status` reads
+job/artifact state, and `show`/`costs` retrieve results by ID. An early wrapper
+exit alone is not completion: the worker also checks terminal run artifacts.
+
+Campaign `run` has a different implementation of the same remote ownership
+model: it persists the start and controller identity, releases the launcher,
+opens the detached controller's start gate, and returns. The controller owns
+subsequent dispatch; status observes the recorded state and process/ownership
+identity. Client polls do not renew its lease. Campaign report publication is
+an explicit later operation, separate from execution. The new design inherits
+the operating behavior, not the campaign's registration, gate, lease, sealing,
+or termination-reconciliation implementation as mandatory machinery.
+
+Source and existing tests were inspected on 2026-09-07. The focused
+`bun test test/appliance-summary.test.ts test/run-all-shutdown.test.ts` check
+passed all 19 tests, covering status before results, terminal and lost states,
+and stop handling with fake workers. This is local source/offline evidence;
+no installed-host check, credential access, or live eval was performed.
+
+- [Ordinary job submission](../../../src/appliance/cli.ts)
+- [Detached worker, container invocation, and completion](../../../src/appliance/process.ts)
+- [Job and artifact status](../../../src/appliance/summary.ts)
+- [Batch signal handling](../../../src/run-all/index.ts)
+- [Campaign launch and controller handoff](../../../src/appliance/campaign-run.ts)
+- [Campaign status and cancellation](../../../src/campaign/cancellation.ts)
+
+### Proposed implementation and capacity
+
+Start with the smevals batch engine on one appliance, launching independent
+live-session workers there. CLI/UI submission and report retrieval should use
+the same run/config/result contracts. Current operation uses short helper
+invocations over SSH; this is the starting transport to reuse. Exact packaging
+and command syntax remain open; a fleet scheduler or new always-on remote
 service is not a prerequisite for this first host.
 
 Reuse the host, provider access, and useful runtime/provisioning pieces while
@@ -263,10 +320,9 @@ OS or runtime need a separate compatible executor later; the appliance must
 not redefine the full supported-harness requirement. Keep the core host-neutral
 without building multi-host orchestration before it is needed.
 
-The execution location is agreed; deployment details remain proposals based
-on the user's context, the runbook, and the earlier investigation. No new
-live health, credential, quota, or capacity check was performed for this
-discussion.
+The execution location and appliance ownership are agreed. Deployment and
+capacity details remain proposals; no new live health, credential, quota, or
+capacity check was performed for this discussion.
 
 ## Target and credential model
 
@@ -416,9 +472,12 @@ the relevant evidence. Evaluate both the interaction transcript and the
 produced implementation; retain completed failing outcomes in the report.
 
 Use offline workers for bounded supervision and failure cases, then real
-sessions for interaction fidelity. This is a proposed milestone, not a run
-plan or spend approval. Full supported-target coverage remains part of the
-goal after the initial slice.
+sessions for interaction fidelity. Submit through the appliance interface,
+disconnect the submitting client, and observe continued dispatch and completion
+from a new connection using the same ID. Explicit cancellation must also work
+from a new connection. This is a proposed milestone, not a run plan or spend
+approval. Full supported-target coverage remains part of the goal after the
+initial slice.
 
 ## Discussion queue
 
@@ -428,8 +487,8 @@ separate process gates or implementation tasks.
 1. **Evaluation/report:** Define criterion results and evidence references
    for the agreed transcript/output coverage, including deterministic and
    model-based checks and unavailable evidence.
-2. **Execution experience:** What progress, cancellation, and concurrency
-   controls does Drew need for appliance execution?
+2. **Execution controls:** Define progress, cancellation, and concurrency
+   controls within the agreed appliance-owned submit-and-poll model.
 3. **Target selection:** Choose how users select targets and specify
    resolution/compatibility behavior within the agreed configuration separation.
 4. **Live worker:** Choose the initial implementation and specify setup,
@@ -516,3 +575,10 @@ implementation or operational claims.
   both the transcript and outputs when the scenario produces them. Promoted
   completion and evidence coverage to decisions; the worker implementation
   and detailed grading/report contract remain open.
+- **2026-09-07:** Drew confirmed that the appliance owns execution and asked
+  Bot to understand the existing submit-and-poll model. Traced ordinary jobs
+  and campaign controllers with a focused peer audit; verified that polls
+  observe execution rather than keep it alive. All 19 focused offline status
+  and shutdown tests passed. Recorded appliance ownership and reconnectable
+  observation as requirements, with a disconnect check in the proposed first
+  proof; no remote execution was performed.
