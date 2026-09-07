@@ -280,10 +280,11 @@ fixes), gauntlet `588a81e8`, superpowers `fd02874a` on every `_base` arm and
 `069edf3f` on every `_head` arm. 50 cells, 130 planned slots, 50 reserve
 slots, no excluded cells; all ten arms at `effort: xhigh`; pricing snapshot
 digest `6423a36b…`; attempt bound 7800 s. Program spend before this campaign
-was about $159 across three smokes and three failed campaigns.
+was about $159 across three smokes and three failed campaigns, and about
+$287 after it.
 
-Cancelled by the operator at about 10:15Z with $81.99 known across 36
-attempts, 30 of them published: Astra 13 pass, 4 indeterminate, 2 fail;
+Cancelled by the operator at about 10:00Z; the final known cost after
+termination accounting was $126.72 across 36 attempts, 30 of them published: Astra 13 pass, 4 indeterminate, 2 fail;
 Sol 10 pass, 1 fail; no block invalidated, telemetry gaps at most 14.6 s
 under load 3.3, every verdict at effort xhigh. The guard scenarios were
 behaving: the two Astra fails are the no-spec writing-plans post-check in
