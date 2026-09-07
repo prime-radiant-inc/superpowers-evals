@@ -1,5 +1,6 @@
 import { compareRecords } from './check/manifest.ts';
 import type { CheckManifest } from './contracts/check-manifest.ts';
+import type { ConversationRecord } from './contracts/conversation.ts';
 import type {
   CheckRecord,
   FinalVerdict,
@@ -35,6 +36,7 @@ const TRACE_PRIMITIVES = new Set([
 ]);
 
 export interface ComposeArgs {
+  conversation?: ConversationRecord;
   gauntlet: GauntletLayer | null;
   checks: CheckRecord[];
   captureEmpty: boolean;
@@ -44,13 +46,20 @@ export interface ComposeArgs {
 }
 
 export function compose({
+  conversation,
   gauntlet,
   checks,
   captureEmpty,
   error,
   expected,
 }: ComposeArgs): FinalVerdict {
-  const base = { schema: 1 as const, gauntlet, checks, economics: null };
+  const base = {
+    schema: 1 as const,
+    gauntlet,
+    checks,
+    economics: null,
+    ...(conversation ? { conversation } : {}),
+  };
 
   if (error) {
     return {
@@ -81,7 +90,9 @@ export function compose({
     return {
       ...base,
       final: 'indeterminate',
-      final_reason: `Gauntlet-Agent did not complete (status: ${gauntlet.status})`,
+      final_reason: conversation
+        ? `Assessment inconclusive (status: ${gauntlet.status})`
+        : `Gauntlet-Agent did not complete (status: ${gauntlet.status})`,
       error: null,
     };
   }

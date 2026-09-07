@@ -119,10 +119,15 @@ import {
 } from '../openrouter/generations.ts';
 import { hexNonce, nowStampUtc, repoRoot } from '../paths.ts';
 import { runSetup, SetupError } from '../setup-step.ts';
-import { readQuorumMaxTime } from '../story-meta.ts';
+import { readQuorumMaxTime, readQuorumMode } from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
+import {
+  readConversationRecord,
+  runPreparedConversation,
+} from './conversation.ts';
 import { RunnerError, RunStoppedError } from './errors.ts';
 import { gauntletEnvBase } from './gauntlet-env.ts';
+import { currentRoleChild } from './gauntlet-role.ts';
 import { writeAttemptManifest } from './manifest.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
 import { collectProvenance } from './provenance.ts';
@@ -314,7 +319,7 @@ export interface InvokeGauntletArgs extends GauntletArgvArgs {
 // the stopped verdict. Set on spawn, cleared on exit.
 let activeGauntletChild: ChildProcess | null = null;
 export function currentGauntletChild(): ChildProcess | null {
-  return activeGauntletChild;
+  return currentRoleChild() ?? activeGauntletChild;
 }
 
 // Settled exit of the gauntlet child: the exit code (null on signal-kill),
@@ -1273,6 +1278,10 @@ export async function runScenario(
       });
     }
   }
+  const persistedConversation = readConversationRecord(runDir);
+  if (persistedConversation !== null)
+    verdict = { ...verdict, conversation: persistedConversation };
+  if (verdict.error?.stage === 'stopped') runStopped = true;
   // Best-effort provenance stamp (PRI-2494). F13 micro corrective round 2:
   // compute the runnability decision FIRST, and NEVER reload the agent
   // config post-run — loadAgentConfig is side-effectful (pin_cli_version
@@ -1477,6 +1486,19 @@ async function runInner(
 ): Promise<FinalVerdict> {
   const cleanupDirs: string[] = [];
   const os = a.os ?? 'linux';
+  // Reject the unsupported mode before entering remote-runtime teardown.
+  // A conversation preflight must not SSH to an unprovisioned Windows host.
+  const story = join(a.scenarioDir, 'story.md');
+  if (
+    os !== 'linux' &&
+    existsSync(story) &&
+    readQuorumMode(story) === 'conversation'
+  ) {
+    throw new RunnerError(
+      'conversation mode supports only Linux Claude and Codex',
+      'setup',
+    );
+  }
   try {
     return await runInnerBody(
       a,
@@ -1584,8 +1606,22 @@ async function runInnerBody(
 
   // 3. Per-scenario duration override (StoryMetaError -> setup runner error).
   let storyMaxTime: string | null;
+  let conversationNormalizer: 'claude' | 'codex' | null = null;
   try {
     storyMaxTime = readQuorumMaxTime(storyPath);
+    if (readQuorumMode(storyPath) === 'conversation') {
+      if (
+        os !== 'linux' ||
+        !['claude', 'codex'].includes(cfg.runtime_family ?? cfg.name) ||
+        (cfg.normalizer !== 'claude' && cfg.normalizer !== 'codex')
+      ) {
+        throw new RunnerError(
+          'conversation mode supports only Linux Claude and Codex',
+          'setup',
+        );
+      }
+      conversationNormalizer = cfg.normalizer;
+    }
   } catch (e: unknown) {
     throw new RunnerError(e instanceof Error ? e.message : String(e), 'setup');
   }
@@ -1995,6 +2031,38 @@ async function runInnerBody(
     cfg.name === 'copilot'
       ? copilotGauntletEnv(envSnapshot())
       : gauntletEnvBase(envSnapshot());
+
+  if (conversationNormalizer !== null) {
+    return runPreparedConversation({
+      runDir,
+      scenarioDir: a.scenarioDir,
+      storyPath,
+      launcherPath: launchAgentPath,
+      workdir,
+      launchCwd,
+      runHomeDir,
+      configDir,
+      codingAgent: a.codingAgent,
+      normalizer: conversationNormalizer,
+      logDir,
+      logGlob: cfg.session_log_glob,
+      snapshot,
+      checksSh,
+      checksRepoRoot,
+      preRecords: [...pre.records],
+      expectedChecks,
+      ...(a.checkScratchRoot !== undefined
+        ? { checkScratchRoot: a.checkScratchRoot }
+        : {}),
+      ...(a.superpowers !== undefined ? { superpowers: a.superpowers } : {}),
+      gauntletBin: a.gauntletBin ?? 'gauntlet',
+      graderModel: a.graderModel ?? GRADER_MODEL,
+      maxTime: maxTime ?? '10m',
+      envBase: gauntletEnvBaseValue,
+      shouldStop: a.shouldStop ?? (() => false),
+      identity,
+    });
+  }
 
   writePhase(runDir, 'agent', identity);
 

@@ -185,3 +185,29 @@ test('empty capture + non-trace check (file-exists) -> not guarded', () => {
     }).final,
   ).toBe('pass');
 });
+
+test('inconclusive assessment does not say the completed subject failed to finish', () => {
+  const conversation = {
+    status: 'completed' as const,
+    endpoint: 'refusal' as const,
+    reason: 'refusal',
+    timestamp: '2026-09-07T00:00:00Z',
+    evidence: { path: 'conversation-agent/demo/captures/1.ansi', quote: 'No' },
+  };
+  const result = compose({
+    gauntlet: {
+      status: 'investigate',
+      summary: '',
+      reasoning: '',
+      run_id: 'assessment',
+    },
+    conversation,
+    checks: [],
+    captureEmpty: false,
+    error: null,
+    expected: null,
+  });
+  expect(result.final).toBe('indeterminate');
+  expect(result.final_reason).toContain('Assessment inconclusive');
+  expect(result.conversation).toEqual(conversation);
+});

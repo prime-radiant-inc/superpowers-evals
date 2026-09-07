@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SuperpowersSpec } from '../agents/superpowers.ts';
 import { authorizeCoveredChild } from '../campaign/child-authority.ts';
-
 import {
   clockNowMs,
   DEFAULT_RESOURCE_FLOORS,
@@ -35,6 +34,7 @@ import { EXIT_CODE_BY_FINAL } from '../contracts/verdict.ts';
 import { resolveCredentialNameForAgent } from '../credentials/resolve.ts';
 import { getEnv } from '../env.ts';
 import { RunnerError } from '../runner/errors.ts';
+import { currentRoleChild, stopActiveRole } from '../runner/gauntlet-role.ts';
 import {
   currentGauntletChild,
   runScenario,
@@ -217,7 +217,8 @@ export async function executeRunCommand(
     uninstallStopHandlers = installRunStopHandlers(
       stopState,
       (signal) => {
-        currentGauntletChild()?.kill(signal);
+        if (currentRoleChild() !== null) stopActiveRole(signal);
+        else currentGauntletChild()?.kill(signal);
       },
       dependencies.signalSource,
     );
