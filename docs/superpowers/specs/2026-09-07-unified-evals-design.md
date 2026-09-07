@@ -1,11 +1,13 @@
 # Unified evals: proposed specification
 
-**Status:** Proposed for Drew's review; implementation has not started.
+**Status:** Parked after Drew narrowed the immediate scope on 2026-09-07.
 **Participants:** Drew and Bot. **Updated:** 2026-09-07.
-**Canonical design:** This file. Earlier reasoning, investigations, and decisions
-are preserved in [research notes](2026-09-07-unified-evals-research-notes.md).
+**Current proposed increment:** [Quorum conversation and assessment](2026-09-07-quorum-conversation-assessment-design.md).
+This file retains the broader proposal as history; it is not the implementation
+scope. Earlier reasoning is preserved in
+[research notes](2026-09-07-unified-evals-research-notes.md).
 
-## Resume here
+## Historical proposal
 
 Build one eval product in **smevals**. It schedules complete runs, invokes
 checkers, and produces a common report. A replaceable interactive Runner
