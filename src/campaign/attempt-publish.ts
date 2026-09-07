@@ -6,6 +6,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -69,10 +70,14 @@ function existingPath(path: string): ReturnType<typeof lstatSync> | undefined {
   }
 }
 
-function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
+function verifyInventory(
+  runDir: string,
+  listedPaths: readonly string[],
+  listedSymlinks: ReadonlyMap<string, string>,
+): void {
   const listedFiles = new Set(listedPaths);
   const listedDirectories = new Set<string>();
-  for (const listedPath of listedPaths) {
+  for (const listedPath of [...listedPaths, ...listedSymlinks.keys()]) {
     const components = listedPath.split('/');
     components.pop();
     let directory = '';
@@ -109,6 +114,16 @@ function verifyInventory(runDir: string, listedPaths: readonly string[]): void {
       if (relativePath === 'manifest.json') {
         if (stats.isSymbolicLink() || !stats.isFile()) {
           throw refusal(`manifest is non-regular or symlinked for run`);
+        }
+        continue;
+      }
+      if (stats.isSymbolicLink()) {
+        const target = listedSymlinks.get(relativePath);
+        if (target === undefined) {
+          throw refusal(`unlisted artifact refused: ${relativePath}`);
+        }
+        if (readlinkSync(fullPath) !== target) {
+          throw refusal(`altered symlink refused: ${relativePath}`);
         }
         continue;
       }
@@ -254,6 +269,29 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
     throw refusal('manifest campaign identity mismatch');
   }
 
+  const listedSymlinks = new Map(
+    (manifest.symlinks ?? []).map((link) => [link.path, link.target]),
+  );
+  for (const [linkPath, target] of listedSymlinks) {
+    const fullPath = join(runDir, ...linkPath.split('/'));
+    let stats: ReturnType<typeof lstatSync> | undefined;
+    try {
+      stats = existingPath(fullPath);
+    } catch (error: unknown) {
+      throw refusal(
+        `symlink status unavailable for ${linkPath}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (stats === undefined || !stats.isSymbolicLink()) {
+      throw refusal(
+        `manifest lists a missing or non-symlink entry: ${linkPath}`,
+      );
+    }
+    if (readlinkSync(fullPath) !== target) {
+      throw refusal(`altered symlink refused: ${linkPath}`);
+    }
+  }
+
   for (const file of manifest.files) {
     const components = file.path.split('/');
     let fullPath = runDir;
@@ -309,6 +347,7 @@ export function publishAttempt(args: PublishAttemptArgs): { runId: string } {
   verifyInventory(
     runDir,
     manifest.files.map((file) => file.path),
+    listedSymlinks,
   );
 
   const destination = join(args.resultsRoot, runId);

@@ -10,6 +10,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -513,6 +514,97 @@ test('publish still rejects an unlisted symlink even when it points at an empty 
   } finally {
     clean(paths);
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('publish accepts a listed symlink whose target matches exactly', () => {
+  const paths = staged('run-pub-20', {
+    files: [
+      { path: 'verdict.json', body: '{"final":"pass"}\n' },
+      { path: 'coding-agent-workdir/node_modules/vite-bin.js', body: 'x\n' },
+    ],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-20');
+  mkdirSync(join(runDir, 'coding-agent-workdir', 'node_modules', '.bin'));
+  symlinkSync(
+    '../vite-bin.js',
+    join(runDir, 'coding-agent-workdir', 'node_modules', '.bin', 'vite'),
+  );
+  const manifestPath = join(runDir, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.symlinks = [
+    {
+      path: 'coding-agent-workdir/node_modules/.bin/vite',
+      target: '../vite-bin.js',
+    },
+  ];
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  try {
+    const published = publishAttempt({
+      ...paths,
+      expectedAttemptId: expectedAttemptId(),
+    });
+    expect(published.runId).toBe('run-pub-20');
+    const moved = join(
+      paths.resultsRoot,
+      'run-pub-20',
+      'coding-agent-workdir',
+      'node_modules',
+      '.bin',
+      'vite',
+    );
+    expect(lstatSync(moved).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(moved)).toBe('../vite-bin.js');
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish refuses a listed symlink whose target changed', () => {
+  const paths = staged('run-pub-21', {
+    files: [
+      { path: 'verdict.json', body: '{"final":"pass"}\n' },
+      { path: 'coding-agent-workdir/node_modules/vite-bin.js', body: 'x\n' },
+    ],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-21');
+  mkdirSync(join(runDir, 'coding-agent-workdir', 'node_modules', '.bin'));
+  symlinkSync(
+    '../other.js',
+    join(runDir, 'coding-agent-workdir', 'node_modules', '.bin', 'vite'),
+  );
+  const manifestPath = join(runDir, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.symlinks = [
+    {
+      path: 'coding-agent-workdir/node_modules/.bin/vite',
+      target: '../vite-bin.js',
+    },
+  ];
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(
+      /altered symlink refused: coding-agent-workdir\/node_modules\/\.bin\/vite/,
+    );
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-21'))).toBe(false);
+  } finally {
+    clean(paths);
+  }
+});
+
+test('publish still refuses an unlisted symlink', () => {
+  const paths = staged('run-pub-22');
+  const runDir = join(paths.attemptDir, 'staging', 'run-pub-22');
+  symlinkSync('present-target', join(runDir, 'linked'));
+  try {
+    expect(() =>
+      publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
+    ).toThrow(/unlisted artifact refused: linked/);
+    expect(existsSync(join(paths.resultsRoot, 'run-pub-22'))).toBe(false);
+  } finally {
+    clean(paths);
   }
 });
 

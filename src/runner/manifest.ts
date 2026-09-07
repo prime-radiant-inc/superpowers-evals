@@ -8,6 +8,7 @@ import {
   lstatSync,
   openSync,
   readdirSync,
+  readlinkSync,
   readSync,
   realpathSync,
   renameSync,
@@ -52,6 +53,20 @@ const ManifestFileSchema = z
   })
   .strict();
 
+const ManifestSymlinkSchema = z
+  .object({
+    path: z.string().min(1).refine(isManifestPath, {
+      message: 'manifest paths must be normalized relative paths',
+    }),
+    // The raw readlink target, recorded verbatim and never followed. Absolute
+    // targets (venv interpreters) are legitimate inventory.
+    target: z
+      .string()
+      .min(1)
+      .refine((t) => !t.includes('\0')),
+  })
+  .strict();
+
 export const AttemptManifestSchema = z
   .object({
     schema_version: z.literal(1),
@@ -69,6 +84,7 @@ export const AttemptManifestSchema = z
       ),
     campaign: CampaignIdentitySchema,
     files: z.array(ManifestFileSchema),
+    symlinks: z.array(ManifestSymlinkSchema).optional(),
   })
   .strict()
   .superRefine((manifest, ctx) => {
@@ -82,6 +98,24 @@ export const AttemptManifestSchema = z
         });
       }
       paths.add(file.path);
+    });
+    const symlinkPaths = new Set<string>();
+    (manifest.symlinks ?? []).forEach((link, index) => {
+      if (symlinkPaths.has(link.path)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['symlinks', index, 'path'],
+          message: 'manifest symlink paths must be unique',
+        });
+      }
+      symlinkPaths.add(link.path);
+      if (paths.has(link.path)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['symlinks', index, 'path'],
+          message: `symlink path collides with a file path: ${link.path}`,
+        });
+      }
     });
   });
 
@@ -135,9 +169,11 @@ function openDirectory(path: string): PinnedDirectory {
 
 function collectFiles(runDir: string): {
   files: AttemptManifest['files'];
+  symlinks: NonNullable<AttemptManifest['symlinks']>;
   rootPath: string;
 } {
   const found: AttemptManifest['files'] = [];
+  const symlinks: NonNullable<AttemptManifest['symlinks']> = [];
   const rootPath = realpathSync(runDir);
 
   const walk = (
@@ -154,7 +190,14 @@ function collectFiles(runDir: string): {
         throw manifestError(`artifact path is not normalized: ${path}`);
       }
       if (entry.isSymbolicLink()) {
-        throw manifestError(`symlinked artifact refused: ${path}`);
+        // Inventory, not an artifact: record the raw target and never follow
+        // it. Dependency trees (node_modules/.bin) and venv interpreters put
+        // symlinks in every real workdir.
+        symlinks.push({
+          path,
+          target: readlinkSync(`${directory.viaPath}/${entry.name}`),
+        });
+        continue;
       }
       if (entry.isDirectory()) {
         if (isRoot && EXCLUDED_TOP_LEVEL_DIRS.has(entry.name)) {
@@ -196,6 +239,9 @@ function collectFiles(runDir: string): {
   }
   return {
     files: found.sort((a, b) =>
+      a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+    ),
+    symlinks: symlinks.sort((a, b) =>
       a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
     ),
     rootPath,
@@ -308,6 +354,9 @@ export function writeAttemptManifest(
       run_id: runId,
       campaign: parsedCampaign,
       files,
+      ...(collected.symlinks.length === 0
+        ? {}
+        : { symlinks: collected.symlinks }),
     });
     fd = openSync(
       stagePath,

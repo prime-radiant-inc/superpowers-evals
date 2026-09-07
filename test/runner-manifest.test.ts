@@ -114,19 +114,17 @@ test('manifest publication replaces stale output privately and removes its stage
 
 test('pre-publication validation removes a stale final manifest before refusing', () => {
   const runDir = tempRunDir();
-  const outside = join(tmpdir(), `manifest-secret-${process.pid}`);
   writeFileSync(join(runDir, 'manifest.json'), 'old blessed output\n');
-  writeFileSync(outside, 'secret\n');
-  symlinkSync(outside, join(runDir, 'verdict.json'));
+  const fifo = join(runDir, 'pipe');
+  execFileSync('mkfifo', [fifo]);
 
   try {
     expect(() => writeAttemptManifest(runDir, identity)).toThrow(
-      'symlinked artifact refused: verdict.json',
+      'non-regular artifact refused: pipe',
     );
     expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
   } finally {
     rmSync(runDir, { recursive: true, force: true });
-    rmSync(outside, { force: true });
   }
 });
 
@@ -347,22 +345,69 @@ test('failed stage cleanup is followed by run-directory fsync', () => {
   }
 });
 
-test('manifest refuses symlinked artifacts without publishing a manifest', () => {
+test('manifest records symlinks verbatim instead of refusing the run', () => {
   const runDir = tempRunDir();
-  const outside = join(tmpdir(), `manifest-secret-${process.pid}`);
-  writeFileSync(outside, 'secret\n');
-  symlinkSync(outside, join(runDir, 'verdict.json'));
+  mkdirSync(join(runDir, 'coding-agent-workdir', 'node_modules', '.bin'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(runDir, 'coding-agent-workdir', 'node_modules', 'vite-bin.js'),
+    'x\n',
+  );
+  symlinkSync(
+    '../vite-bin.js',
+    join(runDir, 'coding-agent-workdir', 'node_modules', '.bin', 'vite'),
+  );
+  symlinkSync(
+    '/usr/bin/python3',
+    join(runDir, 'coding-agent-workdir', 'python'),
+  );
 
   try {
-    expect(() => writeAttemptManifest(runDir, identity)).toThrow(RunnerError);
-    expect(() => writeAttemptManifest(runDir, identity)).toThrow(
-      'symlinked artifact refused: verdict.json',
+    writeAttemptManifest(runDir, identity);
+    const manifest = parseAttemptManifest(
+      readFileSync(join(runDir, 'manifest.json'), 'utf8'),
     );
-    expect(existsSync(join(runDir, 'manifest.json'))).toBe(false);
+    expect(manifest.files.map((file) => file.path)).not.toContain(
+      'coding-agent-workdir/node_modules/.bin/vite',
+    );
+    expect(manifest.symlinks).toEqual([
+      {
+        path: 'coding-agent-workdir/node_modules/.bin/vite',
+        target: '../vite-bin.js',
+      },
+      { path: 'coding-agent-workdir/python', target: '/usr/bin/python3' },
+    ]);
   } finally {
     rmSync(runDir, { recursive: true, force: true });
-    rmSync(outside, { force: true });
   }
+});
+
+test('a run without symlinks writes a manifest with no symlinks key', () => {
+  const runDir = tempRunDir();
+  writeFileSync(join(runDir, 'verdict.json'), '{"final":"pass"}\n');
+
+  try {
+    writeAttemptManifest(runDir, identity);
+    const raw = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    expect(raw).not.toHaveProperty('symlinks');
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test('manifest refuses a symlink path that collides with a listed file path', () => {
+  expect(() =>
+    parseAttemptManifest(
+      JSON.stringify({
+        schema_version: 1,
+        run_id: 'r',
+        campaign: identity,
+        files: [{ path: 'a.txt', size: 1, sha256: 'a'.repeat(64) }],
+        symlinks: [{ path: 'a.txt', target: 'b.txt' }],
+      }),
+    ),
+  ).toThrow(/symlink/);
 });
 
 test('manifest refuses non-regular artifacts without publishing a manifest', () => {
@@ -371,6 +416,7 @@ test('manifest refuses non-regular artifacts without publishing a manifest', () 
   execFileSync('mkfifo', [fifo]);
 
   try {
+    expect(() => writeAttemptManifest(runDir, identity)).toThrow(RunnerError);
     expect(() => writeAttemptManifest(runDir, identity)).toThrow(
       'non-regular artifact refused: pipe',
     );

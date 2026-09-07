@@ -3,9 +3,11 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -53,7 +55,7 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   );
   writeFileSync(
     join(scenarioDir, 'setup.sh'),
-    '#!/usr/bin/env bash\nprintf fixture > present.txt\nmkdir -p scratch-empty\n',
+    '#!/usr/bin/env bash\nprintf fixture > present.txt\nmkdir -p scratch-empty\nln -s present.txt link-to-present\n',
   );
   chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
   writeFileSync(
@@ -126,6 +128,9 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       artifacts,
     });
     expect(evidence.publication_valid).toBe(true);
+    const link = join(publishedDir, 'coding-agent-workdir', 'link-to-present');
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe('present.txt');
     expect(evidence.checks).toEqual([
       expect.objectContaining({
         check: 'file-exists',
