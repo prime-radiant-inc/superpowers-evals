@@ -175,6 +175,17 @@ smoke.
 Before campaign 2 the suite's `reserve` was reduced from 4 to 1 per cell
 (50 replacement slots instead of 200) to bound replacement spend.
 
+## Campaign 2
+
+`0934ad16-4dc6-4822-ba4a-222e0635e7d1`, input digest
+`8615ebc5d29757644fe242204e625047daf4f0b71341c825d8d079f53cb7628d`,
+registered 2026-09-07 about 04:08Z with `--global-cap 6` and launched
+immediately after. Frozen refs: evals `4f81a83a` (both publication fixes and
+the reserve change), gauntlet `588a81e8`, superpowers `fd02874a` on every
+`_base` arm and `069edf3f` on every `_head` arm. 50 cells, 130 planned
+slots, 50 reserve slots (one per cell), no excluded cells; all ten arms at
+`effort: xhigh`; pricing snapshot digest `6423a36b…`; attempt bound 7800 s.
+
 ## Results
 
 Pending campaign 2.
