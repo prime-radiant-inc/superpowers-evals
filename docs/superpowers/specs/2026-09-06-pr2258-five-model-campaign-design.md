@@ -366,3 +366,20 @@ observations are appended after the run.
    $1,500.
 3. Landing: direct merge to `main`.
 4. Pre-campaign smoke: authorized.
+
+## Amendment 2026-09-07: fractals runs as its own campaign
+
+Smoke 5 on the check-sink fix showed two further platform gaps that make
+`sdd-go-fractals-opus48` uninformative under the campaign controller until
+they are fixed: the attempt scratch tmpfs is mounted `noexec`, so the check
+phase's `go test ./...` cannot execute the test binaries Go builds under its
+TMPDIR (a deterministic false fail on every model; 104 Phase-1 fractals runs
+on the same appliance passed that check), and the Codex normalizer does not
+surface `spawn_agent` calls made inside unified `exec` scripts, so
+`tool-called Agent` is a false negative on the Codex arms. The nine behavioral
+scenarios are unaffected. The five-model campaign therefore runs the nine
+behavioral scenarios (40 cells, 100 planned slots, 40 reserve slots), and
+fractals at n=3 runs as a separate campaign on the same arms and effort once
+both gaps are fixed, which preserves the longitudinal comparison the fractals
+cells were added for.
+

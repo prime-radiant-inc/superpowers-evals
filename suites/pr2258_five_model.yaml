@@ -4,6 +4,10 @@
 # actual base (== origin/dev; main differs only by CODE_OF_CONDUCT.md).
 # Subject and grader share the Mantle bearer, which the shared-source rule
 # permits. Register with --global-cap 6.
+# sdd-go-fractals-opus48 is deliberately absent: its post checks run `go test`
+# whose test binaries cannot execute on the attempt scratch tmpfs (noexec), and
+# the Codex normalizer does not surface spawn_agent calls made inside unified
+# exec scripts; it runs as its own campaign once both are fixed.
 schema_version: 2
 name: pr2258_five_model
 grader:
@@ -25,11 +29,9 @@ comparisons:
       - writing-plans-no-spec-conversational
       - cost-spec-plan-duplication
       - user-pref-sdd-no-strategy-prompt
-      - sdd-go-fractals-opus48
     n: 1
     cells:
       brainstorming-todo-purpose-discovery: { n: 2 }
-      sdd-go-fractals-opus48: { n: 3 }
   - baseline: codex_sol_pr2258_base
     treatment: codex_sol_pr2258_head
     scenarios:
@@ -42,11 +44,9 @@ comparisons:
       - writing-plans-no-spec-conversational
       - cost-spec-plan-duplication
       - user-pref-sdd-no-strategy-prompt
-      - sdd-go-fractals-opus48
     n: 1
     cells:
       brainstorming-todo-purpose-discovery: { n: 2 }
-      sdd-go-fractals-opus48: { n: 3 }
   - baseline: codex_luna_pr2258_base
     treatment: codex_luna_pr2258_head
     scenarios:
@@ -59,11 +59,9 @@ comparisons:
       - writing-plans-no-spec-conversational
       - cost-spec-plan-duplication
       - user-pref-sdd-no-strategy-prompt
-      - sdd-go-fractals-opus48
     n: 1
     cells:
       brainstorming-todo-purpose-discovery: { n: 2 }
-      sdd-go-fractals-opus48: { n: 3 }
   - baseline: claude_opus5_pr2258_base
     treatment: claude_opus5_pr2258_head
     scenarios:
@@ -76,11 +74,9 @@ comparisons:
       - writing-plans-no-spec-conversational
       - cost-spec-plan-duplication
       - user-pref-sdd-no-strategy-prompt
-      - sdd-go-fractals-opus48
     n: 1
     cells:
       brainstorming-todo-purpose-discovery: { n: 2 }
-      sdd-go-fractals-opus48: { n: 3 }
   - baseline: claude_opus48_pr2258_base
     treatment: claude_opus48_pr2258_head
     scenarios:
@@ -93,11 +89,9 @@ comparisons:
       - writing-plans-no-spec-conversational
       - cost-spec-plan-duplication
       - user-pref-sdd-no-strategy-prompt
-      - sdd-go-fractals-opus48
     n: 1
     cells:
       brainstorming-todo-purpose-discovery: { n: 2 }
-      sdd-go-fractals-opus48: { n: 3 }
 # reserve is PER CELL: 1 here means one whole-block replacement for each of
 # the 50 cells (50 reserve slots), bounding replacement spend after the first
 # campaign's platform defects burned replacements on unpublishable blocks.
