@@ -202,6 +202,18 @@ composed indeterminate because the Gauntlet-Agent reported `investigate`
 while its summary read as a fail judgment (the plan duplicated the spec); a
 grader-instrument quirk worth watching in the readout.
 
+## Campaign 3
+
+`ae191eca-c14e-41d4-934e-4b7ede120761`, input digest
+`fb47ff5e0be38900fbbc6a5cd6dbe368b91f89b50e78598402c3a6f5822a3167`,
+registered 2026-09-07 about 04:37Z with `--global-cap 6` and launched
+immediately after. Frozen refs: evals `c1487381` (publication fixes, one
+replacement slot per cell, exposure skew 300 s), gauntlet `588a81e8`,
+superpowers `fd02874a` on every `_base` arm and `069edf3f` on every `_head`
+arm. 50 cells, 130 planned slots, 50 reserve slots, no excluded cells; all
+ten arms at `effort: xhigh`; pricing snapshot digest `6423a36b…`; attempt
+bound 7800 s.
+
 ## Results
 
 Pending campaign 3.
