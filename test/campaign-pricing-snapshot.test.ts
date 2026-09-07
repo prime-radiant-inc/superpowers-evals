@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifyPricingSnapshot } from '../src/campaign/pricing-snapshot.ts';
@@ -9,7 +15,11 @@ import { SuiteSchema } from '../src/contracts/campaign/suite.ts';
 import { twoArmExperiment } from './fixtures/core-comparison/factory.ts';
 
 function pricingFixture() {
-  const evalsRoot = mkdtempSync(join(tmpdir(), 'campaign-pricing-'));
+  // realpath: on macOS tmpdir() lives under /var -> /private/var, and the
+  // snapshot reader refuses symlinked path components by design.
+  const evalsRoot = realpathSync(
+    mkdtempSync(join(tmpdir(), 'campaign-pricing-')),
+  );
   const directory = join(evalsRoot, 'pricing');
   const file = join(directory, 'current.json');
   const bytes = `${JSON.stringify({

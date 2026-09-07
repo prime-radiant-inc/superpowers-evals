@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -32,7 +33,9 @@ const identity: CampaignIdentity = {
 };
 
 test('a checks-bearing campaign runner result publishes with authenticated check evidence', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'runner-publication-'));
+  // realpath: the published-artifact readers refuse symlinked path components
+  // by design, and macOS tmpdir() lives under /var -> /private/var.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'runner-publication-')));
   const scenarioName = 'campaign-publication';
   const scenarioDir = join(root, scenarioName);
   const campaignAttemptDir = join(root, 'attempt');
