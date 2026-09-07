@@ -33,7 +33,10 @@ the transcript and any scenario outputs after the interaction. Submitted
 batches belong to the appliance: the client records an ID and polls until
 completion, as in current evals. Client disconnects do not stop execution.
 Worker implementation, grading/report shape, and detailed execution controls
-remain open.
+remain open. After inspecting the appliance and August 10–September 7 records,
+Bot proposes eight concurrent runs as the normal target, qualification at
+sixteen, and initially two heavy build/browser attempts within the total.
+Six is demonstrated; the higher targets are open for Drew to discuss/adjust.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -72,6 +75,7 @@ no component should dictate the whole product.
 | Grade the transcript and scenario outputs | Explicit requirement from Drew. Evaluate outputs when the scenario produces them; transcript evaluation remains required. |
 | Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
 | Appliance owns submitted execution; clients poll by ID | Explicitly agreed by Drew, preserving the current submit-and-poll operating model. Polling is observation, not a keepalive. |
+| Eight normal / sixteen qualified / two heavy within the total | Evidence-based proposal after appliance, history, and scenario inspection; not yet agreed or demonstrated. |
 | Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
 | Reuse auth delivery; separate targets, connections, and resource limits | Agreed direction. Exact schemas, target selection, and extraction details remain open. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
@@ -276,11 +280,12 @@ an explicit later operation, separate from execution. The new design inherits
 the operating behavior, not the campaign's registration, gate, lease, sealing,
 or termination-reconciliation implementation as mandatory machinery.
 
-Source and existing tests were inspected on 2026-09-07. The focused
+For the ownership trace, source and existing tests were inspected on 2026-09-07. The focused
 `bun test test/appliance-summary.test.ts test/run-all-shutdown.test.ts` check
 passed all 19 tests, covering status before results, terminal and lost states,
-and stop handling with fake workers. This is local source/offline evidence;
-no installed-host check, credential access, or live eval was performed.
+and stop handling with fake workers. That trace used local source/offline
+evidence. The subsequent capacity inspection below refreshed installed-host
+state read-only; no live eval was performed.
 
 - [Ordinary job submission](../../../src/appliance/cli.ts)
 - [Detached worker, container invocation, and completion](../../../src/appliance/process.ts)
@@ -321,8 +326,63 @@ not redefine the full supported-harness requirement. Keep the core host-neutral
 without building multi-host orchestration before it is needed.
 
 The execution location and appliance ownership are agreed. Deployment and
-capacity details remain proposals; no new live health, credential, quota, or
-capacity check was performed for this discussion.
+capacity details remain proposals.
+
+### Capacity recommendation after appliance and run-history inspection
+
+**Proposal:** Target eight simultaneous whole runs for normal operation and
+qualify sixteen on the existing appliance. Initially allow two heavy
+build/browser attempts within that total. One run is one scenario × target ×
+repetition, including its coding agent and simulated user. Sixteen is a
+qualification target, not a software ceiling. These numbers remain open for
+Drew to adjust; no runtime limits were changed and no qualification runs were
+launched.
+
+Read-only Tailscale SSH inspection on September 7 found an idle m6i.2xlarge
+with eight vCPUs, 30.82 GiB RAM, and 147.7 GiB free on its data filesystem.
+The installed helper's doctor passed. Installed evals revision `6c215603`
+has the same scenarios, coding-agent configurations, and credential registry
+as the inspected source baseline. The configured results root retained 743
+verdicts across 29 scenarios for August 10 through partial September 7,
+plus nine run directories missing verdicts and 46 batch records. This is a
+mixed operational corpus, not one comparable model-quality experiment.
+
+The September 4 campaign completed 150 runs in 121 minutes, peaked at six
+occupied attempts, and averaged 5.42. It had at least five outstanding for
+97.9% of its wall time, with load p95 1.22 and at least 26.10 GiB available RAM.
+The latest interrupted five-model campaign also peaked at six; its recorded
+load p95 was 1.38 and available RAM stayed above 25.23 GiB. Its terminal reason
+was stale telemetry. These receipts support host headroom, not demonstrated
+eight- or sixteen-run capacity. An earlier campaign did record CPU overload
+from simultaneous root-filesystem searches, so workload and child-process
+behavior still matter.
+
+The scenario inventory has 84 ready scenarios and three drafts, with five
+full product builds. Recent Go-fractals runs had a 38.7-minute median and
+78.6-minute p90, versus 5.2/15.1 minutes across all retained verdicts. Duration
+is not continuous CPU demand. Both Svelte/browser builds are adhoc and absent
+from ordinary full-tier sweeps; qualify that workload explicitly.
+
+The live user-model pool is an immediate constraint. The current signature
+suites select direct Sonnet with a configured cap of two; PR2258 selects
+Mantle Sonnet with a configured cap of six. These are current settings, not
+verified provider ceilings. Qualify the chosen user route above six to reach
+the proposed targets; raising only global jobs cannot do so. Separate final
+grading does not remove the simulated user's live capacity demand.
+
+After the first functional slice, compare a fixed interaction/workflow mix at
+six and eight, add a Go/Svelte mix with two heavy attempts, then qualify twelve
+and sixteen where observed host/provider behavior supports it. Keep targets,
+effort, user model, grading, and repetitions comparable. Measure wall time,
+per-run durations, completion/errors, resource pressure, and throttling, plus
+disconnect/cancellation behavior. This remains a proposed acceptance shape,
+not a launch or spending plan.
+
+See the [capacity readout and primary evidence](/Users/drewritter/.codex/visualizations/2026/09/07/01a07cbc-47f5-70d0-803e-acdaff77da82/evals-capacity/READOUT.md)
+for campaign cohorts, scenario inventory, metadata collection/analysis scripts,
+and limitations. The inspection used existing records and read-only host
+commands; it did not read secret values, launch provider work, or change the
+appliance.
 
 ## Target and credential model
 
@@ -487,8 +547,9 @@ separate process gates or implementation tasks.
 1. **Evaluation/report:** Define criterion results and evidence references
    for the agreed transcript/output coverage, including deterministic and
    model-based checks and unavailable evidence.
-2. **Execution controls:** Define progress, cancellation, and concurrency
-   controls within the agreed appliance-owned submit-and-poll model.
+2. **Capacity and execution controls:** Discuss the eight/sixteen/two proposal
+   above, then define progress, cancellation, and concurrency controls within
+   the agreed appliance-owned submit-and-poll model.
 3. **Target selection:** Choose how users select targets and specify
    resolution/compatibility behavior within the agreed configuration separation.
 4. **Live worker:** Choose the initial implementation and specify setup,
@@ -582,3 +643,11 @@ implementation or operational claims.
   and shutdown tests passed. Recorded appliance ownership and reconnectable
   observation as requirements, with a disconnect check in the proposed first
   proof; no remote execution was performed.
+- **2026-09-07:** Drew asked for a concurrency recommendation grounded in
+  the appliance, recent runs, and scenario set. Read-only host inspection,
+  743 retained verdicts, seven primary campaign cohorts, and the 87-scenario
+  inventory support six as demonstrated capacity with headroom on ordinary
+  workloads. Bot recommends eight as the normal target, sixteen for engine
+  qualification, and initially two heavy attempts within the total. Current
+  user-model route caps of two/six need explicit qualification; this proposal
+  remains open for discussion and no limits or workloads were changed.
