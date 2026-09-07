@@ -24,11 +24,12 @@ mandatory reply/persona schema. The complete interaction is one smevals run;
 the core does not manage individual exchanges. Most live execution will use
 the existing appliance for its shared credentials and Mantle/Bedrock access.
 Drew confirms there are no old Quorum workloads to support. The new product
-has no Quorum coexistence or backward-compatibility requirement. We are now
-discussing credentials and target configuration. Bot recommends reusing
-existing auth sources and harness delivery code while separating the public
-target/model definition from connection/auth configuration. This separation
-and its selection UI/schema are proposals; execution/report details remain open.
+has no Quorum coexistence or backward-compatibility requirement. Drew agrees
+to reuse existing auth sources and useful harness delivery code, with separate
+responsibilities for targets, connections, and shared resource limits. Exact
+schemas and target-selection UX remain open. We are now discussing the live
+worker's lifecycle and completion behavior; the proposal below is not yet
+agreed. Evaluation/report details also remain open.
 
 Keep this document current after substantive discussion: promote an agreed
 proposal into a decision, retain a short reason when an alternative is
@@ -65,7 +66,7 @@ no component should dictate the whole product.
 | One complete interaction per Runner invocation | Agreed boundary: smevals schedules runs and owns common results/reporting; the replaceable runner owns the live interaction. |
 | Most live execution on the existing quorum appliance | Agreed direction; deployment details remain open. |
 | Support old Quorum workloads or compatibility | Explicitly out of scope. Drew confirms there are no workloads to preserve. |
-| Reuse auth delivery while separating target and connection configuration | Bot's recommendation after source inspection; not yet an agreed schema/design. |
+| Reuse auth delivery; separate targets, connections, and resource limits | Agreed direction. Exact schemas, target selection, and extraction details remain open. |
 | Preserve smevals' current execution implementation | Not a requirement; evolve or replace internals according to the design. |
 | Keep one working document through brainstorming | Requested by Drew to preserve context across compaction. |
 | Specific schemas, command syntax, packaging, deployment, and scenario reuse | Open; not approved. |
@@ -181,6 +182,31 @@ requiring a simulated user. Superpowers Evals would contribute a scenario
 suite and reusable workers/checkers. Gauntlet and other general-purpose
 components can remain independently useful packages or repositories.
 
+### Proposed live worker lifecycle and completion
+
+Start with one isolated worker process per attempt. It receives resolved
+inputs, prepares the workspace and selected harness/auth/Superpowers setup,
+uses Gauntlet to conduct the conversation, and returns the transcript,
+workspace artifacts, and execution status. Reuse useful Quorum provisioning
+and capture code at these steps. The driver implementation remains replaceable.
+The supervisor provides a deadline and cancellation that stops the worker's
+process tree; preserve available evidence when a run stops early.
+
+The proposed completion rule is to finish the interaction when the requested
+task has concluded, even when the coding agent did it badly. Normal questions,
+approvals, and feedback remain part of the simulated user's role. Private
+grading criteria must not drive repeated coaching until the subject passes.
+A scenario can explicitly exercise correction or persistence when that is
+the behavior under test, without requiring ordinary authors to script turns.
+
+Run final evaluation against the collected evidence after the interaction.
+Gauntlet's own assessment may be retained as evidence, but does not decide
+whether a behavioral failure counts as a completed execution. This separation
+does not require another LLM: deterministic checks may suffice, with a
+model-based checker selected where semantic evaluation needs one. The exact
+grading contract and how to adapt Gauntlet's current self-grading loop remain
+open. This lifecycle and completion policy are proposals for discussion.
+
 ## First execution environment and proposed deployment
 
 Use the existing quorum appliance for most real eval execution. Drew points
@@ -222,12 +248,14 @@ on the user's context, the runbook, and the earlier investigation. No new
 live health, credential, quota, or capacity check was performed for this
 discussion.
 
-## Proposed target and credential model
+## Target and credential model
 
-**Recommendation:** Reuse the appliance's existing credential sources and
-the useful harness-specific delivery code. Replace the public configuration
-concept that makes a credential define the model being tested. No new secret
-manager or provider-authentication service is proposed.
+**Agreed direction:** Reuse the appliance's existing credential sources and
+the useful harness-specific delivery code. Separate the target being tested,
+its connection/auth configuration, and shared resource limits. No new secret
+manager or provider-authentication service is proposed. The implementation
+details below remain recommendations, not an approved schema or extraction
+plan.
 
 ### What the current system combines
 
@@ -244,7 +272,7 @@ apply precedence once, and give the worker and report the same non-secret
 effective settings. Keep exact provider request identifiers and observed
 model identities distinct; do not rewrite request IDs using display-name rules.
 
-### Small proposed separation
+### Agreed configuration responsibilities
 
 | Concept | Responsibility |
 |---|---|
@@ -376,12 +404,12 @@ goal after the initial slice.
 Discuss these in the order that helps the design; they are questions, not
 separate process gates or implementation tasks.
 
-1. **Targets and connections:** Agree the credential separation above, choose
-   how users select targets, and specify resolution/compatibility behavior.
+1. **Live worker:** Settle the lifecycle and completion proposal above,
+   including Gauntlet's initial role and the boundary with final evaluation.
 2. **Execution experience:** What progress, cancellation, and concurrency
    controls does Drew need for appliance execution?
-3. **Single-scenario lifecycle:** Specify the input, setup, evidence capture,
-   termination, and result details within the agreed whole-run boundary.
+3. **Target selection:** Choose how users select targets and specify
+   resolution/compatibility behavior within the agreed configuration separation.
 4. **Evaluation/report:** What is the minimum useful result, what evidence
    supports it, and which expected outcomes require deterministic or LLM checks?
 5. **Interfaces and reuse:** Derive the Runner/Checker and internal harness
@@ -456,3 +484,8 @@ implementation or operational claims.
   sources and delivery implementations while separating targets, connections,
   and resource limits. The configuration design remains a proposal; no secret
   material or live authentication was inspected.
+- **2026-09-07:** Drew agreed to the target/connection/resource-limit
+  separation and reuse direction. Exact configuration syntax and extraction
+  details remain open. Bot proposed the live worker lifecycle and a completion
+  rule that permits completed bad outcomes, with final evaluation after the
+  interaction rather than coaching toward a passing grade.
