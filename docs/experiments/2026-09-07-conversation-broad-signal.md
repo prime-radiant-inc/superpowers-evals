@@ -1,7 +1,9 @@
 # Conversation breadth and concurrency proof
 
-Status: initial wave aborted for instrument defects; repairs and a fresh wave
-are in progress. Drew authorized preparing and merging the
+Status: complete. After repairing two instrument defects, all twenty fresh
+attempts completed. Four workers produced the pricing reports 3.21 times as
+fast as one worker in this small comparison. The breadth audit found two false
+passes among twelve official passes. Drew authorized preparing and merging the
 paired implementation, updating the canonical appliance, and running a broad
 set of tasks. Drew explicitly requested direct main merges without PRs.
 
@@ -141,8 +143,8 @@ from the twenty planned fresh attempts. The original $60 operator allocation
 includes both waves. Do not count the aborted wave toward either concurrency
 cohort or revise its original results.
 
-Fresh breadth results and the audit are recorded below. The serial and parallel
-cohorts are still in progress.
+Fresh breadth, its audit, and the completed serial and parallel cohorts are
+recorded below.
 
 Repair verification: the real offline Linux probe ran as UID/GID 1001 with
 HOME/XDG absent, no network, no credentials, and a read-only rootfs. The old
@@ -258,3 +260,97 @@ with adjacent `report.json` and `report-seal.json`. Private retained outputs are
 under `/srv/quorum/superpowers-evals/results/`. Local copies of the ordinary
 readout and hash-verified role/verdict metadata are in ignored
 `results/conversation-broad-signal/breadth-fresh-*` files.
+
+### Fresh serial and parallel pricing cohorts: complete
+
+The two cohorts used the same four-cell definition: pricing on Claude/Opus 5
+and Codex/Sol, two repetitions per route. Registrations match in suite, sources,
+grader, execution surface, credential authority digest, provider pools, runtime
+limits, planned slots, and contention settings except for the global cap.
+Authenticated journals confirm the same actual image and source pins recorded
+above across all twenty fresh attempts. Each campaign has a fresh identity.
+
+| Measure | Serial, cap 1 | Parallel, cap 4 |
+| --- | ---: | ---: |
+| Campaign ID | a8a9ce39-6f1c-4645-984c-c1ae77f18311 | 171db267-c682-4d9c-a688-2b886e0a6b66 |
+| Completed deliveries / conclusive official reports | 4 / 4 | 4 / 4 |
+| Campaign elapsed | 1062.797s (17m 43s) | 331.414s (5m 31s) |
+| Completed deliveries and conclusive reports/hour | 13.549 | 43.450 |
+| Summed worker time | 1043.304s | 1004.995s |
+| Coding-agent cost | $3.14379065 | $3.17192535 |
+| Simulated-user plus assessor cost | $1.975631 | $2.035649 |
+| Total cost, complete coverage | $5.11942165 | $5.20757435 |
+| Maximum conversation / assessment overlap | 1 / 1 | 4 / 3 |
+
+All eight pricing attempts delivered, passed their independent checks, and
+produced conclusive official passes without runner errors or missing evidence.
+Both standard reports are complete and termination verified. Serial ran from
+`2026-09-08T06:13:25.918Z` to `2026-09-08T06:31:08.715Z`; parallel ran from
+`2026-09-08T06:32:33.250Z` to `2026-09-08T06:38:04.664Z`. These intervals end
+after assessment and per-attempt artifact publication. They exclude the later
+operator-requested final report command.
+
+The observed throughput ratio is **3.206856**, with 68.82% less campaign elapsed
+time and 1.72% more cost. Summed worker time decreased 3.67%; generations were
+not identical, so the entire timing difference cannot be attributed solely to
+parallel scheduling. Serial ran Claude r1, Codex r1, Claude r2, then Codex r2.
+There was no cross-attempt role overlap.
+
+Parallel ran **two Claude and two Codex conversations simultaneously for
+164.627 seconds**, from `06:32:37.984Z` to `06:35:22.611Z`. Maximum assessment
+overlap was three, comprising two Claude attempts and one Codex attempt. Both
+harnesses had active roles for 244.167 seconds; conversations overlapped across
+harnesses for 212.018 seconds. Drivers and assessors overlapped across attempts
+for 77.249 seconds. This demonstrates process overlap within and across these
+two harnesses, without asserting simultaneous provider inference.
+
+The final report-return intervals were 1108.978871 seconds serial and
+371.050724 seconds parallel, a 2.988753 ratio. Those intervals include operator
+delays of 45.041429 and 38.490393 seconds after execution ended, plus report
+commands lasting 1.140442 and 1.146331 seconds. The engine intervals above are
+the primary comparison; operator polling delay is recorded separately.
+
+Canonical standard reports, each with adjacent `report.json` and
+`report-seal.json`:
+
+- `/srv/quorum/superpowers-evals/campaigns/a8a9ce39-6f1c-4645-984c-c1ae77f18311-conversation_parallel/report.md`
+- `/srv/quorum/superpowers-evals/campaigns/171db267-c682-4d9c-a688-2b886e0a6b66-conversation_parallel/report.md`
+
+Local copies are in ignored `results/conversation-broad-signal/serial-*` and
+`parallel-*` files. `paired-comparison.json` records exact calculations,
+registration comparisons, artifact hashes, and overlap witnesses;
+`source-proof.json` records runtime identities read from authenticated journals.
+These analysis receipts supplement the ordinary reports; they do not change
+their grades or introduce a new report format into the product.
+
+### Final accounting and implications
+
+All **20 fresh attempts** completed with complete cost coverage, totaling
+**$25.8774355**. The nine earlier aborted attempts remain separate, with
+**$0.8119028 known cost and incomplete coverage**. The resulting all-attempt
+known subtotal is **$26.6893383**, not a complete billing total. Missing aborted
+usage remains unknown. No retries, regrading, or replacement attempts were
+inserted into the fresh campaigns.
+
+The final appliance doctor passed with no run or sync locks. The live-spend
+lock was absent. All twenty fresh attempt containers had exited successfully;
+all nine aborted attempt containers were also stopped. Only the base appliance
+container remained running. Stopped containers and original evidence were
+retained. Completion receipts are in `final-doctor.json` and
+`final-containers.txt` under the local experiment results directory.
+
+This is evidence that the existing worker path can execute varied real
+conversations, retain outputs and transcripts, run independent checks and a
+fresh assessment, and produce standard reports with useful parallelism. It
+does not establish support for every Superpowers harness/model combination,
+capacity above four workers, sustained throughput, or an improvement over the
+old evaluation system. Four samples per cap, serial-then-parallel order,
+different generated work, and possible cold-start/provider effects limit the
+timing conclusion.
+
+The next bounded concern is grading correctness: the assessor passed an
+unsupported exploit claim and missed a required design clarification. Driving
+also dominates evaluation-role cost and warrants measurement before optimizing.
+The evidence supports continuing with this core engine while discussing those
+specific weaknesses; it does not justify another platform replacement. No
+grader changes or new orchestration layers are part of this experiment.
