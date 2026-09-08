@@ -3,6 +3,8 @@
 Status: approved by Drew on September 8, 2026, after clarifying the desired
 morning milestone and the single conversation/assessment workflow. Execution
 uses the bounded allocation, deadlines and independent release gates below.
+Drew subsequently directed us to fix the pre-call review-rubric ambiguity
+described below and continue under the same allocation and gates.
 
 ## Outcome
 
@@ -129,8 +131,8 @@ Change the assessment instructions in Gauntlet's
   scope. Preserving review input does not prove review quality; editable subject
   tests do not establish an independent oracle pass.
 
-Keep the assessor model, scenario rubrics, report schema, tools, validators and
-execution path fixed. No additional grader, voting, citation grammar, keyword
+Keep the assessor model, report schema, tools, validators and execution path
+fixed. Freeze common rubrics after the sole clarification below. No additional grader, voting, citation grammar, keyword
 rules, model replacement or orchestration layer. This isolates one candidate.
 
 The missing check-receipt read in one supported verification result does not
@@ -140,6 +142,29 @@ independently prevents a final pass when a post-check fails.
 Splitting compound rubric criteria is a possible later alternative. It changes
 the measurement and does not directly address the already separate grounding
 criterion, so it is excluded from this comparison.
+
+### Pre-call review-rubric clarification
+
+Independent auditors agreed that the retained Claude review fails whole-review
+grounding, but disagreed on criterion 3: one read it as requiring a supported
+reason to withhold approval, the other as requiring every cited mechanism to be
+supported. No provider calls had started. Drew directed us to fix this ambiguity.
+
+Clarify only review criterion 3: the recommendation must withhold approval based
+on the supported required query/credential defects. Criterion 4 evaluates every
+material claim in the entire delivered review. An unsupported additional claim
+still fails grounding and therefore cannot produce an overall pass. Preserve
+criteria 1, 2 and 4, the user brief, and all original run rubrics and results.
+
+For both retained review cases, derive separate replay rubrics from the complete
+original rubric by changing only criterion 3. Record original and derived hashes
+and the exact difference. Both assessor versions receive identical derived
+rubrics and unchanged full evidence indexes. Label this a revised-rubric replay,
+not a reproduction of the original grade. Design rubrics remain unchanged.
+Independent auditors must agree on the clarified expectations before calls;
+unresolved disagreement still blocks the experiment. The prompt candidate remains
+frozen at `72a1ad01a5de09dafcbe56ee6ae216eb5f841783`; no result-driven tuning,
+additional calls, allocation changes or replacement cases are authorized.
 
 ## Frozen retained-evidence experiment
 
@@ -154,9 +179,9 @@ record the exact order. Do not alter the candidate after observing results.
 | Known regressions | Two breadth false passes and the supported opposite-harness review/design outputs | 4 cases × 2 versions × 2 repetitions = 16 |
 | Separately prepared controls | Three positive/negative pairs, below | 6 cases × 2 versions × 2 repetitions = 24 |
 
-The four real cases use their complete original evidence indexes. They are
-known development evidence, not unseen tests. Original grades and artifacts
-remain unchanged.
+The four real cases use their complete original evidence indexes and the rubric
+selection specified above. They are known development evidence, not unseen tests.
+Original grades and artifacts remain unchanged.
 
 A separate curator prepares six constructed controls, and another reviewer
 checks their expected criterion outcomes and decisive evidence. The prompt
@@ -209,7 +234,8 @@ cannot qualify, use twelve Claude/Codex cells and record Pi as incomplete; do no
 substitute another harness overnight. Freeze this conditional selection rule
 before launching; no retries or replacement cells.
 
-Use Sonnet 5 for both evaluation roles, original rubrics, and pinned Superpowers.
+Use Sonnet 5 for both evaluation roles, the frozen rubrics including the clarified
+review criterion 3, and pinned Superpowers.
 Use the candidate assessor only if its retained-evidence gate passed; otherwise
 retain baseline Gauntlet and report the known grading limitation. Authoring and
 readout acceptance remains useful independently of a successful prompt change.
