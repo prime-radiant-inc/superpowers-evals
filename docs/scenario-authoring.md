@@ -12,27 +12,30 @@ regenerate the list instead of pasting a table that will rot.
 - A scenario is a directory `scenarios/<name>/` with three required files:
   `story.md`, `setup.sh`, `checks.sh`. It may also carry `fixtures/` and an
   optional `baseline-manifest.json`.
-- A run involves **two LLMs**: the **Gauntlet-Agent** (the QA tester that reads
-  `story.md`, drives the agent, and self-grades against your Acceptance Criteria)
-  and the **Coding-Agent** (the subject — Claude, Codex, …).
-- Run flow: `setup.sh` builds a fixture → `pre()` asserts the fixture →
-  the Gauntlet-Agent drives the Coding-Agent → quorum captures the session into
-  `trajectory.json` → `post()` asserts the outcome → the composer writes one
-  verdict.
-- **`final = pass`** iff the **Gauntlet-Agent passed AND every post-check
-  passed**. **`final = indeterminate`** means quorum could not grade the run: a
-  crash, failed pre-check, empty transcript, or missing tool blocked evaluation.
-  **`final = fail`** is the graded negative: the Gauntlet-Agent failed, or a
-  post-check failed.
-- The Gauntlet-Agent **never sees `checks.sh`.** It grades only the prose in
-  `story.md`. `checks.sh` is quorum's independent, deterministic second opinion.
+- A normal run involves a **Coding-Agent** (the subject — Claude, Codex, …) and
+  two fresh Gauntlet-Agent roles. The conversation role acts like the user; the
+  assessor role grades the retained result against private Acceptance Criteria.
+- Run flow: `setup.sh` builds a fixture → `pre()` asserts the fixture → the
+  conversation role drives the Coding-Agent → quorum captures the session →
+  `post()` independently checks the outcome → a fresh assessor reads the
+  retained evidence → the composer writes one verdict.
+- Conversation completion records whether the Coding-Agent visibly delivered
+  or refused. It does not imply a passing grade. **`final = pass`** requires the
+  assessment and every post-check to pass. **`final = fail`** is a determinate
+  bad result; **`final = indeterminate`** means capture, evidence, checks, or
+  assessment could not support a grade.
+- The conversation role never sees Acceptance Criteria or `checks.sh`. The
+  assessor sees the private criteria and an indexed copy of retained evidence,
+  including independent check results.
 
 ## Conversation scenarios
 
-`quorum_mode: conversation` opts a story into the separate user and assessor
-roles. The initial fixture is `conversation-pricing`; supported runtime
-families are Linux Claude and Codex. Omitting the selector keeps the QA flow;
-unknown selectors and unsupported harnesses fail before launch.
+`quorum new` now emits `quorum_mode: conversation` and
+`quorum_max_time: 10m`, making separate user and assessor roles the default for
+new scenarios. Existing stories without `quorum_mode` retain the legacy QA
+execution path until they are deliberately migrated. Unknown selectors and
+unsupported harnesses fail before launch. Established conversation coverage is
+Linux Claude and Codex; adding an arm alone does not qualify another harness.
 
 Write the user's natural request before `## Acceptance Criteria`. Quorum gives
 only that prose to the conversation role and projects the criteria into a
@@ -65,10 +68,11 @@ Each actually started role is priced from its allocated usage path. Missing
 usage means partial coverage; an unstarted role is shown as not run. Known
 sibling costs and unpriced model coverage remain available.
 
-Campaign aggregates retain their current validity policy. This increment does
-not establish a speedup, useful live model behavior, or a concurrency capacity.
-Offline tests use scripted model responses; live qualification needs a separate
-finite appliance run plan with explicit revisions, sample counts and bounds.
+Campaign aggregates retain their current validity policy. Offline tests use
+scripted model responses; live qualification needs a separate finite appliance
+run plan with explicit revisions, sample counts and bounds. The complete
+author-to-report command sequence is in the README's
+[conversation workflow](../README.md#conversation-author-to-report-workflow).
 
 ## Table of contents
 
@@ -104,9 +108,11 @@ in `src/scaffold.ts` `validateChecksSh`).
 bun run quorum new <name>
 ```
 
-`newScenario` (`src/scaffold.ts`) stamps a structurally valid skeleton: a
-`story.md` with `id`/`title`/`quorum_tier` frontmatter and an `## Acceptance
-Criteria` heading; a `setup.sh` (executable) that calls
+`newScenario` (`src/scaffold.ts`) stamps a structurally valid conversation
+skeleton: a `story.md` with `id`/`title`/`quorum_tier`,
+`quorum_mode: conversation`, `quorum_max_time: 10m`, answer-if-asked guidance,
+a delivery/refusal stop condition, and private evidence-based Acceptance
+Criteria; a `setup.sh` (executable) that calls
 `setup-helpers run create_base_repo`; and a `checks.sh` (non-executable) with a
 `pre()` asserting `git-repo`/`git-branch main` and an empty `post()`.
 
@@ -180,6 +186,7 @@ an `## Acceptance Criteria` heading. Optional frontmatter (`src/story-meta.ts`,
 
 | Key | Meaning | Source of truth |
 |---|---|---|
+| `quorum_mode` | `conversation` selects separate user and assessor roles. Omission preserves legacy QA execution for existing stories. | `quorumModeFromStory` |
 | `quorum_tier` | `sentinel` \| `full` \| `adhoc`. Anything else fails validation. | `readQuorumTier`; `VALID_TIERS` in `src/scaffold.ts` |
 | `quorum_max_time` | Per-scenario duration cap, e.g. `90m`, `30s`, `120`. Regex: `^\d+(ms|s|m|h)?$`. | `readQuorumMaxTime` |
 | `status`, `tags` | Informational; `status` defaults to `ready`. | `readStoryStatus` |
@@ -196,19 +203,20 @@ precedence is directive > draft > tier). It defaults to `full`. Pick:
 - **`adhoc`** — a one-off or experiment you do NOT want a default `--tier full`
   batch to sweep up; run it explicitly by name.
 
-### The body briefs a QA agent — it is not a task description
+### The body scripts the user role
 
-Write the story body as **2nd-person instructions to the Gauntlet-Agent**. Tell
-it what role to play, the **exact message** to type to the Coding-Agent, how to
-answer follow-up questions, and when to stop. Tell it not to paraphrase the
-opening message. The Gauntlet-Agent launches with **only** the story
-(`buildGauntletArgv` in `src/runner/index.ts` passes the story path; `checks.sh`
-is not on its command line), so the success criteria must live in this prose.
+Before `## Acceptance Criteria`, tell the conversation role the natural request
+to send to the Coding-Agent, how to answer reasonable follow-up questions, what
+facts it may reveal, and when to stop. A visible delivery or refusal is a stop
+condition even if the result is wrong. Do not coach the Coding-Agent toward the
+criteria. Quorum projects only this section into the user role and keeps the
+criteria for the later assessor. Legacy metadata-less QA stories still follow
+their existing combined driver/grader instructions.
 
 ### Acceptance Criteria are graded semantically by an LLM
 
-The Gauntlet-Agent grades your ACs by reading prose and observing the run. A
-good AC:
+The fresh assessor grades your ACs by reading the private rubric and indexed
+retained evidence. A good AC:
 
 - **Names the exact evidence** and gives the grader the file path — e.g. "a
   `Skill` invocation naming `superpowers:requesting-code-review` appears in the
@@ -226,9 +234,9 @@ good AC:
 
 ### Run-completeness vs grade-completeness
 
-State when the Gauntlet-Agent **stops driving**, independent of pass/fail.
-Otherwise the grader leads the witness — it keeps prodding until it gets the
-answer your ACs want. The pattern (from `code-review-catches-planted-bugs`):
+State when the conversation role **stops driving**, independent of pass/fail.
+Otherwise it leads the witness by prodding until it gets the answer your ACs
+want. The pattern (from `conversation-code-review`):
 
 > "Once the agent has produced a review … you are done. If the agent says 'looks
 > good, ready to merge', that is also a complete review — and a fail of the

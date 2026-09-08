@@ -13,12 +13,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractManifest, writeManifest } from '../src/check/manifest.ts';
+import { projectConversationStory } from '../src/runner/conversation-input.ts';
 import {
   checkScenario,
   fixExecutableBits,
   newScenario,
   ScaffoldError,
 } from '../src/scaffold.ts';
+import { quorumModeFromStory, readQuorumMaxTime } from '../src/story-meta.ts';
 
 // A fresh scenarios-root directory; each test owns its own temp dir.
 function scenariosRoot(): string {
@@ -57,6 +59,21 @@ test('newScenario writes the three files with the right modes and content', () =
   expect(checks).toContain('post() {');
   // checks.sh must NOT be executable.
   expect(statSync(join(dir, 'checks.sh')).mode & 0o111).toBe(0);
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('newScenario creates a bounded conversation with private assessment criteria', () => {
+  const root = scenariosRoot();
+  const dir = newScenario(join(root, 'fresh-conversation'));
+  const story = readFileSync(join(dir, 'story.md'), 'utf8');
+  const projected = projectConversationStory(story);
+
+  expect(quorumModeFromStory(story)).toBe('conversation');
+  expect(readQuorumMaxTime(join(dir, 'story.md'))).toBe('10m');
+  expect(projected.brief.trim().length).toBeGreaterThan(0);
+  expect(projected.brief).not.toContain('## Acceptance Criteria');
+  expect(projected.rubric).toContain('## Acceptance Criteria');
 
   rmSync(root, { recursive: true, force: true });
 });

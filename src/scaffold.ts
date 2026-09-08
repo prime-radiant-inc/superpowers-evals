@@ -39,17 +39,27 @@ id: {name}
 title: TODO one-line title
 status: draft
 quorum_tier: full
+quorum_mode: conversation
+quorum_max_time: 10m
 tags: TODO
 ---
 
-TODO: brief the QA agent — what it is role-playing, the exact message
-it should send the agent under test, and when it is done.
+Open with this exact request:
+
+TODO: write the natural request you want evaluated.
+
+If asked, answer reasonable questions naturally using only information the
+user would know. Do not disclose the acceptance criteria, suggest an
+implementation, or prescribe skills or tools. End the interaction when the
+Coding-Agent delivers a result or refuses the request, even if the delivery is
+incomplete or incorrect.
 
 ## Acceptance Criteria
 
-- TODO: what must be true after the run. Make criteria evidence-demanding
-  (e.g. "a Skill invocation naming superpowers:X appears in the agent's
-  session log").
+- **Delivered the requested outcome.** TODO: state what observable outcome the
+  Coding-Agent must deliver.
+- **Supported the delivery with evidence.** TODO: name the retained output,
+  transcript behavior, or independent check that proves the outcome.
 `;
 
 // Scaffolded setup.sh: invokes the TS setup-helpers via the bare `setup-helpers`

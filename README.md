@@ -1,9 +1,10 @@
 # Superpowers Evals
 
 Behavioral eval lab for [superpowers](https://github.com/obra/superpowers).
-**Quorum** drives real coding-agent CLIs (Claude, Codex, Antigravity, Gemini,
-Hermes, Kimi, OpenCode, Pi, and Copilot) through a Gauntlet QA agent and grades them
-against scenario acceptance criteria plus deterministic post-checks.
+**Quorum** drives and grades real coding-agent CLIs (Claude, Codex,
+Antigravity, Gemini, Hermes, Kimi, OpenCode, Pi, and Copilot). New scenarios use
+a user-like conversation followed by a fresh evidence-based assessment against
+private criteria plus deterministic post-checks.
 
 Code, CLI, paths, and inline prose all use lowercase `quorum`; the capitalized
 form `Quorum` appears in headings and the actor table.
@@ -108,6 +109,65 @@ bun run quorum run scenarios/<name> --coding-agent claude --credential haiku
 ```
 
 The `claude` agent's default credential is `opus`.
+
+## Conversation author-to-report workflow
+
+`quorum new` creates a ten-minute conversation scenario by default. The prose
+before `## Acceptance Criteria` scripts a user-like conversation role; Quorum
+keeps the criteria private and starts a fresh assessor role after capture and
+independent checks. A delivered answer or refusal completes the conversation,
+even when it is wrong. The later assessment and checks determine the grade, so
+completion and pass/fail are separate facts in `quorum show`.
+
+Linux Claude and Codex are the established conversation runtimes. Their
+committed arms select both harness and subject credential:
+`conversation_claude` uses `opus5_bedrock`, while `conversation_codex` uses
+`openai_responses_56sol`. The example suite selects the separate
+`sonnet5_bedrock` credential for both evaluation roles. Do not add another
+harness based only on an arm declaration; its conversation lifecycle, capture,
+and pricing need their own qualification.
+
+This recipe authors one scenario, generates its manifest, selects those existing
+arms through a copied suite, and follows the supported appliance lifecycle.
+Edit the TODOs and the copied suite's `name` and `scenarios` entries before
+committing. Registration freezes committed source and suite bytes.
+
+```bash
+scenario=conversation-example
+suite="suites/${scenario}.yaml"
+
+bun run quorum new "$scenario"
+"${EDITOR:-vi}" "scenarios/${scenario}/story.md" \
+  "scenarios/${scenario}/setup.sh" "scenarios/${scenario}/checks.sh"
+bun run quorum check "$scenario" --update-manifests
+bun run quorum check "$scenario"
+
+sed -n '1,120p' arms/conversation_claude.yaml arms/conversation_codex.yaml
+cp suites/conversation_code_review.yaml "$suite"
+"${EDITOR:-vi}" "$suite"
+
+git add "scenarios/${scenario}" "$suite"
+git commit -m "Add ${scenario} conversation eval" \
+  -m "Define the user interaction, private evidence criteria, deterministic checks, and bounded Claude/Codex campaign suite."
+
+registration="$(evals-appliance campaign register "$(pwd)/${suite}" --global-cap 2 --json)"
+printf '%s\n' "$registration"
+campaign_id="$(printf '%s\n' "$registration" | jq -er '.experiment.campaign_id')"
+
+evals-appliance campaign run "$campaign_id" --json
+evals-appliance campaign status "$campaign_id" --json
+evals-appliance campaign costs "$campaign_id" --json
+evals-appliance campaign report "$campaign_id"
+
+# On the machine containing the reported results root, copy the exact command
+# printed for the run you want to inspect. Never infer a target from an arm name.
+quorum show <exact-authenticated-target-from-campaign-report>
+```
+
+See the [scenario authoring guide](docs/scenario-authoring.md) for criteria and
+check design. Appliance preparation, source synchronization, credential
+requirements, cancellation, and terminal-state rules remain in the
+[appliance runbook](docs/appliance-runbook.md).
 
 ## Shared Eval Appliance
 
