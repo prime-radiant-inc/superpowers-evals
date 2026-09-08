@@ -1,0 +1,5 @@
+schema_version: 1
+name: conversation_pi
+agent: pi
+credential: pi_gpt56_sol
+superpowers: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
