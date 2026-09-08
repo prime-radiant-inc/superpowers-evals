@@ -1,4 +1,4 @@
-# coding-agents: claude,codex
+# coding-agents: claude,codex,pi
 pre() {
     requires-tool node
     file-exists src/pricing.js
