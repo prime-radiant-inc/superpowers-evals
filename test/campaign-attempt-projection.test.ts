@@ -22,6 +22,7 @@ import {
   prepareAttemptStage,
   removeAttemptStage,
 } from '../src/campaign/attempt-projection.ts';
+import { buildAttemptMounts } from '../src/campaign/container-spawner.ts';
 import { sha256Hex } from '../src/contracts/campaign/digest.ts';
 import { AttemptRuntimeSpecSchema } from '../src/contracts/campaign/execution.ts';
 import type { PricingSnapshot } from '../src/contracts/campaign/suite.ts';
@@ -126,9 +127,58 @@ test('projection writes exact private files and synthesized identity files', () 
   }
   expect(existsSync(join(prepared.attemptDir, 'staging'))).toBe(true);
   expect(existsSync(join(prepared.attemptDir, 'home'))).toBe(true);
-  expect(readFileSync(prepared.passwdFile, 'utf8')).toContain(
-    `quorum:x:1000:1000:Quorum Attempt:${prepared.homeDir}:/bin/bash`,
-  );
+  const fields = readFileSync(prepared.passwdFile, 'utf8')
+    .split('\n')
+    .find((line) => line.startsWith('quorum:'))
+    ?.split(':');
+  expect(fields).toEqual([
+    'quorum',
+    'x',
+    '1000',
+    '1000',
+    'Quorum Attempt',
+    '/home/quorum',
+    '/bin/bash',
+  ]);
+});
+
+test('passwd home resolves to each attempt private home through a writable bind', () => {
+  const fx = projectionFixture();
+  try {
+    for (const attemptId of [
+      'c1:conversation-debugging:conversation_claude:r1:a1',
+      'c1:conversation-debugging:conversation_claude:r2:a1',
+    ]) {
+      const prepared = stage(fx, attemptId);
+      const fields = readFileSync(prepared.passwdFile, 'utf8')
+        .split('\n')
+        .find((line) => line.startsWith('quorum:'))
+        ?.split(':');
+      const mounts = buildAttemptMounts({
+        ...prepared,
+        evalsRoot: fx.corpus,
+        gauntletRoot: join(fx.corpus, 'gauntlet'),
+        binRoot: join(fx.corpus, 'bin'),
+        superpowersTree: null,
+      });
+      const homeMounts = mounts.filter((mount) => mount.target === fields?.[5]);
+      expect(homeMounts).toEqual([
+        { source: prepared.homeDir, target: '/home/quorum', mode: 'rw' },
+      ]);
+      expect(prepared.homeDir).toBe(
+        join(fx.campaignDir, 'attempts', attemptId, 'home'),
+      );
+      expect(mounts).toContainEqual({
+        source: prepared.attemptDir,
+        target: prepared.attemptDir,
+        mode: 'rw',
+      });
+    }
+  } finally {
+    for (const path of [fx.corpus, fx.campaignDir, fx.bundleDir]) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
 });
 
 test('projection refuses subject and grader equality before creating the stage', () => {

@@ -30,7 +30,10 @@ import type { Grader } from '../contracts/campaign/experiment.ts';
 import type { PricingSnapshot } from '../contracts/campaign/suite.ts';
 import type { EffortLevel } from '../contracts/effort.ts';
 import type { PrepareAttemptStageArgs } from './attempt-projection.ts';
-import { prepareAttemptStage } from './attempt-projection.ts';
+import {
+  ATTEMPT_PASSWD_HOME,
+  prepareAttemptStage,
+} from './attempt-projection.ts';
 import {
   ATTEMPT_AUTHORITY_PATH,
   PreparedAttemptAuthoritySchema,
@@ -82,6 +85,11 @@ export function buildAttemptMounts(
   }
   mounts.push(
     { source: args.attemptDir, target: args.attemptDir, mode: 'rw' },
+    {
+      source: join(args.attemptDir, 'home'),
+      target: ATTEMPT_PASSWD_HOME,
+      mode: 'rw',
+    },
     {
       source: args.subjectEnvFile,
       target: '/run/quorum/subject.env',

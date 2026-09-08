@@ -29,6 +29,10 @@ import {
   sharesMantleCredentialSource,
 } from '../credentials/scope.ts';
 
+// passwd fields cannot contain the colons carried in campaign attempt paths.
+// The container binds this home alias to the existing private attempt home.
+export const ATTEMPT_PASSWD_HOME = '/home/quorum';
+
 export class AttemptProjectionError extends Error {
   constructor(message: string) {
     super(message);
@@ -349,7 +353,7 @@ export function prepareAttemptStage(
     writePinnedFile(
       stagePin,
       ['passwd'],
-      `root:x:0:0:root:/root:/bin/bash\nquorum:x:${args.uid}:${args.gid}:Quorum Attempt:${homeDir}:/bin/bash\n`,
+      `root:x:0:0:root:/root:/bin/bash\nquorum:x:${args.uid}:${args.gid}:Quorum Attempt:${ATTEMPT_PASSWD_HOME}:/bin/bash\n`,
       'passwd',
       0o644,
     );
