@@ -1,7 +1,9 @@
 # Conversation and assessment implementation handoff
 
 Status: offline implementation complete. Task reviews and final scoped re-review
-accepted; no open findings within the approved scope. Live proof remains pending. Implements the approved
+accepted; no open findings within the approved scope. The subsequent authorized
+[six-run appliance pilot](2026-09-07-conversation-assessment-pilot.md) completed
+with six usable passes, four-way overlap and complete estimated costs. Implements the approved
 [design](../superpowers/specs/2026-09-07-quorum-conversation-assessment-design.md)
 and [plan](../superpowers/plans/2026-09-07-quorum-conversation-assessment.md).
 
@@ -90,9 +92,10 @@ Anthropic credential; no real key was supplied to silence it.
 
 The final whole-branch review found three Important defects. The consolidated
 fix passed scoped re-review, with all three findings addressed and no new
-breakage or out-of-scope observations. No hosted provider,
-Docker/appliance run, deployment, push or merge has occurred. Scripted responses
-prove the machinery; live role quality and parallel capacity remain unmeasured.
+breakage or out-of-scope observations. At offline handoff, no hosted provider or
+Docker/appliance run had occurred; the linked pilot records subsequent live
+evidence separately. No push or merge has occurred. Scripted responses establish
+the tested failure paths; broader live capacity remains unmeasured.
 
 ## Integration findings resolved
 
@@ -162,9 +165,11 @@ RED receipts: `/tmp/final-fix-criteria-oracle-red.log` (33 pass, seven expected
 failures) and `/tmp/final-fix-durability-red.log` (23 pass, six expected failures,
 one overlapping the criterion case).
 
-## Next finite appliance proof
+## Finite appliance proof plan
 
-This is a proposed next run plan, not launch authorization. Resolve the exact
+Drew subsequently authorized this plan, and execution completed; see the linked pilot for
+exact sources, results, costs and limitations. The following preserves the
+original proposal and its allocation boundary. Resolve the exact
 reviewed Evals/Gauntlet revisions and a selected Superpowers revision through the
 existing source snapshot, and use the current appliance registration/run/status
 path. Do not switch a shared appliance checkout under active work.

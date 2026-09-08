@@ -1,7 +1,7 @@
 # Quorum: separate conversation from assessment
 
 **Status:** Approved by Drew for implementation planning on 2026-09-07.
-**Implementation:** Completed offline; [handoff and next pilot](../../experiments/2026-09-07-conversation-assessment-implementation.md). Live appliance proof remains pending.
+**Implementation:** Completed offline; [handoff and next pilot](../../experiments/2026-09-07-conversation-assessment-implementation.md). The [six-run appliance pilot](../../experiments/2026-09-07-conversation-assessment-pilot.md) completed with six usable passes and observed four-way overlap.
 **Implementation plan:** [Seven scoped tasks](../plans/2026-09-07-quorum-conversation-assessment.md).
 **Scope:** One complete scenario on Linux Claude and Codex, using current Quorum
 workers and appliance execution. This is the next increment, not a replacement
