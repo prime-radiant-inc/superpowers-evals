@@ -157,3 +157,10 @@ and removal of wording assertions were followed by 17 passing conversation
 tests and a clean typecheck. The operative startup instruction is in Gauntlet's
 conversation prompt; Quorum's HOWTO is also corrected but is not supplied to
 the conversation role.
+
+One local paired integration rerun timed out in its fourth case and failed the
+following case. An unchanged isolated rerun passed, then all five paired cases
+passed against integrated Gauntlet `e5d2efeeeed7e78e01e8e14bc35be159b49cc17e`
+in 14.47 seconds. The original timeout remains unexplained; no timeout or code
+change was made to make that check pass. This is retained as a local test
+reliability limitation, not attributed to host load without evidence.
