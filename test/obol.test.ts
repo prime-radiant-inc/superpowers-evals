@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { CostEstimate, ModelCost } from '@primeradianthq/obol';
 import type { AtifTrajectory } from '../src/atif/types.ts';
 import { estimateTrajectory, mergeEstimates } from '../src/obol/index.ts';
@@ -155,6 +156,45 @@ test('estimateTrajectory marks an unknown model unpriced (null cost, tokens kept
   expect(u.est_cost_usd).toBeNull();
   expect(u.unpriced_models).toEqual(['totally-unknown-model-xyz']);
   expect(u.models['totally-unknown-model-xyz']?.est_cost_usd).toBeNull();
+});
+
+test('Pi quorum usage is priced by the frozen Obol table and unknown models stay unpriced', async () => {
+  const result = spawnSync(
+    process.execPath,
+    [resolve(import.meta.dir, 'fixtures/pi-obol-pricing.ts')],
+    {
+      encoding: 'utf8',
+      env: {
+        ...Bun.env,
+        OBOL_PRICING_DIR: resolve(
+          import.meta.dir,
+          '../docs/experiments/2026-09-06-pr2258-pricing',
+        ),
+      },
+    },
+  );
+
+  expect(result.status).toBe(0);
+  const { known, unknown } = JSON.parse(result.stdout);
+  expect(known).toMatchObject({
+    total_input: 1000,
+    total_cache_create: 1000,
+    total_cache_read: 1000,
+    total_output: 1000,
+    total_tokens: 4000,
+    est_cost_usd: 0.0294,
+    unpriced_models: [],
+    pricing_as_of: '2026-09-06',
+  });
+  expect(unknown).toMatchObject({
+    total_input: 50,
+    total_cache_create: 0,
+    total_cache_read: 0,
+    total_output: 10,
+    total_tokens: 60,
+    est_cost_usd: null,
+    unpriced_models: ['unknown-pi-model'],
+  });
 });
 
 test('estimateTrajectory returns null for a no-usage (antigravity) trajectory', async () => {

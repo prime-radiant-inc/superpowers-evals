@@ -565,7 +565,10 @@ test('disjoint buckets preserved and per-step cost is present', () => {
     cached_tokens: 9728,
     cost_usd: 0.033699,
   });
-  expect(readStep.extra).toEqual({ provider: 'openai-codex' });
+  expect(readStep.extra).toEqual({
+    source_session_id: '019ecd1e-996e-70ba-8042-aeaa4c391744',
+    provider: 'openai-codex',
+  });
 });
 
 test('cache_write rides on step.extra.cache_write (not metrics.extra)', () => {
@@ -573,7 +576,11 @@ test('cache_write rides on step.extra.cache_write (not metrics.extra)', () => {
   const agentStep = traj.steps.find(
     (s) => s.tool_calls?.[0]?.function_name === 'Agent',
   )!;
-  expect(agentStep.extra).toEqual({ provider: 'openai-codex', cache_write: 8 });
+  expect(agentStep.extra).toEqual({
+    source_session_id: '019ecd1e-996e-70ba-8042-aeaa4c391744',
+    provider: 'openai-codex',
+    cache_write: 8,
+  });
   // cache_write must NOT be under metrics.extra (obol ignores that location)
   expect(agentStep.metrics!.extra).toBeUndefined();
 });
@@ -631,4 +638,125 @@ test('model_change is tracked forward when a message omits its own model', () =>
   const traj = normalizePi(lines, '0.3.0');
   const step = traj.steps.find((s) => s.metrics)!;
   expect(step.model_name).toBe('gpt-5.5');
+});
+
+test('native message chronology and session identity reach every derived step', () => {
+  const lines = [
+    JSON.stringify({
+      type: 'session',
+      id: 'main-session',
+      timestamp: '2026-09-08T19:33:32.000Z',
+      cwd: '/tmp/project',
+    }),
+    JSON.stringify({
+      type: 'model_change',
+      provider: 'quorum',
+      modelId: 'gpt-5.6-sol',
+    }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: '2026-09-08T19:33:32.640Z',
+      message: {
+        role: 'user',
+        timestamp: '2026-09-08T19:33:32.640Z',
+        content: [{ type: 'text', text: 'Inspect both files.' }],
+      },
+    }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: '2026-09-08T19:33:35.000Z',
+      message: {
+        role: 'assistant',
+        provider: 'quorum',
+        model: 'gpt-5.6-sol',
+        usage: {
+          input: 100,
+          output: 20,
+          cacheRead: 30,
+          cacheWrite: 4,
+          cost: { total: 0 },
+        },
+        content: [
+          { type: 'text', text: 'I will inspect both.' },
+          {
+            type: 'toolCall',
+            id: 'read-a',
+            name: 'read',
+            arguments: { path: 'a.ts' },
+          },
+          {
+            type: 'toolCall',
+            id: 'read-b',
+            name: 'read',
+            arguments: { path: 'b.ts' },
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: '2026-09-08T19:33:40.000Z',
+      message: {
+        role: 'assistant',
+        provider: 'quorum',
+        model: 'gpt-5.6-sol',
+        content: [{ type: 'text', text: 'Inspection complete.' }],
+      },
+    }),
+  ].join('\n');
+
+  const trajectory = normalizePi(lines, '0.80.7');
+
+  expect(trajectory.session_id).toBe('main-session');
+  expect(trajectory.steps.map((step) => step.timestamp)).toEqual([
+    '2026-09-08T19:33:32.640Z',
+    '2026-09-08T19:33:35.000Z',
+    '2026-09-08T19:33:35.000Z',
+    '2026-09-08T19:33:40.000Z',
+  ]);
+  expect(
+    trajectory.steps.map((step) => step.extra?.['source_session_id']),
+  ).toEqual(['main-session', 'main-session', 'main-session', 'main-session']);
+  expect(trajectory.steps[1]?.metrics).toEqual({
+    prompt_tokens: 100,
+    completion_tokens: 20,
+    cached_tokens: 30,
+  });
+  expect(trajectory.steps[1]?.extra).toEqual({
+    source_session_id: 'main-session',
+    provider: 'quorum',
+    cache_write: 4,
+  });
+  expect(trajectory.steps[2]?.metrics).toBeUndefined();
+});
+
+test('missing and invalid native timestamps remain absent', () => {
+  const lines = [
+    JSON.stringify({ type: 'session', id: 'session-a', cwd: '/tmp/project' }),
+    JSON.stringify({
+      type: 'message',
+      timestamp: 'not-a-timestamp',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'First' }],
+      },
+    }),
+    JSON.stringify({
+      type: 'message',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Second' }],
+      },
+    }),
+  ].join('\n');
+
+  const trajectory = normalizePi(lines, '0.80.7');
+
+  expect(trajectory.steps.map((step) => step.timestamp)).toEqual([
+    undefined,
+    undefined,
+  ]);
+  expect(
+    trajectory.steps.map((step) => step.extra?.['source_session_id']),
+  ).toEqual(['session-a', 'session-a']);
 });
