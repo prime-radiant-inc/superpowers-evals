@@ -141,7 +141,8 @@ from the twenty planned fresh attempts. The original $60 operator allocation
 includes both waves. Do not count the aborted wave toward either concurrency
 cohort or revise its original results.
 
-Fresh campaign identities and results are pending.
+Fresh breadth results and the audit are recorded below. The serial and parallel
+cohorts are still in progress.
 
 Repair verification: the real offline Linux probe ran as UID/GID 1001 with
 HOME/XDG absent, no network, no credentials, and a read-only rootfs. The old
@@ -164,3 +165,96 @@ passed against integrated Gauntlet `e5d2efeeeed7e78e01e8e14bc35be159b49cc17e`
 in 14.47 seconds. The original timeout remains unexplained; no timeout or code
 change was made to make that check pass. This is retained as a local test
 reliability limitation, not attributed to host load without evidence.
+
+### Fresh breadth: complete execution, two false passes
+
+Campaign `f4f42c37-3a00-4c1d-b5df-e76766a568fc` completed all twelve attempts
+with authenticated publications, completed delivery records, native coding
+transcripts, independent checks, and fresh assessments. The standard report is
+complete and termination verified. All twelve published grades are **pass**.
+Elapsed time was 847.058 seconds (14m 7s), from
+`2026-09-08T05:57:57.101Z` through `2026-09-08T06:12:04.159Z`.
+
+The frozen source pair is Quorum
+`7def77c1a41e46c511fe9bee0f4dd9742f479a55` and Gauntlet
+`6dac4bfcb16042cb277067bb4535f9f22b9bb5df`, with the declared Superpowers ref.
+The authenticated journal confirms all twelve attempts used image
+`sha256:2ee3e07dff9f2bb98d2e427da98ec73ab6efc077f4561f516b0a6130d0478d4e`.
+Final prepare job was `job-20260908T055638Z-37ae`.
+
+| Cost coverage | Estimate |
+| --- | ---: |
+| Coding agents, 12/12 complete | $7.6319425 |
+| Simulated user plus assessor, 12/12 complete | $7.9184970 |
+| Combined, 12/12 complete | $15.5504395 |
+
+The role metadata attributes $6.782869 to driving and $1.135626 to fresh
+assessment (a $0.0000019 rounding difference from the aggregate grader subtotal).
+Driving accounts for 85.66% of these evaluation-role costs. Its elapsed time
+includes the coding agent's work and waiting; it is not all driver overhead.
+The twelve driver intervals sum to 2,487.684 seconds and assessor intervals to
+450.438 seconds. Their 2,938.122-second sum is 23.374 seconds below the sum of
+worker wall times. This bounds only the in-worker time outside those roles;
+container startup and final publication require their own accounting.
+
+Timestamp sweeps confirm a maximum of four concurrent roles, including four
+conversations or three assessments. Both harnesses were active for 99.128
+seconds; simultaneous conversations across harnesses lasted 32.491 seconds.
+Drivers and assessors overlapped across attempts for 312.590 seconds. These
+are observed process intervals, not simultaneous provider computation. Both
+completed deliveries and conclusive official reports were produced at 51.00
+per campaign hour. This mixed-task wave is not the serial/parallel baseline.
+
+Read-only audits of all twelve cells support ten published passes and identify
+two false passes. These are completed runs with useful negative signal; the
+original reports and grades remain unchanged.
+
+| Task | Claude audit | Codex audit |
+| --- | --- | --- |
+| Code review | False pass: unsupported exploit outcome | Pass supported |
+| Debugging | Pass supported; minor evidence attribution error | Pass supported |
+| Design | Pass supported | False pass: watch-selection requirement omitted |
+| Pricing | Pass supported | Pass supported |
+| Review feedback | Pass supported | Pass supported after clarification |
+| Verification | Pass supported | Pass supported |
+
+**Claude code review:** the delivered review asserted an arbitrary-user
+authentication bypass from a UNION payload even though the database driver and
+its result shape were absent. A separate finding acknowledged that uncertainty;
+it did not qualify the exploit claim. The frozen grounding criterion explicitly
+disallows unsupported material exploit outcomes, yet the assessor passed it.
+Evidence, under the canonical results root:
+`conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence/visible/captures/126.ansi`
+lines 9–11 and 20–23; `evidence/output/src/db.js` lines 6–15;
+`conversation-input/rubric.md` line 20; and
+`gauntlet-agent/results/conversation-code-review_20260908T055759Z_7xjc/result.json`
+lines 31–33. This reproduces the grounding weakness after the earlier calibration;
+the calibration cases did not establish general grader reliability.
+
+**Codex design:** the conversation asked about where completed tasks should go,
+then delivered generic completion toasts. It did not clarify which tasks to
+watch or include watch selection in the proposal. The assessor incorrectly
+treated membership in the Active section as equivalent to watching a task.
+Evidence under
+`conversation-design-codex-openai_responses_56sol-linux-20260908T060519Z-87cf/`:
+`conversation-input/rubric.md` lines 14–15, `trajectory.json` line 358,
+`evidence/visible/captures/032.ansi` lines 16–35, and
+`gauntlet-agent/results/conversation-design_20260908T060519Z_1odw/result.json`
+lines 13 and 18.
+
+The supported cells include real failure reproduction, corrective edits,
+independent output checks, and fresh verification before completion/commit.
+Two qualifications remain: Claude debugging's size-1 edge case was checked by
+a direct Python command rather than its six-test suite, despite the assessor's
+wording; Codex initially proposed a storage protocol in review feedback, then
+dropped it after clarification. The latter demonstrates correct delivered
+judgment, not an unprompted initial rejection. The Claude verification assessor
+did not read the independent check receipt, although the audit confirmed that
+it passed. None of these three qualifications invalidates those final passes.
+
+The canonical standard report is
+`/srv/quorum/superpowers-evals/campaigns/f4f42c37-3a00-4c1d-b5df-e76766a568fc-conversation_broad_signal/report.md`
+with adjacent `report.json` and `report-seal.json`. Private retained outputs are
+under `/srv/quorum/superpowers-evals/results/`. Local copies of the ordinary
+readout and hash-verified role/verdict metadata are in ignored
+`results/conversation-broad-signal/breadth-fresh-*` files.
