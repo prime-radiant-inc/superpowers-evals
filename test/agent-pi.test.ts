@@ -827,30 +827,6 @@ test('subscription credential throws ProvisionError', () => {
   }
 });
 
-// Guards the HOME isolation + PI_CODING_AGENT_DIR collapse: the pi launch-agent
-// template pins HOME/XDG/TMPDIR via $QUORUM_HOME_ENV and sources pi.env, but it
-// does NOT set PI_CODING_AGENT_DIR and passes NO --session-dir. pi defaults its
-// config dir to $HOME/.pi/agent and its session dir to <config>/sessions, which
-// is where the runner seeds the per-run config (pi.yaml: home_config_subdir
-// ".pi/agent") — so pi finds it all via the isolated $HOME.
-test('pi launch-agent isolates HOME, omits PI_CODING_AGENT_DIR and --session-dir', () => {
-  const launcher = readFileSync(
-    join(import.meta.dir, '..', 'coding-agents', 'pi-context', 'launch-agent'),
-    'utf8',
-  );
-  // HOME/XDG/TMPDIR isolation comes from the shared $QUORUM_HOME_ENV token.
-  expect(launcher).toContain('$QUORUM_HOME_ENV');
-  // PI_CODING_AGENT_DIR is collapsed into $HOME — the launcher must NOT set it as
-  // an env assignment on the exec line (the comment block may still mention it).
-  expect(launcher).not.toContain('PI_CODING_AGENT_DIR="$PI_CODING_AGENT_DIR"');
-  // No explicit --session-dir flag: pi nests sessions under its $HOME default.
-  // Asserts the flag-invocation form, which (unlike the bare name in prose) only
-  // ever appears on the exec line.
-  expect(launcher).not.toContain(
-    '--session-dir "$PI_CODING_AGENT_DIR/sessions"',
-  );
-});
-
 // ---------------------------------------------------------------------------
 // Kernel D2: home.superpowers threading (root / none / legacy undefined).
 // ---------------------------------------------------------------------------

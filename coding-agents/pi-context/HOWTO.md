@@ -4,7 +4,7 @@ You are driving Pi in a bash shell inside tmux. Pi is itself an AI agent; what a
 
 ## Launch Pi with one command
 
-Your bash starts in a scratch directory, NOT the workdir quorum prepared. quorum has generated a launcher that handles everything: it cds into the prepared workdir, sources the run-local Pi auth env file, pins a throwaway `$HOME` for the run (Pi defaults its config dir to `$HOME/.pi/agent` and its session dir to `<config>/sessions`, both seeded by quorum, so the launcher sets no `PI_CODING_AGENT_DIR` and passes no `--session-dir`), selects the configured model, loads the Superpowers extension from `SUPERPOWERS_ROOT` and the `pi-subagents` extension, disables ambient extension and skill discovery (so only the explicitly-loaded Superpowers ones are active), explicitly loads `SUPERPOWERS_ROOT/skills`, and enables the built-in coding tools plus the `subagent` tool. Ambient context files in the workdir ARE read (the throwaway `$HOME` provides isolation), so project instructions land normally.
+Your bash starts in a scratch directory, NOT the workdir quorum prepared. quorum has generated a launcher that handles everything: it cds into the prepared workdir, sources the run-local Pi auth env file, pins a throwaway `$HOME` for the run, selects the private `$HOME/.pi/agent/sessions` directory explicitly, selects the configured model, loads the Superpowers extension from `SUPERPOWERS_ROOT` and the `pi-subagents` extension, disables ambient extension and skill discovery (so only the explicitly-loaded Superpowers ones are active), explicitly loads `SUPERPOWERS_ROOT/skills`, and enables the built-in coding tools plus the `subagent` tool. Ambient context files in the workdir ARE read (the throwaway `$HOME` provides isolation), so project instructions land normally.
 
 Type this one line, verbatim, as your first action:
 
@@ -22,7 +22,7 @@ Pi writes JSONL session logs under:
 $QUORUM_AGENT_HOME/.pi/agent/sessions/**/*.jsonl
 ```
 
-Without an explicit `--session-dir`, Pi nests sessions one level deeper, under a per-launch-cwd subdir (`sessions/<cwd-encoded>/<ts>_<uuid>.jsonl`), so traverse that extra level.
+The main Pi session is written directly under this directory. Child sessions may be nested below it, so use the recursive path when observing logs.
 
 The session JSONL is ground truth for tool calls and agent actions. The screen can lag, scroll off the top, or stay frozen while Pi is still working. When the screen and logs disagree, trust the logs.
 
@@ -51,7 +51,7 @@ Pi raw tool names are lowercase. quorum normalizes them to canonical names: `rea
 
 Pi does not expose Claude Code's native `Skill` tool. Superpowers skill use may appear as Pi reading `skills/<name>/SKILL.md`; quorum recognizes those `Read` calls as skill invocations.
 
-Pi also loads the `pi-subagents` extension, which provides a `subagent` tool for delegating to child agents (reviewer, worker, scout, ...). quorum normalizes `subagent` execution calls to `Agent`; management calls (`action: "list"`, `status`, ...) keep the raw name. Both the main session and any child-agent sessions are written under the nested `sessions/<cwd-encoded>/` tree; quorum's capture keys off each log's recorded `cwd` (its first-line header), not the path depth, so the extra nesting is transparent.
+Pi also loads the `pi-subagents` extension, which provides a `subagent` tool for delegating to child agents (reviewer, worker, scout, ...). quorum normalizes `subagent` execution calls to `Agent`; management calls (`action: "list"`, `status`, ...) keep the raw name. The main session is written at the configured session root and child-agent sessions may be nested below it. quorum discovers both recursively and keys capture off each log's recorded `cwd` (its first-line header), not the path depth.
 
 ## Shutdown
 

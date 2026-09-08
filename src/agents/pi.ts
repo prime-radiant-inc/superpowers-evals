@@ -285,12 +285,12 @@ function writePiModelsJson(
 //
 // PI_CODING_AGENT_DIR collapse: home.configDir is rooted under the throwaway
 // $HOME at <runHome>/.pi/agent (pi.yaml: home_config_subdir ".pi/agent"), which
-// is exactly where pi defaults its config + session dir when neither
-// PI_CODING_AGENT_DIR nor --session-dir is set. provision seeds the files under
-// configDir; the launcher omits the config-dir var and --session-dir, so pi
-// discovers it all via the isolated $HOME. The runner resolves session_log_dir
-// against $QUORUM_AGENT_HOME (${QUORUM_AGENT_HOME}/.pi/agent/sessions) for
-// capture and bakes the path into the HOWTO/launcher.
+// is exactly where pi defaults its config when PI_CODING_AGENT_DIR is unset.
+// provision seeds the files under configDir; the launcher discovers them via
+// the isolated $HOME and explicitly selects configDir/sessions to avoid pi's
+// cwd-encoded default directory. The runner resolves session_log_dir against
+// $QUORUM_AGENT_HOME (${QUORUM_AGENT_HOME}/.pi/agent/sessions) for capture and
+// bakes the path into the HOWTO/launcher.
 export class PiAgent implements CodingAgent {
   readonly config: AgentConfig;
   constructor(config: AgentConfig) {

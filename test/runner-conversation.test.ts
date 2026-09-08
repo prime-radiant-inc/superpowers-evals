@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -13,6 +14,11 @@ import { join, resolve } from 'node:path';
 import { snapshotDir } from '../src/capture/index.ts';
 import { getEnv } from '../src/env.ts';
 import { runPreparedConversation } from '../src/runner/conversation.ts';
+
+const PI_SESSION_LAUNCH_FIXTURE = resolve(
+  import.meta.dir,
+  'fixtures/pi-session-launch.ts',
+);
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -299,7 +305,29 @@ test('full runner uses prepared launcher/home and returns the persisted complete
   expect(runWasStopped()).toBe(false);
 });
 
-test('full runner admits Pi through its provisioned launcher without an effort argument', async () => {
+test('Pi default cwd encoding fails at the real filesystem component limit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-session-control-'));
+  dirs.push(root);
+  const cwd = join(
+    root,
+    'private home with space',
+    ...Array.from({ length: 28 }, (_, index) => `level-${index}`),
+  );
+  const outerHome = join(root, 'outer home');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(outerHome, { recursive: true });
+
+  const result = spawnSync(process.execPath, [PI_SESSION_LAUNCH_FIXTURE], {
+    cwd,
+    env: { HOME: outerHome, PATH: getEnv('PATH') ?? '' },
+    encoding: 'utf8',
+  });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('ENAMETOOLONG');
+});
+
+test('full runner gives Pi the private session root at a deep launch cwd', async () => {
   const args = setup('full-run');
   writeFileSync(join(args.scenarioDir, 'setup.sh'), '#!/bin/sh\n:\n');
   chmodSync(join(args.scenarioDir, 'setup.sh'), 0o755);
@@ -311,34 +339,33 @@ test('full runner admits Pi through its provisioned launcher without an effort a
 
   const shimDir = join(args.runDir, 'shims');
   const globalModules = join(args.runDir, 'global-modules');
-  const sessionFixture = join(args.runDir, 'pi-session.jsonl');
+  const outerHome = join(args.runDir, 'outer home');
+  const deepOutRoot = join(
+    args.runDir,
+    'private home with space',
+    ...Array.from({ length: 28 }, (_, index) => `level-${index}`),
+    'out',
+  );
   mkdirSync(join(globalModules, 'pi-subagents'), { recursive: true });
   mkdirSync(shimDir);
+  mkdirSync(outerHome);
   writeFileSync(
     join(shimDir, 'npm'),
     `#!/bin/sh\nprintf '%s\\n' '${globalModules}'\n`,
   );
   writeFileSync(
     join(shimDir, 'pi'),
-    `#!/bin/sh
-set -eu
-if [ "${'${1-}'}" = "--version" ]; then
-  printf '%s\\n' 'pi 0.0-test'
-  exit 0
-fi
-printf '%s\\n' "$@" > pi-launch-argv.txt
-printf '%s\\n' "${'${PI_PROVIDER-}'}/${'${PI_MODEL-}'}" > pi-launch-model.txt
-mkdir -p "$HOME/.pi/agent/sessions/native"
-cp '${sessionFixture}' "$HOME/.pi/agent/sessions/native/session.jsonl"
-`,
+    `#!/bin/sh\nexec '${process.execPath}' '${PI_SESSION_LAUNCH_FIXTURE}' "$@"\n`,
   );
   chmodSync(join(shimDir, 'npm'), 0o755);
   chmodSync(join(shimDir, 'pi'), 0o755);
 
   const savedPath = Bun.env['PATH'];
   const savedKey = Bun.env['QUORUM_PI_TEST_KEY'];
+  const savedHome = Bun.env['HOME'];
   Bun.env['PATH'] = `${shimDir}:${savedPath ?? ''}`;
   Bun.env['QUORUM_PI_TEST_KEY'] = 'offline-pi-key';
+  Bun.env['HOME'] = outerHome;
   try {
     const { runScenario } = await import('../src/runner/index.ts');
     const result = await runScenario({
@@ -347,28 +374,35 @@ cp '${sessionFixture}' "$HOME/.pi/agent/sessions/native/session.jsonl"
       codingAgentsDir: resolve(import.meta.dir, '../coding-agents'),
       credential: 'test_subject',
       credentialsPath,
-      outRoot: join(args.runDir, 'out'),
+      outRoot: deepOutRoot,
       gauntletBin: args.gauntletBin,
       superpowers: { mode: 'none' },
       onRunDir(runDir) {
-        const raw = readFileSync(
-          join(import.meta.dir, 'fixtures/pi-session.slice.jsonl'),
-          'utf8',
-        );
-        const [header, ...rows] = raw.trimEnd().split('\n');
-        const session = JSON.parse(header as string);
-        session.cwd = join(runDir, 'coding-agent-workdir');
-        writeFileSync(
-          sessionFixture,
-          `${[JSON.stringify(session), ...rows].join('\n')}\n`,
-        );
+        const launchCwd = join(runDir, 'coding-agent-workdir');
+        const defaultComponent = `--${resolve(launchCwd)
+          .replace(/^[/\\]/, '')
+          .replace(/[/\\:]/g, '-')}--`;
+        expect(Buffer.byteLength(defaultComponent)).toBeGreaterThan(255);
       },
     });
     expect(result.verdict.error).toBeNull();
     expect(result.verdict.conversation?.status).toBe('completed');
     expect(
-      existsSync(join(result.runDir, 'evidence/native/native/session.jsonl')),
+      existsSync(join(result.runDir, 'evidence/native/session.jsonl')),
     ).toBe(true);
+    expect(
+      existsSync(join(result.runDir, 'evidence/native/nested/child.jsonl')),
+    ).toBe(true);
+    expect(
+      existsSync(join(result.runDir, 'evidence/native/wrong-cwd.jsonl')),
+    ).toBe(false);
+    expect(existsSync(join(outerHome, '.pi'))).toBe(false);
+    expect(
+      readFileSync(
+        join(result.runDir, 'evidence/output/pi-session-dir.txt'),
+        'utf8',
+      ).trim(),
+    ).toBe(join(result.runDir, 'home/.pi/agent/sessions'));
     expect(
       readFileSync(
         join(result.runDir, 'evidence/output/pi-launch-model.txt'),
@@ -384,12 +418,13 @@ cp '${sessionFixture}' "$HOME/.pi/agent/sessions/native/session.jsonl"
     expect(launcherArgs).toContain('--provider');
     expect(launcherArgs).toContain('--model');
     expect(launcherArgs).not.toContain('--effort');
-    expect(launcherArgs).not.toContain('--session-dir');
   } finally {
     if (savedPath === undefined) delete Bun.env['PATH'];
     else Bun.env['PATH'] = savedPath;
     if (savedKey === undefined) delete Bun.env['QUORUM_PI_TEST_KEY'];
     else Bun.env['QUORUM_PI_TEST_KEY'] = savedKey;
+    if (savedHome === undefined) delete Bun.env['HOME'];
+    else Bun.env['HOME'] = savedHome;
   }
 }, 10_000);
 test('conversation Windows rejection runs no setup or role', async () => {
