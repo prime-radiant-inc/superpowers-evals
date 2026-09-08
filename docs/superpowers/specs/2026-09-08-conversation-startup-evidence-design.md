@@ -1,7 +1,7 @@
 # Conversation startup and Pi evidence
 
 Date: 2026-09-08
-Status: Draft for discussion; implementation and live qualification are not authorized by this document.
+Status: Drew approved implementation on 2026-09-08. Live qualification requires separately specified limits and stopping rules.
 
 ## Outcome
 
@@ -38,9 +38,8 @@ The installed image inspected during design is
 
 ## Startup decision
 
-**Proposed boundary:** the engine owns initialization; the simulated user owns
-the scenario conversation. Drew has been asked to confirm this boundary. It is
-the draft assumption, not an answered question.
+**Approved boundary:** the engine owns initialization; the simulated user owns
+the scenario conversation.
 
 | Approach | Assessment |
 | --- | --- |
