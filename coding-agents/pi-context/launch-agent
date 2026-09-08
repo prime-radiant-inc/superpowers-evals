@@ -7,11 +7,10 @@
 # and cannot accidentally start from the scratch directory.
 #
 # PI_CODING_AGENT_DIR collapse: this launcher sets HOME (via $QUORUM_HOME_ENV)
-# but NOT PI_CODING_AGENT_DIR, and passes NO --session-dir. pi defaults its
-# config dir to $HOME/.pi/agent and its session dir to <config>/sessions, which
-# is exactly where the runner seeds the per-run config (pi.yaml:
-# home_config_subdir ".pi/agent") — so pi finds its config and writes sessions
-# via the isolated $HOME with no config-dir or session-dir flag.
+# but NOT PI_CODING_AGENT_DIR, so pi finds its seeded config at
+# $HOME/.pi/agent. The explicit session directory stays under that same private
+# config root without encoding the potentially long launch cwd as one path
+# component.
 set -euo pipefail
 
 cd "$QUORUM_AGENT_CWD" || {
@@ -83,4 +82,5 @@ exec env -i \
     --extension "$PI_SUBAGENTS_PKG" \
     --no-skills \
     --tools read,bash,edit,write,grep,find,ls,subagent \
+    --session-dir $QUORUM_AGENT_HOME_SH/.pi/agent/sessions \
     "$@"

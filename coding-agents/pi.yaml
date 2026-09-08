@@ -1,17 +1,14 @@
 name: pi
 binary: pi
 # Collapse PI_CODING_AGENT_DIR into the throwaway $HOME: pi defaults its config
-# dir to $HOME/.pi/agent (PI_CODING_AGENT_DIR unset) and its session dir to
-# <config>/sessions (PI_CODING_AGENT_SESSION_DIR / --session-dir unset), so
-# rooting the config dir at <runHome>/.pi/agent lets the launcher omit both the
-# config-dir env var AND --session-dir — pi finds its seeded config and writes
-# sessions via its $HOME default. See agentConfigDir().
+# dir to $HOME/.pi/agent (PI_CODING_AGENT_DIR unset), where provisioning seeds
+# its config. The launcher selects the sessions subdirectory explicitly so a
+# deep launch cwd is not encoded into one filesystem component.
 home_config_subdir: ".pi/agent"
 session_log_dir: "${QUORUM_AGENT_HOME}/.pi/agent/sessions"
-# Without an explicit --session-dir, pi nests sessions one level deeper, under a
-# per-launch-cwd subdir (sessions/<cwd-encoded>/<ts>_<uuid>.jsonl), so the glob
-# must traverse it. The cwd-filter keys off each file's first-line `cwd`, not the
-# path, so the extra depth is transparent to capture.
+# The main session is written at the explicit session root. Child sessions can
+# still be nested below it, so discovery remains recursive. The cwd-filter keys
+# off each file's first-line `cwd`, not the path depth.
 session_log_glob: "**/*.jsonl"
 normalizer: pi
 # Auth is OAuth-or-env (PiAgent.provision): PI_PROVIDER/PI_MODEL/PI_API_KEY are
