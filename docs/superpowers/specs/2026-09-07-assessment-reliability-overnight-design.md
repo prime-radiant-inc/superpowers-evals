@@ -1,7 +1,8 @@
 # Conversation evals: usable overnight release
 
-Status: draft for Drew's approval. No implementation or live execution is
-authorized by this document until Drew approves it.
+Status: approved by Drew on September 8, 2026, after clarifying the desired
+morning milestone and the single conversation/assessment workflow. Execution
+uses the bounded allocation, deadlines and independent release gates below.
 
 ## Outcome
 
@@ -26,13 +27,20 @@ The starting revisions are Quorum
 
 ## Authoring and ordinary readout
 
-Add `--mode conversation` to the existing `quorum new` command. Generate the
-existing brief/private-criteria structure, conversation mode and time bound;
-retain setup/check helpers and manifest generation. Keep the current default
-unchanged. Add one complete README/authoring recipe from new scenario through
+Make the existing `quorum new` command generate conversation scenarios by
+default, with no mode flag or second authoring option. Generate the existing
+brief/private-criteria structure, conversation mode and time bound; retain
+setup/check helpers and manifest generation. Add one complete README/authoring recipe from new scenario through
 validation, committed arm/suite selection, register/run/status/costs/report and
 single-run inspection. Model selection already belongs to credential-backed
 arms; no matrix generator or scenario-format migration is needed.
+
+Conversation plus fresh assessment is the intended single superpowers-evals
+workflow. Existing QA scenarios must be migrated and verified before retiring
+their execution path; do not silently reinterpret them by changing the runtime
+default for missing metadata tonight. This release changes new-scenario
+authoring. Gauntlet's general-purpose QA functionality remains available to its
+other users.
 
 Make non-JSON output of the existing `evals-appliance campaign report` command
 readable. It currently falls through to raw JSON. After the existing report
@@ -294,7 +302,7 @@ before attributing it to load or increasing limits.
 
 ## Overnight handoff and morning result
 
-After Drew approves, use a heartbeat attached to this task to resume or inspect
+Use a heartbeat attached to this task to resume or inspect
 owned work every twenty minutes. It must read the committed spec and current
 experiment progress before acting, remain quiet on unchanged state, and stop
 itself at completion, when all remaining streams are blocked, or the cutoff. Record progress and
