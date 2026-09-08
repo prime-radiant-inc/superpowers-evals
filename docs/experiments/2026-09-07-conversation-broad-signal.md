@@ -142,3 +142,18 @@ includes both waves. Do not count the aborted wave toward either concurrency
 cohort or revise its original results.
 
 Fresh campaign identities and results are pending.
+
+Repair verification: the real offline Linux probe ran as UID/GID 1001 with
+HOME/XDG absent, no network, no credentials, and a read-only rootfs. The old
+passwd layout selected the truncated cache path and uv venv exited 2 (EROFS,
+not the original campaign's EACCES). The fixed alias returned the valid home,
+created a venv successfully, and shared the intended private-home inode. Both
+probe containers and temporary fixtures were removed.
+
+Quorum's full check passed 3,698 core tests with 14 environment skips and 144
+dashboard tests; scenario validation passed. Gauntlet's runtime change passed
+1,348 tests with two provider integration skips. Final prompt-only corrections
+and removal of wording assertions were followed by 17 passing conversation
+tests and a clean typecheck. The operative startup instruction is in Gauntlet's
+conversation prompt; Quorum's HOWTO is also corrected but is not supplied to
+the conversation role.
