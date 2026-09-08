@@ -23,6 +23,10 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // Codex TUI adapters.
   'conversation-pricing',
   'conversation-code-review',
+  'conversation-design',
+  'conversation-debugging',
+  'conversation-review-feedback',
+  'conversation-verification',
   // Builder campaign fixture: intentionally limited to the Serf harness and
   // Linux, where its Go toolchain and SDD subagent workflow are validated.
   'serf-builder-fractals',
