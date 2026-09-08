@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "inherited_expectations": {
-    "path": "../conversation-release/expected.json",
+    "path": "../2026-09-08-conversation-release/expected.json",
     "sha256": "abcbb006a625cf57160fd8d26b7bdcee7308fb7d1a900c20a1f67c1012962afe",
     "case_ids": [
       "known-claude-review",

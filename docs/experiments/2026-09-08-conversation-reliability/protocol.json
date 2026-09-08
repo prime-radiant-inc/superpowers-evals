@@ -4,15 +4,15 @@
   "artifacts": {
     "base_cases": {
       "path": "cases.json",
-      "sha256": "f85afdb2d32e5471c8b9c4bf26787bade2f2255306b28c40026f286d115a6e11"
+      "sha256": "b0b1cda7f09ae773210f3cf8b78016e0c11c5e3efab4454dee37a615c9a40091"
     },
     "expectations": {
       "path": "expected.json",
-      "sha256": "7ca7eb4f00491e234bed2259745d686830210c1eb3f358dc869bdee3cb46d9e7"
+      "sha256": "ce4d47e3448a1553dc66e30a903accf2a415614740040c6e85c28483ac25ae99"
     },
     "retained_evidence": {
       "path": "retained-evidence-manifest.json",
-      "sha256": "8b5ef37a54953603c7d5f7c6572004d3d304681e8c778ff7b59f02aa8138dbae"
+      "sha256": "cc24fe2561c9c5ed836cdd1d782bdd04e7311d06e0aea7a29adc8890d4000275"
     }
   },
   "source_freeze": {

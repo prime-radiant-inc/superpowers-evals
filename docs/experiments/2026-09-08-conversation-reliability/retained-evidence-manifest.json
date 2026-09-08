@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "inherited_corpus": {
-    "path": "../conversation-release/controls/corpus-manifest.json",
+    "path": "../2026-09-08-conversation-release/controls/corpus-manifest.json",
     "file_sha256": "e09923b4b9f980b41b6933a6b388f6354af839c8cf7de7c757570107d5b2433e",
     "payload_sha256": "f4655b238a786610b57ed668b9cdb59261c9a4f940ed32739b149485c8c1cb1c",
     "scope": "four retained known cases and six unchanged constructed controls"

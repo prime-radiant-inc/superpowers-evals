@@ -16,7 +16,7 @@ cases, retries, or replacement calls.
 
 `cases.json` is the ordered base-case ledger. The first four known cases and all
 six controls point to the unchanged
-`../conversation-release/` corpus. Its review cases continue to use the
+`../2026-09-08-conversation-release/` corpus. Its review cases continue to use the
 independently reviewed clarified criterion 3 rubric. The two added known cases
 point to their original selected rubrics and complete retained evidence indexes.
 No retained evidence is copied here.

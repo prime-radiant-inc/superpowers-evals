@@ -2,25 +2,25 @@
   "cases": [
     {
       "id": "known-claude-review",
-      "rubric": "../conversation-release/controls/rubrics/code-review-revised.md",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
       "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence",
       "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence/index.json"
     },
     {
       "id": "known-codex-design",
-      "rubric": "../conversation-release/controls/rubrics/design.md",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
       "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-design-codex-openai_responses_56sol-linux-20260908T060519Z-87cf/evidence",
       "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-design-codex-openai_responses_56sol-linux-20260908T060519Z-87cf/evidence/index.json"
     },
     {
       "id": "known-codex-review",
-      "rubric": "../conversation-release/controls/rubrics/code-review-revised.md",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
       "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence",
       "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence/index.json"
     },
     {
       "id": "known-claude-design",
-      "rubric": "../conversation-release/controls/rubrics/design.md",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
       "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07/evidence",
       "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07/evidence/index.json"
     },
@@ -38,39 +38,39 @@
     },
     {
       "id": "control-a",
-      "rubric": "../conversation-release/controls/rubrics/code-review-revised.md",
-      "evidence_root": "../conversation-release/controls/a",
-      "evidence_index": "../conversation-release/controls/a/index.json"
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/a",
+      "evidence_index": "../2026-09-08-conversation-release/controls/a/index.json"
     },
     {
       "id": "control-b",
-      "rubric": "../conversation-release/controls/rubrics/code-review-revised.md",
-      "evidence_root": "../conversation-release/controls/b",
-      "evidence_index": "../conversation-release/controls/b/index.json"
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/b",
+      "evidence_index": "../2026-09-08-conversation-release/controls/b/index.json"
     },
     {
       "id": "control-c",
-      "rubric": "../conversation-release/controls/rubrics/design.md",
-      "evidence_root": "../conversation-release/controls/c",
-      "evidence_index": "../conversation-release/controls/c/index.json"
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/c",
+      "evidence_index": "../2026-09-08-conversation-release/controls/c/index.json"
     },
     {
       "id": "control-d",
-      "rubric": "../conversation-release/controls/rubrics/design.md",
-      "evidence_root": "../conversation-release/controls/d",
-      "evidence_index": "../conversation-release/controls/d/index.json"
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/d",
+      "evidence_index": "../2026-09-08-conversation-release/controls/d/index.json"
     },
     {
       "id": "control-e",
-      "rubric": "../conversation-release/controls/rubrics/verification.md",
-      "evidence_root": "../conversation-release/controls/e",
-      "evidence_index": "../conversation-release/controls/e/index.json"
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/verification.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/e",
+      "evidence_index": "../2026-09-08-conversation-release/controls/e/index.json"
     },
     {
       "id": "control-f",
-      "rubric": "../conversation-release/controls/rubrics/verification.md",
-      "evidence_root": "../conversation-release/controls/f",
-      "evidence_index": "../conversation-release/controls/f/index.json"
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/verification.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/f",
+      "evidence_index": "../2026-09-08-conversation-release/controls/f/index.json"
     }
   ]
 }
