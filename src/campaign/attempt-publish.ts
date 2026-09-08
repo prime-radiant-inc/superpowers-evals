@@ -144,21 +144,11 @@ function verifyInventory(
         walk(fullPath, relativePath);
         continue;
       }
-      // An empty, non-symlinked directory carries no evidence bytes. Gauntlet
-      // leaves screenshots/ and artifacts/ placeholders under its results
-      // dir and git leaves refs/tags, objects/pack and objects/info in every
-      // workdir, so every real run has some. Tolerate exactly that shape;
-      // anything with contents, and any symlink, stays refused.
-      if (!stats.isSymbolicLink() && stats.isDirectory()) {
-        let children: string[];
-        try {
-          children = readdirSync(fullPath);
-        } catch (error: unknown) {
-          throw refusal(
-            `artifact inventory read failed for ${relativePath}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        if (children.length === 0) continue;
+      // Recursively empty directory trees carry no evidence bytes. Walk them
+      // so any unlisted artifact below the structural directories is refused.
+      if (stats.isDirectory()) {
+        walk(fullPath, relativePath);
+        continue;
       }
       throw refusal(`unlisted artifact refused: ${relativePath}`);
     }
