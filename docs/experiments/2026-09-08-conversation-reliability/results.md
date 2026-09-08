@@ -200,9 +200,10 @@ CLI or automated provider work. All Pi admission/startup code, new qualification
 suites, driver changes and assessor instruction candidate remain on experimental
 branches. Selected-tree independent review passed: exact source matches the reviewed
 publication/protocol deltas, with no held runtime or missing dependency.
-Final-main CI and canonical installation remain separate delivery gates.
-Their exact job/ref receipts will be retained with the private operator ledger
-and delivery record after those gates complete.
+The eligible runtime was merged directly to main after independent review,
+then passed main CI and canonical installation. Exact receipts follow; the
+subsequent documentation-only head will be verified separately in the operator
+ledger and delivery record.
 
 Root verification on the selected runtime:
 
@@ -210,6 +211,26 @@ Root verification on the selected runtime:
 - Gauntlet required check: 1352 passes, 2 provider-gated skips; core/UI typechecks and both UI builds passed.
 - Actual paired CLI with real tmux and scripted loopback provider: 5 outcomes, 162 assertions, no external provider calls.
 - The first selected Gauntlet check had 5 tmux socket-path failures because root's temporary directory used the long macOS default. The same tree passed with a short isolated `/tmp` directory, as earlier checks used. Both receipts remain; no code, timeout or assertion was weakened.
+
+### Main and canonical installation receipts
+
+Quorum runtime/result commit `e896af04ae76dd764397c3264f7d41b75c7ab4e7`
+passed [test and scenario validation](https://github.com/prime-radiant-inc/superpowers-evals/actions/runs/34274547392)
+and [CodeQL](https://github.com/prime-radiant-inc/superpowers-evals/actions/runs/34274546571).
+Gauntlet `187a9af979a7cf096c0890d0eeb998cc3008343a` passed its
+[main check](https://github.com/prime-radiant-inc/gauntlet/actions/runs/34273711485).
+No PR was created, following Drew's direct-main instruction.
+
+Canonical helper prepare `job-20260908T202711Z-8291` installed those exact
+revisions with unchanged Superpowers
+`b36e0829c6d0140e93cfef2ca599b1b07d4a7797` and image
+`sha256:01fb1cd08f1e31c82fccedbaadead09e6ff97bca1f5d66f2f0904728ad536e8c`.
+All four changed runtime files were hashed inside the actual running container
+and matched the selected local sources, including the Gauntlet image copy; its
+CLI launcher invokes that verified source. Canonical checkouts were clean,
+doctor healthy, run/sync/spend locks absent, and only the base appliance
+container was running. No new provider call was made after the stop decisions.
+This is installed-code evidence, not another semantic qualification run.
 
 Private reports, evidence, cost reconciliation and review receipts are under
 `results/conversation-reliability/` in the reliability coordinator worktree.
