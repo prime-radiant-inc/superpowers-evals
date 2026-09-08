@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Implementation status:** All seven tasks completed offline; final corrections accepted.
+[Paired revisions, review outcomes, actual test receipts and proposed appliance pilot](../../experiments/2026-09-07-conversation-assessment-implementation.md).
+The checklist below preserves the original execution instructions.
+
 **Goal:** Run `conversation-pricing` through a real Claude or Codex terminal, with a simulated user, independent checks and a separate assessment, inside the current Quorum worker.
 
 **Architecture:** Reuse Quorum provisioning and generated launchers. Select the new flow immediately before the existing Gauntlet invocation; a focused runner function performs conversation, evidence capture, checks and assessment. Gauntlet supplies two small role-specific entrypoints using its existing providers, terminal and evidence logger.
