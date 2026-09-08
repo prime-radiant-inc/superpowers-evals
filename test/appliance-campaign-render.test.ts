@@ -1,5 +1,14 @@
 import { expect, test } from 'bun:test';
 import { renderCampaignReport } from '../src/appliance/campaign-render.ts';
+import {
+  foldTransition,
+  initialProjection,
+} from '../src/campaign/execution-state.ts';
+import {
+  cellKeyOf,
+  primaryBlockId,
+  primarySampleId,
+} from '../src/campaign/registration.ts';
 import { foldComparisonReport } from '../src/campaign/report.ts';
 import type { ArtifactRef } from '../src/contracts/campaign/execution.ts';
 import {
@@ -7,6 +16,14 @@ import {
   type Report,
   ReportSchema,
 } from '../src/contracts/campaign/report.ts';
+import {
+  blockActivation,
+  evidenceRef,
+  observation,
+  sessionTransitions,
+  transition,
+  twoArmExperiment,
+} from './fixtures/core-comparison/factory.ts';
 import { singleArmComparisonFixture } from './fixtures/core-comparison/report-fixture.ts';
 
 const ref = (path: string, digest = '1'): ArtifactRef => ({
@@ -207,4 +224,135 @@ test('a verdict reference with failed artifact authentication has no drilldown',
     'Drilldown unavailable: one authenticated root-level verdict artifact was not available.',
   );
   expect(rendered).not.toContain("quorum show '");
+});
+
+function multiScenarioReport(): Report {
+  const experiment = twoArmExperiment();
+  const scenarios = ['conversation-pricing', 'conversation-design'];
+  experiment.suite.comparisons[0]!.scenarios = scenarios;
+  experiment.comparisons[0]!.comparison_id = 'c1';
+  experiment.cells = scenarios.map((scenario) => ({
+    ...experiment.cells[0]!,
+    comparison_id: 'c1',
+    scenario,
+  }));
+  experiment.planned_slots = scenarios.flatMap((scenario) =>
+    ['base', 'candidate'].map((arm) => ({
+      sample_id: primarySampleId(cellKeyOf('c1', scenario), arm, 1),
+      primary_block_id: primaryBlockId(cellKeyOf('c1', scenario), 1),
+      comparison_id: 'c1',
+      scenario,
+      arm,
+      replicate: 1,
+    })),
+  );
+  experiment.reserve_slots = [];
+  experiment.suite.reserve = 0;
+  const intents = blockActivation(experiment).attempts;
+  for (const intent of intents)
+    intent.container_name = intent.container_name.replaceAll(':', '-');
+  const blocks = scenarios.map((_scenario, index) => {
+    const attempts = intents.slice(index * 2, index * 2 + 2);
+    const blockId = attempts[0]!.primary_block_id;
+    for (const attempt of attempts) attempt.identity.block_id = blockId;
+    return {
+      block_id: blockId,
+      primary_block_id: blockId,
+      reserve_id: null,
+      predecessor_block_id: null,
+      attempts,
+    };
+  });
+  const transitions = [
+    ...sessionTransitions(experiment),
+    ...blocks.map((block, i) =>
+      transition('block_activated', block, 3, `activate-${i}`),
+    ),
+    ...blocks.flatMap((block, i) =>
+      block.attempts.map((_attempt, j) =>
+        transition(
+          'attempt_observed',
+          { observation: observation(block, j, 4), excluded_block: null },
+          4,
+          `observe-${i}-${j}`,
+        ),
+      ),
+    ),
+    ...blocks.map((block, i) =>
+      transition(
+        'block_validated',
+        { block_id: block.block_id, evidence_refs: [evidenceRef] },
+        5,
+        `validate-${i}`,
+      ),
+    ),
+    transition(
+      'ended',
+      { outcome: 'completed', reason: 'done', cancel_intent: null },
+      5,
+    ),
+  ];
+  const value = reportFixture();
+  value.report = foldComparisonReport({
+    experiment,
+    state: transitions.reduce(foldTransition, initialProjection(experiment)),
+    evidenceByAttempt: new Map(),
+    validityByBlock: new Map(),
+  });
+  return ReportSchema.parse(value);
+}
+
+test('folded multi-scenario comparison labels every attempt with its own scenario', () => {
+  const report = multiScenarioReport();
+  expect(
+    report.report.comparisons.map((comparison) => comparison.scenario),
+  ).toEqual(['conversation-pricing', 'conversation-design']);
+  const headings = renderCampaignReport(report)
+    .split('\n')
+    .filter((line) => line.includes(' — '));
+  expect(headings).toHaveLength(4);
+  expect(headings[0]).toContain(' — conversation-pricing / base — ');
+  expect(headings[1]).toContain(' — conversation-pricing / candidate — ');
+  expect(headings[2]).toContain(' — conversation-design / base — ');
+  expect(headings[3]).toContain(' — conversation-design / candidate — ');
+});
+
+test('malformed or inconsistent sample identities and duplicate comparisons leave scenario unavailable', () => {
+  for (const sample of [
+    'single-1',
+    'c1:conversation-pricing:base:r0',
+    'c1:conversation-pricing:base:r1:extra',
+    'c01:conversation-pricing:base:r1',
+    'c1:conversation-pricing:base:b1',
+    'c2:conversation-pricing:base:r1',
+    'c1:conversation-pricing:candidate:r1',
+    'c1:missing:base:r1',
+  ]) {
+    const value = multiScenarioReport();
+    value.report.comparisons = [value.report.comparisons[0]!];
+    value.report.attempts[0]!.sample_id = sample;
+    const first = renderCampaignReport(value)
+      .split('\n')
+      .find((line) => line.includes(' — '));
+    expect(first).toContain(' — scenario unavailable / base — ');
+  }
+  const duplicate = multiScenarioReport();
+  duplicate.report.comparisons = [duplicate.report.comparisons[0]!];
+  duplicate.report.comparisons.push(
+    structuredClone(duplicate.report.comparisons[0]!),
+  );
+  const first = renderCampaignReport(duplicate)
+    .split('\n')
+    .find((line) => line.includes(' — '));
+  expect(first).toContain(' — scenario unavailable / base — ');
+});
+
+test('reserve sample identity resolves the same authenticated scenario without guessing a verdict path', () => {
+  const value = multiScenarioReport();
+  value.report.attempts[0]!.sample_id = 'c1:conversation-pricing:base:x2';
+  const first = renderCampaignReport(value)
+    .split('\n')
+    .find((line) => line.includes(' — '));
+  expect(first).toContain(' — conversation-pricing / base — ');
+  expect(renderCampaignReport(value)).not.toContain("quorum show '");
 });

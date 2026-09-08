@@ -12,7 +12,7 @@ regenerate the list instead of pasting a table that will rot.
 - A scenario is a directory `scenarios/<name>/` with three required files:
   `story.md`, `setup.sh`, `checks.sh`. It may also carry `fixtures/` and an
   optional `baseline-manifest.json`.
-- A normal run involves a **Coding-Agent** (the subject — Claude, Codex, …) and
+- A conversation run involves a **Coding-Agent** (the subject — Claude, Codex, …) and
   two fresh Gauntlet-Agent roles. The conversation role acts like the user; the
   assessor role grades the retained result against private Acceptance Criteria.
 - Run flow: `setup.sh` builds a fixture → `pre()` asserts the fixture → the

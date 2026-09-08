@@ -1,6 +1,7 @@
 import { isAbsolute, join } from 'node:path';
 import type { ArtifactRef } from '../contracts/campaign/execution.ts';
 import { type Report, ReportSchema } from '../contracts/campaign/report.ts';
+import { ID_COMPONENT_RE } from '../contracts/campaign/suite.ts';
 
 type AccountingQuantity = Report['report']['accounting']['subject_cost_usd'];
 
@@ -90,18 +91,30 @@ function scenarioForAttempt(
   report: Report['report'],
   attempt: Report['report']['attempts'][number],
 ): string {
-  const matches = new Set(
-    report.comparisons
-      .filter(
-        (comparison) =>
-          comparison.comparison_id === attempt.comparison_id &&
-          comparison.arms.some((arm) => arm.arm === attempt.arm),
-      )
-      .map((comparison) => comparison.scenario),
+  // Registration's injective sample grammar identifies the scenario within a comparison.
+  const parts = attempt.sample_id.split(':');
+  const [comparisonId, scenario, arm, slot] = parts;
+  if (
+    parts.length !== 4 ||
+    comparisonId === undefined ||
+    !/^c[1-9][0-9]*$/.test(comparisonId) ||
+    scenario === undefined ||
+    !ID_COMPONENT_RE.test(scenario) ||
+    arm === undefined ||
+    !ID_COMPONENT_RE.test(arm) ||
+    slot === undefined ||
+    !/^[rx][1-9][0-9]*$/.test(slot) ||
+    comparisonId !== attempt.comparison_id ||
+    arm !== attempt.arm
+  )
+    return 'scenario unavailable';
+  const matches = report.comparisons.filter(
+    (comparison) =>
+      comparison.comparison_id === comparisonId &&
+      comparison.scenario === scenario &&
+      comparison.arms.some((member) => member.arm === arm),
   );
-  return matches.size === 1
-    ? plain([...matches][0] ?? '')
-    : 'scenario unavailable';
+  return matches.length === 1 ? plain(scenario) : 'scenario unavailable';
 }
 
 /** Human-only terminal presentation over the authenticated report envelope. */
