@@ -91,8 +91,9 @@ The check observes the existing terminal. It sends no keystrokes and succeeds
 only on a recognized ready prompt from a live subject. An arbitrary nonempty
 screen, changed bytes or elapsed time cannot establish readiness. Known startup
 menus and authentication errors cannot match ready. Subject exit or readiness
-timeout ends startup with explicit engine-error evidence. Cancellation retains
-its existing stopped status. Use a 30-second readiness limit inside the current
+timeout ends startup with explicit engine-error evidence. Expiry of the overall
+deadline retains timed-out status; cancellation retains stopped status. Use a
+30-second readiness limit inside the current
 overall conversation deadline; validate that limit against the delayed-start
 tests and installed probe before freezing it.
 
@@ -147,16 +148,27 @@ Test behavior through the existing boundaries:
   generated launcher with a local response to validate capture through pricing.
   Run required repository checks and review each deliverable before integration.
 
-Startup and Pi can ship independently once their own gates pass. Use direct main
-integration and canonical appliance installation as Drew previously requested;
-verify exact installed revisions separately from source tests.
+Offline checks and review qualify a candidate for installation in the existing
+isolated appliance pilot. They do not qualify held Pi admission for promotion.
+Verify exact pilot revisions, then apply these separate proposed live gates:
 
-Proposed later live qualification is deliberately small: one Claude conversation
-for startup, then Pi pricing and Pi review if pricing passes. Register fresh
-identities and specify revisions, new limits and stopping rules before launch.
-The prior campaign and its unused allocations are closed. No new run or spend is
-authorized here. These cells would qualify these paths, not prove high parallelism
-or broad grading accuracy.
+- Claude: one conversation through Mantle reaches ready without menu input,
+  starts the simulated user afterward, completes a real task interaction and
+  retains its native and visible evidence.
+- Pi: pricing, then review if pricing's engine gate passes. Both must complete
+  with usable transcript/output evidence, source identities, valid exposure and
+  complete frozen-price accounting. A completed bad implementation or review
+  remains a valid engine observation; behavioral PASS is not the admission gate.
+
+Retain assessments and execution outcomes separately. These cells qualify the
+specified engine paths, not high parallelism or grading accuracy. After each
+deliverable passes its own live gate, integrate it directly to main and update
+the canonical appliance, verifying installed revisions separately from tests.
+The two deliverables can be promoted independently.
+
+Register fresh identities and specify revisions, new limits and stopping rules
+before launch. The prior campaign and its unused allocations are closed. No new
+run or spend is authorized here.
 
 ## Following increment: grading contract
 
