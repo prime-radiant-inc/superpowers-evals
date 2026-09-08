@@ -178,8 +178,14 @@ harness/provider/platform, sustained high concurrency, or a performance gain.
 There is no old/new or Superpowers treatment comparison. The Codex observations
 include its chosen secondary model. The independent assessor is useful but not
 an exact citation engine: the inspected single Codex run had a minor intermediate
-test-count error, and parallel Codex r1 called the user's opening the agent's
-prompt. Those defects do not overturn the independently inspected final result.
+test-count error, and both parallel Codex assessments called the user's opening
+the agent's prompt. Parallel Codex r2 also loosely called subject-written tests
+the trusted pricing check. Its separately retained oracle result supplies the
+required independent evidence. Those defects do not overturn the independently
+inspected final result. The independent reviewer checked all four parallel
+exchanges, actual native questions, final verification and oracle records, and
+found no unsupported pass or premature delivery cutoff. The grader's evidence
+attribution is less precise than the underlying retained evidence.
 Claude parallel r1 also asked whether to add tests, and the actor selected
 "No, just the fix" from its options (captures 020–022). The rubric permits that
 choice and visible ad hoc verification passed, but the absence of a test file
