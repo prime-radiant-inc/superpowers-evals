@@ -31,7 +31,10 @@ import { buildLiveCredentialRequest } from '../src/appliance/credential-request.
 import { ApplianceError } from '../src/appliance/errors.ts';
 import { installApplianceHelper } from '../src/appliance/install.ts';
 import type { LoadedApplianceConfig } from '../src/appliance/types.ts';
+import { foldComparisonReport } from '../src/campaign/report.ts';
+import { ReportSchema } from '../src/contracts/campaign/report.ts';
 import { envSnapshot } from '../src/env.ts';
+import { singleArmComparisonFixture } from './fixtures/core-comparison/report-fixture.ts';
 
 function noopActions(
   overrides: Partial<ApplianceActions> = {},
@@ -576,6 +579,97 @@ test('campaign run routes its closed selector and json option to the action', as
 
   expect(calls).toEqual([{ campaignSelector: 'prefix-suite', json: true }]);
   expect(JSON.parse(stdout.join(''))).toEqual({ ok: true, job_id: 'job-1' });
+});
+
+test('campaign report renders human evidence while json preserves the existing payload', async () => {
+  const fixture = singleArmComparisonFixture();
+  const failed = [...fixture.evidenceByAttempt.values()][1]!;
+  failed.gauntlet = {
+    status: 'fail',
+    summary: 'delivery missed one obligation',
+    reasoning: 'the required order was reversed',
+    run_id: 'grader-1',
+    process_exit: { code: 0, signal: null },
+    criteria: [
+      {
+        criterion: 'preserves the original ordering',
+        verdict: 'fail',
+        evidence: 'the delivered list reverses the required order',
+      },
+    ],
+  };
+  failed.checks = [
+    {
+      check: 'command-succeeds',
+      args: ['bun', 'test'],
+      negated: false,
+      passed: false,
+      detail: 'expected exit 0, observed exit 1',
+      phase: 'post',
+    },
+  ];
+  const payload = ReportSchema.parse({
+    report: foldComparisonReport(fixture),
+    anchor: {
+      campaign_id: fixture.experiment.campaign_id,
+      input_digest: fixture.experiment.input_digest,
+      last_sequence: fixture.state.transitions.size,
+      prefix_digest: 'a'.repeat(64),
+      roots: { campaign: '/fixture/campaign', results: '/fixture/results' },
+      artifacts: [],
+    },
+  });
+  const render = async (json: boolean) => {
+    const stdout: string[] = [];
+    const program = createApplianceProgram({
+      stdout: (text) => stdout.push(text),
+      stderr: () => undefined,
+      actions: noopActions({ campaignReport: () => payload }),
+    });
+    await program.parseAsync([
+      'node',
+      'evals-appliance',
+      'campaign',
+      'report',
+      'campaign-one',
+      ...(json ? ['--json'] : []),
+    ]);
+    return stdout.join('');
+  };
+
+  const human = await render(false);
+  expect(human).toContain('scenario');
+  expect(human).toContain('base');
+  expect(human).toContain('accepted fail');
+  expect(human).toContain('preserves the original ordering');
+  expect(human).toContain('expected exit 0, observed exit 1');
+
+  expect(JSON.parse(await render(true))).toEqual({ ok: true, ...payload });
+});
+
+test('campaign report does not format an unsuccessful action result', async () => {
+  const stdout: string[] = [];
+  const exits: number[] = [];
+  const program = createApplianceProgram({
+    stdout: (text) => stdout.push(text),
+    stderr: () => undefined,
+    setExitCode: (code) => exits.push(code),
+    actions: noopActions({
+      campaignReport: () => ({ kind: 'refused', reason: 'still active' }),
+    }),
+  });
+
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'campaign',
+    'report',
+    'campaign-one',
+  ]);
+
+  expect(stdout.join('')).toContain('still active');
+  expect(stdout.join('')).not.toContain('Campaign report:');
+  expect(exits).toEqual([1]);
 });
 
 test('campaign run rejects malformed extra options before the action', () => {

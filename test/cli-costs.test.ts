@@ -300,7 +300,7 @@ test('the --with-gauntlet cost cell also respects the unpriced flag', () => {
     color: false,
     withGauntlet: true,
   });
-  // The QA-driver cost cell must show the marker, not the untrustworthy $0.50.
+  // The driver/assessor cost cell must show the marker, not the untrustworthy $0.50.
   expect(out).not.toContain('$0.50');
 });
 
@@ -772,7 +772,7 @@ test('renderCosts prints a per-eval table with scenario/agent/cost columns', () 
   expect(out).toContain('alpha');
   expect(out).toContain('claude');
   expect(out).toContain('$2.50');
-  // Gauntlet (QA-driver) cost must NOT appear in the default view.
+  // Gauntlet-Agent driver/assessor cost must NOT appear in the default view.
   expect(out).not.toContain('$0.50');
 });
 
@@ -817,7 +817,7 @@ test('renderCosts --no-color emits no ANSI escapes', () => {
   expect(out).not.toMatch(/\x1b\[/);
 });
 
-test('renderCosts --with-gauntlet adds the QA-driver cost column', () => {
+test('renderCosts --with-gauntlet labels the combined driver and assessor cost', () => {
   const root = mkdtempSync(join(tmpdir(), 'costs-'));
   const dir = writeRunDir(
     root,
@@ -833,7 +833,16 @@ test('renderCosts --with-gauntlet adds the QA-driver cost column', () => {
     color: false,
     withGauntlet: true,
   });
+  expect(out).toContain('driver/assessor cost');
   expect(out).toContain('$0.50');
+});
+
+test('costs help names the combined Gauntlet-Agent driver and assessor role', () => {
+  const proc = spawnSync('bun', [CLI, 'costs', '--help'], {
+    encoding: 'utf8',
+  });
+  expect(proc.status).toBe(0);
+  expect(proc.stdout).toContain('Gauntlet-Agent driver/assessor');
 });
 
 // ── costsJson: machine output ───────────────────────────────────────────
@@ -873,11 +882,11 @@ test('costs <dir> renders the coding-agent table and exits 0', () => {
   expect(proc.stdout).toContain('Coding-agent costs');
   expect(proc.stdout).toContain('alpha');
   expect(proc.stdout).toContain('$2.50');
-  // The gauntlet (QA-driver) cost is NOT in the default view.
+  // The Gauntlet-Agent driver/assessor cost is NOT in the default view.
   expect(proc.stdout).not.toContain('$0.50');
 });
 
-test('costs --with-gauntlet includes the QA-driver cost', () => {
+test('costs --with-gauntlet includes the driver/assessor cost', () => {
   const root = mkdtempSync(join(tmpdir(), 'costs-'));
   const dir = writeRunDir(
     root,

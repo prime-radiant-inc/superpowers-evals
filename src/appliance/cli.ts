@@ -10,6 +10,7 @@ import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
+import type { Report } from '../contracts/campaign/report.ts';
 import {
   type CredentialSelection,
   EMPTY_CREDENTIAL_SCOPE,
@@ -21,6 +22,7 @@ import {
   RunAllArgvError,
 } from '../run-all/options.ts';
 import { type CampaignRegisterArgs, campaignCommands } from './campaign.ts';
+import { renderCampaignReport } from './campaign-render.ts';
 import {
   type LoadConfigOptions,
   loadCredentialConfig,
@@ -214,10 +216,15 @@ function asSuccessJson(value: unknown): unknown {
   return { ok: true, result: value };
 }
 
-function renderResult(value: unknown, json: boolean): string {
+function renderResult(
+  value: unknown,
+  json: boolean,
+  renderHuman?: (value: unknown) => string,
+): string {
   if (json) {
     return `${JSON.stringify(asSuccessJson(value), null, 2)}\n`;
   }
+  if (renderHuman !== undefined) return renderHuman(value);
   if (typeof value === 'string') {
     return value.endsWith('\n') ? value : `${value}\n`;
   }
@@ -734,6 +741,7 @@ async function handleAction(
   deps: Required<Pick<ApplianceCliDeps, 'stdout' | 'stderr' | 'setExitCode'>>,
   action: () => ApplianceActionResult | Promise<ApplianceActionResult>,
   resultFailed?: (value: unknown) => boolean,
+  renderHuman?: (value: unknown) => string,
 ): Promise<void> {
   try {
     const value = await action();
@@ -744,7 +752,7 @@ async function handleAction(
       deps.setExitCode(1);
       return;
     }
-    deps.stdout(renderResult(value, args.json));
+    deps.stdout(renderResult(value, args.json, renderHuman));
   } catch (error) {
     if (args.json) {
       deps.stdout(`${JSON.stringify(toErrorJson(error), null, 2)}\n`);
@@ -758,6 +766,15 @@ async function handleAction(
 
 function commandOptions(options: JsonOption): BaseCommandArgs {
   return { json: options.json ?? false };
+}
+
+function campaignResultFailed(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'kind' in value &&
+    (value.kind === 'refused' || value.kind === 'unresolved')
+  );
 }
 
 // The age floor is prune's only eligibility dial; anything but a positive
@@ -1093,7 +1110,6 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
     ['status', actions.campaignStatus],
     ['cancel', actions.campaignCancel],
     ['costs', actions.campaignCosts],
-    ['report', actions.campaignReport],
   ] as const) {
     campaign
       .command(`${verb} <campaign-selector>`)
@@ -1104,14 +1120,23 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           args,
           resolvedDeps,
           () => action(args),
-          (value) =>
-            typeof value === 'object' &&
-            value !== null &&
-            'kind' in value &&
-            (value.kind === 'refused' || value.kind === 'unresolved'),
+          campaignResultFailed,
         );
       });
   }
+  campaign
+    .command('report <campaign-selector>')
+    .option('--json', 'emit JSON')
+    .action((campaignSelector: string, options: JsonOption) => {
+      const args = { ...commandOptions(options), campaignSelector };
+      return handleAction(
+        args,
+        resolvedDeps,
+        () => actions.campaignReport(args),
+        campaignResultFailed,
+        (value) => renderCampaignReport(value as Report),
+      );
+    });
 
   return program;
 }

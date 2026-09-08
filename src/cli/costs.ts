@@ -7,10 +7,10 @@ import { resolveTarget } from './resolve-target.ts';
 // `quorum costs` — a CODING-AGENT-focused cost report.
 //
 // For running evals, the day-to-day question is "what did the coding-agent
-// side cost?" — the gauntlet (QA-driver) side is measurement overhead. This
-// module loads one cost row per eval (a single run OR every produced run in a
-// batch) and renders a table + aggregate of the coding-agent side. The
-// gauntlet side is opt-in (--with-gauntlet), never the default.
+// side cost?" — the Gauntlet-Agent driver/assessor side is measurement
+// overhead. This module loads one cost row per eval (a single run OR every
+// produced run in a batch) and renders a table + aggregate of the coding-agent
+// side. The gauntlet side is opt-in (--with-gauntlet), never the default.
 //
 // Economics is read through TOLERANT views (every leaf `unknown`), mirroring
 // src/cli/render.ts: a malformed or partial economics block degrades a cell to
@@ -490,7 +490,7 @@ function compactCodingColumns(withGauntlet: boolean): Column[] {
   ];
   if (withGauntlet) {
     cols.push({
-      header: 'qa cost',
+      header: 'driver/assessor cost',
       cell: (r) => fmtSideCost(r.gauntlet),
       alignRight: true,
     });
@@ -591,7 +591,7 @@ function builderCodingColumns(withGauntlet: boolean): Column[] {
   ];
   if (withGauntlet) {
     cols.push({
-      header: 'qa cost',
+      header: 'driver/assessor cost',
       cell: (r) => fmtSideCost(r.gauntlet),
       alignRight: true,
     });

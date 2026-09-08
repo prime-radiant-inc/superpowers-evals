@@ -693,14 +693,18 @@ interface CostsOptions {
 program
   .command('costs')
   .description(
-    'coding-agent cost/token/runtime report for a run or a batch (the gauntlet QA-driver side is opt-in via --with-gauntlet)',
+    'coding-agent cost/token/runtime report for a run or a batch (the Gauntlet-Agent driver/assessor side is opt-in via --with-gauntlet)',
   )
   .argument(
     '[target]',
     'run-dir, verdict.json, batch dir/id, or scenario prefix (default: newest run)',
   )
   .option('--json', 'machine-readable rows + aggregate', false)
-  .option('--with-gauntlet', 'also show the QA-driver (gauntlet) cost', false)
+  .option(
+    '--with-gauntlet',
+    'also show the Gauntlet-Agent driver/assessor cost',
+    false,
+  )
   .option('--no-color', 'disable color')
   .option('--results-root <dir>', 'results root', 'results')
   .action((target: string | undefined, opts: CostsOptions) => {

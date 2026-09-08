@@ -468,14 +468,21 @@ test('the unchanged canonical completed report seals idempotently', () => {
     campaignDir: f.campaignDir,
     report: canonical,
   });
-  const bytes = readFileSync(join(f.campaignDir, 'report.json'));
+  const jsonBytes = readFileSync(join(f.campaignDir, 'report.json'));
+  const markdownBytes = readFileSync(join(f.campaignDir, 'report.md'));
+  const sealBytes = readFileSync(join(f.campaignDir, 'report-seal.json'));
+  const reread = publication.readComparisonReport(f);
   const second = sealing.sealReport({
     campaignDir: f.campaignDir,
-    report: canonical,
+    report: reread,
   });
   expect(second).toEqual(first);
-  expect(bytes.equals(publication.canonicalReportBytes(canonical))).toBe(true);
-  expect(readFileSync(join(f.campaignDir, 'report.json'))).toEqual(bytes);
+  expect(jsonBytes.equals(publication.canonicalReportBytes(reread))).toBe(true);
+  expect(readFileSync(join(f.campaignDir, 'report.json'))).toEqual(jsonBytes);
+  expect(readFileSync(join(f.campaignDir, 'report.md'))).toEqual(markdownBytes);
+  expect(readFileSync(join(f.campaignDir, 'report-seal.json'))).toEqual(
+    sealBytes,
+  );
 });
 
 test('seal rejects a forged analytical completeness claim despite authentic artifact bytes', () => {
