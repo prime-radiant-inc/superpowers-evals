@@ -22,6 +22,7 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // Conversation assessment is initially implemented only for the Claude and
   // Codex TUI adapters.
   'conversation-pricing',
+  'conversation-code-review',
   // Builder campaign fixture: intentionally limited to the Serf harness and
   // Linux, where its Go toolchain and SDD subagent workflow are validated.
   'serf-builder-fractals',
