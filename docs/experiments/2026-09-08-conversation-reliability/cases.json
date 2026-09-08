@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "id": "known-claude-review",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence",
+      "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence/index.json"
+    },
+    {
+      "id": "known-codex-design",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-design-codex-openai_responses_56sol-linux-20260908T060519Z-87cf/evidence",
+      "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-design-codex-openai_responses_56sol-linux-20260908T060519Z-87cf/evidence/index.json"
+    },
+    {
+      "id": "known-codex-review",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence",
+      "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence/index.json"
+    },
+    {
+      "id": "known-claude-design",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07/evidence",
+      "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07/evidence/index.json"
+    },
+    {
+      "id": "conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5",
+      "rubric": "/srv/quorum/pilots/conversation-assessment/results/conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5/conversation-input/rubric.md",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5/evidence",
+      "evidence_index": "/srv/quorum/pilots/conversation-assessment/results/conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5/evidence/index.json"
+    },
+    {
+      "id": "conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88",
+      "rubric": "/srv/quorum/pilots/conversation-assessment/results/conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88/conversation-input/rubric.md",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88/evidence",
+      "evidence_index": "/srv/quorum/pilots/conversation-assessment/results/conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88/evidence/index.json"
+    },
+    {
+      "id": "control-a",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/a",
+      "evidence_index": "../2026-09-08-conversation-release/controls/a/index.json"
+    },
+    {
+      "id": "control-b",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/b",
+      "evidence_index": "../2026-09-08-conversation-release/controls/b/index.json"
+    },
+    {
+      "id": "control-c",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/c",
+      "evidence_index": "../2026-09-08-conversation-release/controls/c/index.json"
+    },
+    {
+      "id": "control-d",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/d",
+      "evidence_index": "../2026-09-08-conversation-release/controls/d/index.json"
+    },
+    {
+      "id": "control-e",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/verification.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/e",
+      "evidence_index": "../2026-09-08-conversation-release/controls/e/index.json"
+    },
+    {
+      "id": "control-f",
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/verification.md",
+      "evidence_root": "../2026-09-08-conversation-release/controls/f",
+      "evidence_index": "../2026-09-08-conversation-release/controls/f/index.json"
+    }
+  ]
+}

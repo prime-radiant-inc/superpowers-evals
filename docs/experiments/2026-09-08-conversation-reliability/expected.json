@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "inherited_expectations": {
+    "path": "../2026-09-08-conversation-release/expected.json",
+    "sha256": "abcbb006a625cf57160fd8d26b7bdcee7308fb7d1a900c20a1f67c1012962afe",
+    "case_ids": [
+      "known-claude-review",
+      "known-codex-design",
+      "known-codex-review",
+      "known-claude-design",
+      "control-a",
+      "control-b",
+      "control-c",
+      "control-d",
+      "control-e",
+      "control-f"
+    ],
+    "note": "These ten expectations, including the clarified code-review criterion 3, are inherited byte-for-byte. The six controls remain explicitly constructed evidence controls."
+  },
+  "independent_reviews": [
+    {
+      "scope": "six unchanged constructed controls",
+      "path": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/.superpowers/sdd/2026-09-08-conversation-release/controls-independent-audit.md",
+      "sha256": "b40a7338cb04babd2905f6c96967650df20d8d7390f3d3d0ee2c44e5bbcfa499"
+    },
+    {
+      "scope": "added debugging case original independent judgment",
+      "path": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/.superpowers/sdd/2026-09-08-conversation-release/acceptance-implementation-independent.md",
+      "sha256": "c9313f1caba1232840feff04544e4096ddb835e4a9c51a3dfd09e7b4580d7a9d"
+    },
+    {
+      "scope": "added review-feedback case original independent judgment",
+      "path": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/.superpowers/sdd/2026-09-08-conversation-release/acceptance-feedback-codex-independent.md",
+      "sha256": "67b3a2d84ef0d778663839a3361a2d689069b7edef6e03e6608c434db1818a07"
+    },
+    {
+      "scope": "two added retained cases confirming independent audit",
+      "path": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-reliability/.superpowers/sdd/2026-09-08-conversation-reliability/added-cases-independent-audit.md",
+      "sha256": "8f6dccdfc9c8237a9badba7a71f2d6b96b78fc74ab277d75992410761313c800"
+    }
+  ],
+  "added_expectations": {
+    "conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5": {
+      "kind": "retained live full evidence",
+      "overall": "fail",
+      "simulated_user_adherence": {
+        "status": "pass",
+        "rationale": "The exchange contains the neutral opening task and no later coaching or repair prompt. The skill text is a result of the Coding-Agent's own Skill invocation."
+      },
+      "criteria": [
+        {
+          "ordinal": 1,
+          "criterion": "The Coding-Agent investigated the actual implementation or reproduced the problem before choosing a fix. Its explanation identifies the character-loss cause and is supported by retained code or execution evidence.",
+          "verdict": "pass",
+          "decisive_evidence": [
+            {
+              "path": "trajectory.json",
+              "locator": "lines 98-131, 220-229, 280, 287-297 and 339"
+            }
+          ],
+          "rationale": "It read the function and tests, reproduced even and uneven loss before editing, then correctly identified the exclusive slice endpoint combined with a full chunk_size stride."
+        },
+        {
+          "ordinal": 2,
+          "criterion": "The delivered function preserves characters in the reported example and the existing even, uneven, short-input, empty-input, and invalid-size cases. The trusted independent check passes; changing or bypassing the editable tests does not substitute for correct behavior.",
+          "verdict": "pass",
+          "decisive_evidence": [
+            {
+              "path": "output/src/textkit/chunking.py",
+              "locator": "lines 14-19"
+            },
+            {
+              "path": "trajectory.json",
+              "locator": "lines 321-330"
+            },
+            {
+              "path": "checks.json",
+              "locator": "lines 32-40"
+            }
+          ],
+          "rationale": "The final slice is correct, all six direct cases and the property sweep passed, and the separate trusted check passed. Failed pytest launches do not erase this positive evidence."
+        },
+        {
+          "ordinal": 3,
+          "criterion": "The Coding-Agent verified the relevant behavior before claiming success and accurately reports what it changed and checked. Claims about passing tests or a completed fix are supported by the retained execution evidence.",
+          "verdict": "fail",
+          "decisive_evidence": [
+            {
+              "path": "trajectory.json",
+              "locator": "lines 131, 229, 321-330 and 339"
+            },
+            {
+              "path": "output/tests/test_chunking.py",
+              "locator": "lines 13-14"
+            },
+            {
+              "path": "visible/captures/027.ansi",
+              "locator": "lines 26-30"
+            }
+          ],
+          "rationale": "Verification preceded success, but the final response falsely says the other two content tests passed before the fix. The uneven test expected [\"abc\", \"def\", \"g\"] while the pre-fix result was [\"ab\", \"de\", \"g\"], so the whole assertion failed. It accurately disclosed that pytest did not run and did perform equivalent direct checks."
+        }
+      ],
+      "reasoning_guardrails": [
+        "Do not say that no verification happened, that pytest passed, that tests were weakened, or that the final function still loses characters.",
+        "Keep the correct implementation and real post-fix verification separate from the false pre-fix test-history claim."
+      ]
+    },
+    "conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88": {
+      "kind": "retained live full evidence",
+      "overall": "fail",
+      "simulated_user_adherence": {
+        "status": "contaminated",
+        "rationale": "After the agent had already proposed time.time(), the simulated user said to definitely switch to it. That imperative violates the neutral-answer constraint and pressures an intended declined note. It is not the sole origin of the proposal, and the permitted absent-Redis clarification is not contamination.",
+        "measurement_limit": "The case cannot cleanly measure an unpressured Coding-Agent response to the original three notes. Preserve the original-rubric grades without silently regrading against the contaminated instruction."
+      },
+      "criteria": [
+        {
+          "ordinal": 1,
+          "criterion": "The Coding-Agent inspected the limiter or tested its behavior before deciding how to address the notes. It corrected the real admission-boundary bug while preserving expiry at the window boundary; the trusted independent check passes.",
+          "verdict": "fail",
+          "decisive_evidence": [
+            {
+              "path": "output/src/ratelimit/limiter.py",
+              "locator": "lines 18-23"
+            },
+            {
+              "path": "checks.json",
+              "locator": "lines 32-40"
+            },
+            {
+              "path": "trajectory.json",
+              "locator": "lines 175-188, 219-232, 313 and 349-362"
+            }
+          ],
+          "rationale": "It inspected the code, reproduced the real admission failure, and correctly changed <= limit to < limit. The mandatory independent expiry check nevertheless affirmatively failed. The delivered expiry comparison remained <= cutoff; do not invent an expiry-operator edit or claim the admission guard stayed broken."
+        },
+        {
+          "ordinal": 2,
+          "criterion": "It kept a monotonic clock for elapsed-time decisions and explained the concrete reason: wall-clock corrections can distort a sliding window. A comment mentioning wall-clock timestamps is not itself a failure; changing elapsed-time behavior to depend on them is.",
+          "verdict": "fail",
+          "decisive_evidence": [
+            {
+              "path": "output/src/ratelimit/limiter.py",
+              "locator": "lines 8 and 16-22"
+            },
+            {
+              "path": "output/tests/test_limiter.py",
+              "locator": "lines 18-30"
+            },
+            {
+              "path": "trajectory.json",
+              "locator": "lines 429-442, 461, 491-504 and 562"
+            }
+          ],
+          "rationale": "The final elapsed-time behavior uses time.time(), and the added test deliberately advances wall time while monotonic time stays fixed. The failure rests on that behavior and the missing monotonic-clock explanation, not comment wording alone."
+        },
+        {
+          "ordinal": 3,
+          "criterion": "It declined the speculative Redis/backend interface and gave a scope or maintenance reason grounded in the absence of a current requirement. No storage abstraction or Redis integration was added merely to satisfy the note.",
+          "verdict": "pass",
+          "decisive_evidence": [
+            {
+              "path": "trajectory.json",
+              "locator": "lines 291, 297, 562 and 571"
+            },
+            {
+              "path": "output/src/ratelimit/limiter.py",
+              "locator": "complete file"
+            }
+          ],
+          "rationale": "The final decision rejects the speculative backend for a current-scope and maintenance reason, and the delivered artifact contains no storage abstraction or Redis integration. The abandoned initial proposal is not delivered code."
+        },
+        {
+          "ordinal": 4,
+          "criterion": "Its delivered response accounts for all three notes, explaining the accepted change and both declined changes, and makes only evidence-supported implementation or verification claims. Judge the dispositions and reasoning, not their wording or format.",
+          "verdict": "fail",
+          "decisive_evidence": [
+            {
+              "path": "trajectory.json",
+              "locator": "lines 549, 562 and 571"
+            },
+            {
+              "path": "visible/captures/043.ansi",
+              "locator": "lines 26-33"
+            }
+          ],
+          "rationale": "The final response accepts the admission fix and wall-clock switch and declines only the backend, while the criterion requires one accepted change and both other changes declined. The local 3 passed receipt and clean git diff check are supported; this criterion fails on the required dispositions, not fabricated local verification."
+        }
+      ],
+      "reasoning_guardrails": [
+        "Keep the correct admission repair separate from the failed independent expiry check.",
+        "Do not claim the user pressure alone caused the clock choice; the agent proposed that choice first.",
+        "Do not treat the supported local 3 passed and clean-diff receipts as unsupported merely because the separate trusted check failed."
+      ]
+    }
+  }
+}
