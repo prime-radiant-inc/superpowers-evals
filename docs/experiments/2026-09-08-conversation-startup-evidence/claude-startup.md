@@ -66,7 +66,7 @@ guessed `? for shortcuts` marker did not appear and is not part of the result.
 
 | Case | Ready observation | Input before ready | Provider requests | Retained result |
 | --- | ---: | ---: | ---: | --- |
-| Direct `opus5` | 0.787 s after tmux launch | 0 | 2 of 4 allowed | `PROBE_OK` visible; one native session; nonzero usage |
+| Direct `opus5` | 0.656 s after tmux launch | 0 | 2 of 4 allowed | standalone `● PROBE_OK`; assistant-role native message with nonzero usage |
 | Direct with fixed 2 s delay | 2.760 s from case start | 0 | 0 | Same composer signature; no request submitted |
 | Dummy `opus5_bedrock` | 4.774 s from case start | 0 | 0 | Same composer signature; no request submitted |
 
@@ -84,14 +84,19 @@ contained only `ANTHROPIC_API_KEY`. The Mantle env file contained exactly
 the current `opus5_bedrock` row (`api: mantle`, `auth: bedrock-bearer`, model
 `anthropic.claude-opus-5`, region `us-east-1`).
 
-One neutral direct prompt produced two bounded loopback calls: a streaming
-Haiku request and a streaming Opus 5 request, both to `/v1/messages?beta=true`.
-The provider returned Anthropic messages with nonzero usage. Claude displayed
-`PROBE_OK` and wrote one native JSONL session, hash
-`c26768fa50feb97709f58e2fe30f1939cceadb43a6587c708164e8ca039e3403`.
+The neutral direct prompt did not contain the fixture answer marker. It produced
+two bounded loopback calls: a streaming Haiku request and a streaming Opus 5
+request, both to `/v1/messages?beta=true`. The provider returned Anthropic
+messages with nonzero usage. Claude displayed standalone `● PROBE_OK` and wrote
+one native JSONL session. Its assistant row contains exact text `PROBE_OK` and
+nonzero usage in the same message. The retained post-exit JSONL hash is
+`0d40101d649b2effb2778af6660e8d19a67d6fbde3db5e4330fff226d78814d1`.
+The receipt's in-run snapshot hash is
+`a77a20d06267e1e65d3ba40a18aab297f8117d202482d62e44bac33e79ebcb33`;
+Claude appended rows during terminal cleanup before the final file was copied.
 The final receipt hashes are:
 
-- direct: `893f9a9c0bab340998261a9d594cc74a318c97b34d9b5945db58b6ae98cb6f57`;
+- direct: `3772918dfe722a442cee05d29bd94ca0ae0142b95b18c2a723bd82af5ba6e9ed`;
 - delayed: `afe24563e4623515a416acb9197086a07333f1ec3259b5df99ae48430277aad6`;
 - Mantle readiness: `20f3f9e1820c2d234fda007f356e8a02778b2f0ec9d9a65963aa7adb366a4304`.
 
@@ -113,11 +118,14 @@ Production implementation must preserve the final approval and trust state in
 both paths; adding the onboarding flag alone is insufficient for the direct
 API-key path.
 
-The retained negative receipts also cover the expected root-user refusal,
-the missing top-level key approval, and the obsolete guessed composer marker.
-An early receipt labeled Mantle used the wrong `auth: api-key` reconstruction;
-it is retained as invalid evidence and excluded from every conclusion. The
-final Mantle receipt loads `opus5_bedrock` directly from the registry.
+The retained negative receipts also cover the expected root-user refusal, the
+missing top-level key approval, and the obsolete guessed composer marker. The
+earlier `final-direct-d1` receipt is invalid for response proof because its
+response predicates matched the echoed user prompt. The two corrected no-request
+receipts preserve the diagnosed input-submission failures. An early receipt
+labeled Mantle used the wrong `auth: api-key` reconstruction; it is retained as
+invalid evidence and excluded from every conclusion. The final Mantle receipt
+loads `opus5_bedrock` directly from the registry.
 
 After copying the private receipts, cleanup removed every probe-owned remote
 directory. A final host audit found no `conversation-startup-probe` container

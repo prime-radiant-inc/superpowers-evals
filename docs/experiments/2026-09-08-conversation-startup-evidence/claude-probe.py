@@ -20,7 +20,8 @@ IMAGE = "sha256:01fb1cd08f1e31c82fccedbaadead09e6ff97bca1f5d66f2f0904728ad536e8c
 ROOT = Path("/probe")
 REQUEST_LIMIT = 4
 CASE_DEADLINE = 25.0
-PROMPT = "Reply with exactly PROBE_OK and do not use tools."
+PROMPT = "Return the local fixture's acknowledgement without using tools."
+EXPECTED_RESPONSE = "PROBE_OK"
 
 PROVISION_TS = r"""
 import { join } from 'node:path';
@@ -214,34 +215,55 @@ def classify(value: str) -> tuple[str, str | None]:
     return "waiting", None
 
 
+def visible_assistant_marker(value: str) -> str | None:
+    for line in value.splitlines():
+        marker = line.strip()
+        if marker in {EXPECTED_RESPONSE, f"● {EXPECTED_RESPONSE}", f"⏺ {EXPECTED_RESPONSE}"}:
+            return marker
+    return None
+
+
 def session_receipt(home: Path) -> dict[str, Any]:
     evidence = []
     for path in sorted((home / ".claude/projects").glob("**/*.jsonl")):
         text = path.read_text(errors="replace")
-        nonzero_usage = False
+        assistant_response_present = False
+        assistant_response_nonzero_usage = False
         for line in text.splitlines():
             try:
-                usage = json.loads(line).get("message", {}).get("usage", {})
-                nonzero_usage |= any(
+                entry = json.loads(line)
+                message = entry.get("message", {})
+                if entry.get("type") != "assistant" or message.get("role") != "assistant":
+                    continue
+                exact_response = any(
+                    block.get("type") == "text"
+                    and block.get("text", "").strip() == EXPECTED_RESPONSE
+                    for block in message.get("content", [])
+                    if isinstance(block, dict)
+                )
+                usage = message.get("usage", {})
+                nonzero_usage = any(
                     isinstance(value, (int, float)) and value > 0
                     for value in usage.values()
                 )
-            except (json.JSONDecodeError, AttributeError):
+                assistant_response_present |= exact_response
+                assistant_response_nonzero_usage |= exact_response and nonzero_usage
+            except (json.JSONDecodeError, AttributeError, TypeError):
                 pass
         evidence.append(
             {
                 "path": str(path.relative_to(home)),
                 "sha256": digest(path),
                 "bytes": path.stat().st_size,
-                "response_present": "PROBE_OK" in text,
-                "nonzero_usage": nonzero_usage,
+                "assistant_response_present": assistant_response_present,
+                "assistant_response_nonzero_usage": assistant_response_nonzero_usage,
             }
         )
     return {
         "count": len(evidence),
         "files": evidence,
-        "response_present": any(item["response_present"] for item in evidence),
-        "nonzero_usage": any(item["nonzero_usage"] for item in evidence),
+        "assistant_response_present": any(item["assistant_response_present"] for item in evidence),
+        "assistant_response_nonzero_usage": any(item["assistant_response_nonzero_usage"] for item in evidence),
     }
 
 
@@ -271,11 +293,11 @@ def main() -> int:
     captures: list[dict[str, Any]] = []
     failure = signature = None
     ready_at = None
-    response_visible = False
+    assistant_terminal_line = None
     pane_pid = None
     pane_dead_status = None
     input_events: list[dict[str, Any]] = []
-    native: dict[str, Any] = {"count": 0, "files": [], "response_present": False, "nonzero_usage": False}
+    native: dict[str, Any] = {"count": 0, "files": [], "assistant_response_present": False, "assistant_response_nonzero_usage": False}
     try:
         tmux_config = ROOT / "tmux.conf"
         tmux_config.write_text("set-option -g remain-on-exit on\n")
@@ -304,10 +326,8 @@ def main() -> int:
             failure = "readiness_timeout"
         if signature and args.case == "direct":
             input_events.append({"elapsed_seconds": round(time.monotonic() - launch_started, 3), "after_ready": True})
-            prompt = ROOT / "prompt.txt"
-            prompt.write_text(PROMPT)
-            run(["tmux", "-S", str(socket), "load-buffer", "-b", "probe", str(prompt)], 2)
-            run(["tmux", "-S", str(socket), "paste-buffer", "-b", "probe", "-t", "subject"], 2)
+            run(["tmux", "-S", str(socket), "send-keys", "-t", "subject", "-l", PROMPT], 2)
+            time.sleep(0.015)
             run(["tmux", "-S", str(socket), "send-keys", "-t", "subject", "Enter"], 2)
             response_deadline = min(deadline, time.monotonic() + 12)
             while time.monotonic() < response_deadline:
@@ -315,11 +335,11 @@ def main() -> int:
                 if current != previous:
                     captures.append({"elapsed_seconds": round(time.monotonic() - launch_started, 3), "screen": current})
                     previous = current
-                if "PROBE_OK" in current:
-                    response_visible = True
+                assistant_terminal_line = visible_assistant_marker(current)
+                if assistant_terminal_line:
                     break
                 time.sleep(0.1)
-            if not response_visible:
+            if not assistant_terminal_line:
                 failure = "response_timeout"
         time.sleep(0.3)
         native = session_receipt(home)
@@ -335,7 +355,7 @@ def main() -> int:
             time.sleep(0.1)
 
     config_dir = home / ".claude"
-    direct_ok = response_visible and native["response_present"] and native["nonzero_usage"]
+    direct_ok = bool(assistant_terminal_line) and native["assistant_response_present"] and native["assistant_response_nonzero_usage"]
     success = bool(signature) and not failure and not provider.exceeded
     if args.case == "direct":
         success = success and direct_ok and len(provider.requests) >= 1
@@ -360,7 +380,7 @@ def main() -> int:
         "config_mirror": json.loads((ROOT / "config-receipt.json").read_text()),
         "composer_signature": signature,
         "ready_elapsed_seconds": ready_at,
-        "response_visible": response_visible,
+        "assistant_terminal_line": assistant_terminal_line,
         "failure": failure,
         "provider_request_limit": REQUEST_LIMIT,
         "input_events_before_ready": sum(not event["after_ready"] for event in input_events),
