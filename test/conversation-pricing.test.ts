@@ -34,6 +34,7 @@ function runOracle(
   supplyScratch = true,
 ): {
   status: number | null;
+  signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
   output: string;
@@ -53,6 +54,7 @@ function runOracle(
   });
   const result = {
     status: proc.status,
+    signal: proc.signal,
     stdout: proc.stdout,
     stderr: proc.stderr,
     output,
@@ -146,4 +148,23 @@ module.exports = { finalPrice };
   expect(readFileSync(join(result.output, 'src/pricing.js'), 'utf8')).toBe(
     source,
   );
+});
+
+for (const source of [
+  'process.exit(0);',
+  'require("node:process").exit(0);',
+  'module.exports = { finalPrice() { process.exit(0); } };',
+  'module.exports = { finalPrice() { process.exit(127); } };',
+])
+  test(`oracle requires completed assertions when subject requests exit: ${source}`, () => {
+    const result = runOracle(source);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('conversation-pricing: fail');
+    expect(readdirSync(join(result.output, '../scratch'))).toEqual([]);
+  });
+
+test('oracle process death remains a signal, not a graded failure', () => {
+  const result = runOracle('process.kill(process.pid, "SIGTERM");');
+  expect(result.status).toBeNull();
+  expect(result.signal).toBe('SIGTERM');
 });

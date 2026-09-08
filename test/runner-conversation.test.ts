@@ -116,6 +116,7 @@ for (const mode of [
   'assessment-error',
   'missing-criteria',
   'inconsistent',
+  'inconsistent-unclear',
 ])
   test(`${mode} preserves completion and cannot pass`, async () => {
     const args = setup(mode);
@@ -424,3 +425,52 @@ test('outer runner exception retains persisted started-role accounting', async (
     },
   });
 });
+
+for (const mode of [
+  'normal',
+  'cancel',
+  'error',
+  'fallback-write',
+  'fallback-rename',
+] as const)
+  test(`completion persistence survives later storage faults: ${mode}`, async () => {
+    const args = setup(mode.startsWith('fallback') ? 'incomplete' : 'refusal');
+    const inputPath = join(args.runDir, 'args.json');
+    writeFileSync(inputPath, JSON.stringify(args));
+    const invalidRecord = '{"prior":"invalid record"}';
+    if (mode.startsWith('fallback'))
+      writeFileSync(join(args.runDir, 'conversation.json'), invalidRecord);
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, 'fixtures/conversation-write-failure.ts'),
+        inputPath,
+        mode,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    const [stdout, stderr, exit] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(stderr).toBe('');
+    expect(exit).toBe(0);
+    const result = JSON.parse(stdout);
+    if (mode.startsWith('fallback')) {
+      expect(result.faultCount).toBeGreaterThan(0);
+      expect(result.durableBytes).toBe(invalidRecord);
+      expect(
+        result.rootFiles.filter((file: string) => file.endsWith('.tmp')),
+      ).toEqual([]);
+    } else {
+      expect(result.escaped).toBeNull();
+      expect(JSON.parse(result.durableBytes).status).toBe('completed');
+      expect(result.durableBytes).toBe(result.observedCompletion);
+      expect(result.verdict.conversation.status).toBe('completed');
+      expect(result.verdict.error?.stage ?? null).toBe(
+        mode === 'cancel' ? 'stopped' : mode === 'error' ? 'capture' : null,
+      );
+      if (mode === 'error') expect(result.faultCount).toBeGreaterThan(0);
+    }
+  });

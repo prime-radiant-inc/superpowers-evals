@@ -24,6 +24,11 @@ try {
 
 let outcome = 0;
 let detail = '15 price/code cases passed';
+const exit = process.exit;
+// A subject-requested exit is invalid output, not proof that assertions ran.
+process.exit = () => {
+  throw new Error('subject requested process exit before evaluation completed');
+};
 try {
   process.chdir(executionOutput);
   const modulePath = path.join(executionOutput, 'src', 'pricing.js');
@@ -43,6 +48,7 @@ try {
   outcome = 1;
   detail = error instanceof Error ? error.message : String(error);
 } finally {
+  process.exit = exit;
   process.chdir(retainedOutput);
 }
 

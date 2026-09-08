@@ -113,7 +113,13 @@ const result = {
         criteria: [
           {
             criterion: 'Fix pricing',
-            verdict: mode === 'inconsistent' ? 'fail' : assessmentStatus,
+            verdict:
+              mode === 'inconsistent'
+                ? 'fail'
+                : mode === 'inconsistent-unclear' ||
+                    assessmentStatus === 'investigate'
+                  ? 'unclear'
+                  : assessmentStatus,
             evidence: 'output/src/pricing.js',
           },
         ],

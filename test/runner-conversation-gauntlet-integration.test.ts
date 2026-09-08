@@ -39,7 +39,13 @@ function resultTexts(request: Request): string[] {
   );
 }
 
-for (const outcome of ['correct', 'incorrect', 'refusal'] as const)
+for (const outcome of [
+  'correct',
+  'incorrect',
+  'refusal',
+  'mixed-unclear',
+  'investigate-unclear',
+] as const)
   test.skipIf(!gauntletRoot)(
     `Quorum role argv drives actual Gauntlet terminal and independent assessment: ${outcome}`,
     async () => {
@@ -60,6 +66,14 @@ for (const outcome of ['correct', 'incorrect', 'refusal'] as const)
       let answered = false;
       let sawQuestion = false;
       let assessedOutput = '';
+      const unclear =
+        outcome === 'mixed-unclear' || outcome === 'investigate-unclear';
+      const expectedStatus =
+        outcome === 'correct'
+          ? 'pass'
+          : outcome === 'investigate-unclear'
+            ? 'investigate'
+            : 'fail';
       const endpoint = outcome === 'refusal' ? 'refusal' : 'delivery';
       const finalQuote =
         outcome === 'refusal'
@@ -122,9 +136,12 @@ for (const outcome of ['correct', 'incorrect', 'refusal'] as const)
                 input = { path: 'output/pricing.js' };
               } else {
                 assessedOutput = resultTexts(request).at(-1) ?? '';
-                const status = assessedOutput.includes('return 42')
-                  ? 'pass'
-                  : 'fail';
+                const status =
+                  outcome === 'investigate-unclear'
+                    ? 'investigate'
+                    : assessedOutput.includes('return 42')
+                      ? 'pass'
+                      : 'fail';
                 name = 'report_result';
                 input = {
                   status,
@@ -133,9 +150,19 @@ for (const outcome of ['correct', 'incorrect', 'refusal'] as const)
                   criteria: [
                     {
                       criterion: 'Pricing returns 42.',
-                      verdict: status,
+                      verdict: status === 'investigate' ? 'unclear' : status,
                       evidence: `output/pricing.js: ${assessedOutput}`,
                     },
+                    ...(unclear
+                      ? [
+                          {
+                            criterion: 'Delivery is verified.',
+                            verdict: 'unclear',
+                            evidence:
+                              'output/pricing.js: verification evidence is incomplete',
+                          },
+                        ]
+                      : []),
                   ],
                 };
               }
@@ -180,7 +207,7 @@ for (const outcome of ['correct', 'incorrect', 'refusal'] as const)
       try {
         writeFileSync(
           join(scenarioDir, 'story.md'),
-          '---\nid: wire-pricing\ntitle: Pricing conversation\nstatus: ready\nquorum_mode: conversation\nquorum_max_time: 10m\n---\nPlease fix pricing for my shop.\n\n## Acceptance Criteria\n- Pricing returns 42.\n',
+          `---\nid: wire-pricing\ntitle: Pricing conversation\nstatus: ready\nquorum_mode: conversation\nquorum_max_time: 10m\n---\nPlease fix pricing for my shop.\n\n## Acceptance Criteria\n- Pricing returns 42.\n${unclear ? '- Delivery is verified.\n' : ''}`,
         );
         writeFileSync(
           join(workdir, 'pricing.js'),
@@ -260,7 +287,15 @@ await new Promise(() => {});
         });
         expect(failures).toEqual([]);
         expect(verdict.error).toBeNull();
-        expect(verdict.final).toBe(outcome === 'correct' ? 'pass' : 'fail');
+        expect(verdict.final).toBe(
+          expectedStatus === 'investigate' ? 'indeterminate' : expectedStatus,
+        );
+        expect(verdict.gauntlet?.status).toBe(expectedStatus);
+        if (unclear)
+          expect(verdict.gauntlet?.criteria?.[1]).toMatchObject({
+            criterion: 'Delivery is verified.',
+            verdict: 'unclear',
+          });
         expect(sawQuestion).toBe(true);
         expect(readFileSync(join(runDir, 'answer.txt'), 'utf8')).toBe('USD');
         expect(verdict.conversation).toMatchObject({
@@ -273,10 +308,11 @@ await new Promise(() => {});
         ).toBe(outcome === 'correct');
         expect(verdict.gauntlet?.criteria?.[0]).toMatchObject({
           criterion: 'Pricing returns 42.',
-          verdict: outcome === 'correct' ? 'pass' : 'fail',
+          verdict:
+            outcome === 'investigate-unclear' ? 'unclear' : expectedStatus,
         });
         expect(assessedOutput).toContain(
-          `return ${outcome === 'correct' ? 42 : outcome === 'incorrect' ? 7 : 0}`,
+          `return ${outcome === 'correct' ? 42 : outcome === 'refusal' ? 0 : 7}`,
         );
         expect(verdict.gauntlet?.process_exit?.code).toBe(
           outcome === 'correct' ? 0 : 1,

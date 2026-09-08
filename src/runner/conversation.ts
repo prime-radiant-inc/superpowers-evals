@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -87,6 +88,28 @@ function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
+// Gauntlet's persisted record is authoritative. Only missing or invalid records
+// need a Quorum fallback; a failed replacement must leave prior bytes intact.
+function retainConversationRecord(
+  runDir: string,
+  fallback: ConversationRecord,
+): ConversationRecord {
+  const persisted = readConversationRecord(runDir);
+  if (persisted !== null) return persisted;
+  const path = join(runDir, 'conversation.json');
+  const temporary = join(runDir, `conversation-${crypto.randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary, `${JSON.stringify(fallback, null, 2)}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return fallback;
+}
+
 function durationMs(value: string): number {
   const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
   if (!match) throw new Error(`invalid role duration: ${value}`);
@@ -174,7 +197,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
   });
   const stopped = () => {
     conversation ??= incomplete('stopped', 'run cancelled');
-    writeJson(join(a.runDir, 'conversation.json'), conversation);
+    conversation = retainConversationRecord(a.runDir, conversation);
     return fail('stopped', 'run cancelled');
   };
   const stopRequested = async () => {
@@ -252,7 +275,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
             : 'errored',
         'conversation ended without a valid endpoint',
       );
-    writeJson(join(a.runDir, 'conversation.json'), conversation);
+    conversation = retainConversationRecord(a.runDir, conversation);
     stage = 'capture';
     const capture = captureToolCalls({
       logDir: a.logDir,
@@ -448,7 +471,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
         (c) =>
           !c.criterion.trim() ||
           !c.evidence.trim() ||
-          !['pass', 'fail', 'investigate'].includes(c.verdict),
+          !['pass', 'fail', 'unclear'].includes(c.verdict),
       ) ||
       (gauntlet.status === 'pass' && criteria.some((c) => c.verdict !== 'pass'))
     )
@@ -470,7 +493,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
       readConversationRecord(a.runDir) ??
       conversation ??
       incomplete('errored', String(error));
-    writeJson(join(a.runDir, 'conversation.json'), conversation);
+    conversation = retainConversationRecord(a.runDir, conversation);
     return fail(stage, error instanceof Error ? error.message : String(error));
   } finally {
     if (socketRoot !== undefined)
