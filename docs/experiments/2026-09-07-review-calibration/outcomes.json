@@ -1,0 +1,133 @@
+{
+  "input_revision": "c4dba2c9a9f45c3edc62f8df5280cc61c3bb6bc5",
+  "appliance_directory": "/srv/quorum/pilots/conversation-assessment/calibration/review-grounding-20260908T041449Z",
+  "status": "completed",
+  "case_count": 8,
+  "revised_cases_matching_expectations": 6,
+  "cumulative_cost_usd": 0.3931902,
+  "sum_assessment_duration_ms": 225446,
+  "cases": [
+    {
+      "case": "claude-baseline",
+      "run_id": "conversation-code-review_20260908T041523Z_c89a",
+      "execution": "graded",
+      "grade": "pass",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "cost_usd": 0.0540299,
+      "duration_ms": 14731
+    },
+    {
+      "case": "codex-baseline",
+      "run_id": "conversation-code-review_20260908T041538Z_cd44",
+      "execution": "graded",
+      "grade": "pass",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "cost_usd": 0.0244869,
+      "duration_ms": 13460
+    },
+    {
+      "case": "claude-grounding",
+      "run_id": "conversation-code-review_20260908T041552Z_a03b",
+      "execution": "graded",
+      "grade": "fail",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass",
+        "fail"
+      ],
+      "cost_usd": 0.116367,
+      "duration_ms": 57049
+    },
+    {
+      "case": "codex-grounding",
+      "run_id": "conversation-code-review_20260908T041649Z_37b7",
+      "execution": "graded",
+      "grade": "pass",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "cost_usd": 0.0646355,
+      "duration_ms": 31597
+    },
+    {
+      "case": "sample-a",
+      "run_id": "conversation-code-review_20260908T041721Z_511d",
+      "execution": "graded",
+      "grade": "pass",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "cost_usd": 0.0198258,
+      "duration_ms": 15118
+    },
+    {
+      "case": "sample-b",
+      "run_id": "conversation-code-review_20260908T041737Z_414d",
+      "execution": "graded",
+      "grade": "pass",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "cost_usd": 0.0219711,
+      "duration_ms": 19983
+    },
+    {
+      "case": "sample-c",
+      "run_id": "conversation-code-review_20260908T041757Z_d89c",
+      "execution": "graded",
+      "grade": "fail",
+      "criteria": [
+        "pass",
+        "pass",
+        "pass",
+        "fail"
+      ],
+      "cost_usd": 0.0195611,
+      "duration_ms": 17870
+    },
+    {
+      "case": "sample-d",
+      "run_id": "conversation-code-review_20260908T041815Z_c7fb",
+      "execution": "graded",
+      "grade": "fail",
+      "criteria": [
+        "fail",
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "cost_usd": 0.0723129,
+      "duration_ms": 55638
+    }
+  ],
+  "verification": {
+    "original_evidence_and_verdict_hashes_unchanged": [
+      "claude",
+      "codex"
+    ],
+    "calibration_inputs_unchanged": true,
+    "staged_operator_removed": true,
+    "active_calibration_processes": 0,
+    "shared_spend_lock_present": false,
+    "canonical_and_pilot_doctor_ok": true,
+    "canonical_and_pilot_checkouts_clean": true
+  }
+}

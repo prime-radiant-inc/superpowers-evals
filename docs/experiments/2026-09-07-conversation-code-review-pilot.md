@@ -184,3 +184,11 @@ spend lock remained. Canonical Q/G/S checkouts were clean and retained their
 original revisions (6c215603, 588a81e8, fd02874a). The isolated Evals source was
 clean at 5ec5784f. Local scenario and experiment commits remain unpushed and
 unmerged. No work beyond the two declared attempts was launched.
+
+### Subsequent assessor calibration
+
+Drew subsequently approved an assessor-only calibration on these retained
+reviews. The [frozen protocol and results](2026-09-07-review-calibration/README.md)
+record eight fresh assessments, a separate grounding criterion, four constructed
+controls, and the remaining reasoning limitations. No coding-agent rerun or
+change to this campaign's original reports was part of that calibration.

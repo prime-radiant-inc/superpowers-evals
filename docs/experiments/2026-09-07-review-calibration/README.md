@@ -88,3 +88,77 @@ works on these retained reviews and controls once. They would not establish
 repeatability, independence from the assessor model, calibrated probabilities,
 or general review quality. The original subject outcomes remain completed runs;
 their original reported grades are not silently replaced.
+
+## Observed result
+
+Drew approved this calibration after the review pilot. All eight fresh
+assessments completed on 2026-09-08 UTC (September 7 Pacific), with no retries,
+timeouts, instrument failures, or missing/unpriced usage. The frozen input
+commit was `c4dba2c9a9f45c3edc62f8df5280cc61c3bb6bc5`.
+
+| Case | Query | Credential | Merge | Grounding | Overall |
+| --- | --- | --- | --- | --- | --- |
+| Claude, baseline | Pass | Pass | Pass | — | Pass |
+| Codex, baseline | Pass | Pass | Pass | — | Pass |
+| Claude, revised | Pass | Pass | Pass | Fail | Fail |
+| Codex, revised | Pass | Pass | Pass | Pass | Pass |
+| a: supported findings | Pass | Pass | Pass | Pass | Pass |
+| b: conditional risk | Pass | Pass | Pass | Pass | Pass |
+| c: unsupported assertion | Pass | Pass | Pass | Fail | Fail |
+| d: omitted SQL finding | Fail | Pass | Pass | Pass | Fail |
+
+All six revised cases matched the frozen expectations. The fresh Claude
+baseline reproduced the original permissive pass. The revised assessment
+retained credit for its required findings and merge recommendation, but rejected
+the asserted leakage through existing callers: the delivered review says those
+callers now leak credential material without evidence establishing their
+existence or behavior. Independent inspection confirmed this wording in the
+original visible capture 093. Control c was rejected specifically for asserting
+third-party log forwarding; control b's explicitly conditional version passed.
+Control d failed required detection while retaining credit for its supported
+credential finding and accurate uncertainty.
+
+The assessor's reasoning was not wholly accurate. Its account-data criticism
+includes an ambiguously conditional SSO phrase. It praises a driver hedge even
+though the review later says the defect stands regardless, and repeats
+unsupported storage and login-outcome claims elsewhere. The definite
+existing-callers assertion is sufficient for the grounding failure without
+relying on those weaker explanations. This caught a material grounding defect;
+it did not identify every unsupported claim correctly. Control b also uses
+conspicuous conditional wording and does not test subtler hedges.
+
+The narrow promotion gate is met. Added exactly the calibrated fourth criterion
+to the active `conversation-code-review/story.md`; no assessor system prompt,
+runtime, generic grading interface, or original report changed. The constructed
+controls ran only under the revised rubric, so they establish the intended
+distinctions once, not improvement over baseline on those controls or general
+assessor reliability.
+
+Total priced assessment cost was **$0.3931902**. Summed assessment duration was
+225.446 seconds, running sequentially. The revised pair of real reviews cost
+$0.1810025 versus $0.0785168 for the fresh baseline pair. Those are one-shot
+observations, not a performance estimate; clearer grading was not free.
+
+Standard Gauntlet results, evidence logs, and usage sidecars remain under:
+`/srv/quorum/pilots/conversation-assessment/calibration/review-grounding-20260908T041449Z/out/`.
+`outcomes.json` maps each case to its standard run ID and records costs and
+criterion grades. The sibling appliance directory retains the input receipt,
+owner record, operator log, and before/after doctor receipts. Selected results
+are copied to ignored local `results/review-grounding-calibration/` for review.
+No raw transcripts or credential material were committed.
+
+After completion, all original evidence-index bytes, indexed evidence, verdicts,
+and private rubrics matched their recorded hashes; calibration inputs also
+matched their pre-launch hashes. No calibration process or shared spend lock
+remained. The temporary operator file was removed. Both appliance doctors were
+healthy, and canonical and pilot Q/G/S checkouts were clean at the same refs.
+No new coding-agent run was launched. The promoted scenario remains a local,
+unpushed branch change; the installed pilot source was not updated.
+
+Local validation after promotion: `bun run quorum check` passed scenarios,
+credentials, and arms/suites; all three conversation-input tests passed; the
+projected private rubric matched the calibrated rubric byte for byte; and
+`git diff --check` passed. The one-off operator script separately passed strict
+TypeScript checking and Bun import bundling before execution. Independent
+reviews accepted the frozen case design, operator safeguards, and narrow
+promotion decision after inspecting the delivered Claude capture.
