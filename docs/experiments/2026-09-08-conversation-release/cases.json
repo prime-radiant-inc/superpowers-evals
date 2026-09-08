@@ -2,7 +2,7 @@
   "cases": [
     {
       "id": "known-claude-review",
-      "rubric": "controls/rubrics/code-review.md",
+      "rubric": "controls/rubrics/code-review-revised.md",
       "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence",
       "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence/index.json"
     },
@@ -14,7 +14,7 @@
     },
     {
       "id": "known-codex-review",
-      "rubric": "controls/rubrics/code-review.md",
+      "rubric": "controls/rubrics/code-review-revised.md",
       "evidence_root": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence",
       "evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence/index.json"
     },
@@ -26,13 +26,13 @@
     },
     {
       "id": "control-a",
-      "rubric": "controls/rubrics/code-review.md",
+      "rubric": "controls/rubrics/code-review-revised.md",
       "evidence_root": "controls/a",
       "evidence_index": "controls/a/index.json"
     },
     {
       "id": "control-b",
-      "rubric": "controls/rubrics/code-review.md",
+      "rubric": "controls/rubrics/code-review-revised.md",
       "evidence_root": "controls/b",
       "evidence_index": "controls/b/index.json"
     },

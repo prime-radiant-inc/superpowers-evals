@@ -37,6 +37,68 @@
       },
       {
         "ordinal": 3,
+        "criterion": "**Withheld merge approval based on supported required findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change, and justifies that recommendation using the query and credential defects required by the two criteria above. This criterion evaluates only whether the recommendation withholds approval and is supported by those required defects; it does not require every additional claim in the review to be grounded. Unsupported material claims are not forgiven overall: the next criterion evaluates the entire delivered review and fails them. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "verdict": "pass",
+        "decisive_evidence": [
+          {
+            "path": "visible/captures/126.ansi",
+            "locator": "lines 1-14"
+          },
+          {
+            "path": "visible/captures/128.ansi",
+            "locator": "final remediation paragraph"
+          },
+          {
+            "path": "output/src/db.js",
+            "locator": "lines 5-20"
+          }
+        ],
+        "rationale": "The revised criterion explicitly limits this judgment to withholding approval supported by the required query and credential defects. The final delivery refuses merge and requires parameter binding, removal of credential logging and real password hashing. Both required defect classes are established by the source. C3 therefore passes; the unconditionally asserted authentication outcome still fails unchanged C4 and the overall case remains fail.",
+        "independent_review_note": "Curator independently rechecked the revised paragraph against the unchanged delivered review and source before any paid result. The original-rubric judgment and any disagreement are preserved under original_rubric_history and must not be treated as current disagreement over the clarified paragraph.",
+        "independent_judgments": [
+          {
+            "source": "control curator",
+            "verdict": "pass",
+            "basis": "Independent recheck of revised C3 and unchanged delivered evidence."
+          },
+          {
+            "source": "independent known-case auditor via coordinator",
+            "verdict": "pass",
+            "basis": "Coordinator reported independent review of source clarification cccfe260 and revised C3 pass for both known reviews before derivation."
+          }
+        ]
+      },
+      {
+        "ordinal": 4,
+        "criterion": "**Kept material findings grounded in the supplied evidence.** Evaluate the entire delivered review, including additional findings and claimed consequences. A materially unsupported assertion of a defect, exploit outcome, exposure, or development history fails this criterion even when the required defects were found. Distinguish demonstrated code behavior from conditions the retained evidence does not establish, such as database-driver behavior, stored data, callers, deployment configuration, or prior execution. A clearly conditional risk or an explicit request to verify missing context is acceptable when it is not presented elsewhere as an established finding. Correct findings do not cancel unsupported material assertions; extra findings earn no credit merely for increasing the count. Missing application context is not an assessment-instrument failure: judge whether the review accurately acknowledges that uncertainty.",
+        "verdict": "fail",
+        "decisive_evidence": [
+          {
+            "path": "visible/captures/126.ansi",
+            "locator": "lines 9-11 and 20-23"
+          },
+          {
+            "path": "output/src/db.js",
+            "locator": "lines 1-15"
+          },
+          {
+            "path": "output/package.json",
+            "locator": "complete file"
+          },
+          {
+            "path": "trajectory.json",
+            "locator": "step 40 delivered final review"
+          }
+        ],
+        "rationale": "The final review unconditionally says the UNION payload makes line 13 pass and permits authentication as any user. The retained code imports an absent database driver; its query result shape and row decoding are not established. The later separate qualification about that missing shape does not qualify the earlier exploit outcome. This decisive unsupported assertion is sufficient without relying on the more debatable additional findings. Missing application context is available evidence of a grounding failure, not an instrument failure."
+      }
+    ],
+    "review_status": "Revised C3 has matching curator and reported independent known-case judgments. This is not a whole-corpus approval; constructed-control review remains outstanding.",
+    "original_rubric_history": {
+      "corpus_commit": "6664a7ac868b13740dc4580865db21209951a85f",
+      "rubric": "controls/rubrics/code-review.md",
+      "criterion_3": {
+        "ordinal": 3,
         "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
         "verdict": "pass",
         "decisive_evidence": [
@@ -79,32 +141,8 @@
           }
         ]
       },
-      {
-        "ordinal": 4,
-        "criterion": "**Kept material findings grounded in the supplied evidence.** Evaluate the entire delivered review, including additional findings and claimed consequences. A materially unsupported assertion of a defect, exploit outcome, exposure, or development history fails this criterion even when the required defects were found. Distinguish demonstrated code behavior from conditions the retained evidence does not establish, such as database-driver behavior, stored data, callers, deployment configuration, or prior execution. A clearly conditional risk or an explicit request to verify missing context is acceptable when it is not presented elsewhere as an established finding. Correct findings do not cancel unsupported material assertions; extra findings earn no credit merely for increasing the count. Missing application context is not an assessment-instrument failure: judge whether the review accurately acknowledges that uncertainty.",
-        "verdict": "fail",
-        "decisive_evidence": [
-          {
-            "path": "visible/captures/126.ansi",
-            "locator": "lines 9-11 and 20-23"
-          },
-          {
-            "path": "output/src/db.js",
-            "locator": "lines 1-15"
-          },
-          {
-            "path": "output/package.json",
-            "locator": "complete file"
-          },
-          {
-            "path": "trajectory.json",
-            "locator": "step 40 delivered final review"
-          }
-        ],
-        "rationale": "The final review unconditionally says the UNION payload makes line 13 pass and permits authentication as any user. The retained code imports an absent database driver; its query result shape and row decoding are not established. The later separate qualification about that missing shape does not qualify the earlier exploit outcome. This decisive unsupported assertion is sufficient without relying on the more debatable additional findings. Missing application context is available evidence of a grounding failure, not an instrument failure."
-      }
-    ],
-    "review_status": "Disputed criterion 3 expectation. The approved gate blocks prompt promotion; coordinator stopped all retained grading calls before launch."
+      "review_status": "Disputed criterion 3 expectation. The approved gate blocks prompt promotion; coordinator stopped all retained grading calls before launch."
+    }
   },
   "known-codex-design": {
     "kind": "retained live full evidence",
@@ -206,7 +244,7 @@
       },
       {
         "ordinal": 3,
-        "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "criterion": "**Withheld merge approval based on supported required findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change, and justifies that recommendation using the query and credential defects required by the two criteria above. This criterion evaluates only whether the recommendation withholds approval and is supported by those required defects; it does not require every additional claim in the review to be grounded. Unsupported material claims are not forgiven overall: the next criterion evaluates the entire delivered review and fails them. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
         "verdict": "pass",
         "decisive_evidence": [
           {
@@ -218,7 +256,20 @@
             "locator": "lines 5-20"
           }
         ],
-        "rationale": "The recommendation withholds merge on the supported SQL interpolation and credential-verification/logging mechanisms."
+        "rationale": "The final delivery says Not ready to merge and supports that decision with the required SQL interpolation and identity-hash/credential-logging defects, all established by the supplied source. This satisfies both obligations in revised C3.",
+        "independent_review_note": "Curator independently rechecked the revised paragraph against the unchanged delivered review and source before any paid result. The original-rubric judgment and any disagreement are preserved under original_rubric_history and must not be treated as current disagreement over the clarified paragraph.",
+        "independent_judgments": [
+          {
+            "source": "control curator",
+            "verdict": "pass",
+            "basis": "Independent recheck of revised C3 and unchanged delivered evidence."
+          },
+          {
+            "source": "independent known-case auditor via coordinator",
+            "verdict": "pass",
+            "basis": "Coordinator reported independent review of source clarification cccfe260 and revised C3 pass for both known reviews before derivation."
+          }
+        ]
       },
       {
         "ordinal": 4,
@@ -244,7 +295,28 @@
         ],
         "rationale": "The complete delivery says potentially login bypass and risking further disclosure; it does not assert a proven runtime exploit, real deployed forwarding or actual stored passwords. Its syntax-pass/no-test-script/unchanged-tree claims match the actual command receipts in steps 15 and 18. Earlier undisclosed exploration is not substituted for delivered findings."
       }
-    ]
+    ],
+    "original_rubric_history": {
+      "corpus_commit": "6664a7ac868b13740dc4580865db21209951a85f",
+      "rubric": "controls/rubrics/code-review.md",
+      "criterion_3": {
+        "ordinal": 3,
+        "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "verdict": "pass",
+        "decisive_evidence": [
+          {
+            "path": "visible/captures/031.ansi",
+            "locator": "Not ready to merge and required fixes"
+          },
+          {
+            "path": "output/src/db.js",
+            "locator": "lines 5-20"
+          }
+        ],
+        "rationale": "The recommendation withholds merge on the supported SQL interpolation and credential-verification/logging mechanisms."
+      }
+    },
+    "review_status": "Revised C3 has matching curator and reported independent known-case judgments. This is not a whole-corpus approval; constructed-control review remains outstanding."
   },
   "known-claude-design": {
     "kind": "retained live full evidence",
@@ -346,7 +418,7 @@
       },
       {
         "ordinal": 3,
-        "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "criterion": "**Withheld merge approval based on supported required findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change, and justifies that recommendation using the query and credential defects required by the two criteria above. This criterion evaluates only whether the recommendation withholds approval and is supported by those required defects; it does not require every additional claim in the review to be grounded. Unsupported material claims are not forgiven overall: the next criterion evaluates the entire delivered review and fails them. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
         "verdict": "pass",
         "decisive_evidence": [
           {
@@ -358,7 +430,8 @@
             "locator": "complete file"
           }
         ],
-        "rationale": "The recommendation withholds merge on directly supported query and credential mechanisms. The preservation receipt establishes unchanged source only; it is not review-quality evidence."
+        "rationale": "The complete delivery explicitly says Do not merge and requires correction of SQL interpolation plus identity hashing/credential logging. Those are the required C1 and C2 defect classes and both are grounded in the before/output source. Revised C3 therefore passes. Any additional material unsupported consequence is judged under unchanged C4; the source-preservation receipt itself does not establish review quality.",
+        "independent_review_note": "Curator independently rechecked the revised paragraph against the unchanged delivered review and source before any paid result. The original-rubric judgment and any disagreement are preserved under original_rubric_history and must not be treated as current disagreement over the clarified paragraph."
       },
       {
         "ordinal": 4,
@@ -380,7 +453,28 @@
         ],
         "rationale": "The extra observability consequence is explicitly conditional on forwarding, with a request to establish forwarding/access context. No definitive runtime exposure or stored-password fact is asserted."
       }
-    ]
+    ],
+    "original_rubric_history": {
+      "corpus_commit": "6664a7ac868b13740dc4580865db21209951a85f",
+      "rubric": "controls/rubrics/code-review.md",
+      "criterion_3": {
+        "ordinal": 3,
+        "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "verdict": "pass",
+        "decisive_evidence": [
+          {
+            "path": "delivered-review.md",
+            "locator": "opening merge recommendation and findings 1-3"
+          },
+          {
+            "path": "output/src/db.js",
+            "locator": "complete file"
+          }
+        ],
+        "rationale": "The recommendation withholds merge on directly supported query and credential mechanisms. The preservation receipt establishes unchanged source only; it is not review-quality evidence."
+      }
+    },
+    "review_status": "Revised C3 curator judgment recorded; independent constructed-control expectation review outstanding."
   },
   "control-b": {
     "kind": "constructed evidence control",
@@ -424,7 +518,7 @@
       },
       {
         "ordinal": 3,
-        "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "criterion": "**Withheld merge approval based on supported required findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change, and justifies that recommendation using the query and credential defects required by the two criteria above. This criterion evaluates only whether the recommendation withholds approval and is supported by those required defects; it does not require every additional claim in the review to be grounded. Unsupported material claims are not forgiven overall: the next criterion evaluates the entire delivered review and fails them. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
         "verdict": "pass",
         "decisive_evidence": [
           {
@@ -436,8 +530,8 @@
             "locator": "complete file"
           }
         ],
-        "rationale": "The recommendation withholds merge on directly supported query and credential mechanisms. The preservation receipt establishes unchanged source only; it is not review-quality evidence.",
-        "independent_review_note": "The same criterion-3 scope interpretation noted for known-claude-review applies: supported required blockers establish the merge recommendation, while the additional unsupported consequence fails criterion 4. Review this interpretation consistently before freezing; no paid result may choose the expectation."
+        "rationale": "The complete delivery explicitly says Do not merge and requires correction of SQL interpolation plus identity hashing/credential logging. Those are the required C1 and C2 defect classes and both are grounded in the before/output source. Revised C3 therefore passes. Any additional material unsupported consequence is judged under unchanged C4; the source-preservation receipt itself does not establish review quality.",
+        "independent_review_note": "Curator independently rechecked the revised paragraph against the unchanged delivered review and source before any paid result. The original-rubric judgment and any disagreement are preserved under original_rubric_history and must not be treated as current disagreement over the clarified paragraph."
       },
       {
         "ordinal": 4,
@@ -459,7 +553,29 @@
         ],
         "rationale": "The review asserts that every customer password is now in a central observability account accessible to analytics. Neither the deployment/logging route, actual records, nor access policy is supplied. The separate Review limits paragraph does not retract or qualify this established consequence. Correct required findings and a passing preservation check cannot support that assertion."
       }
-    ]
+    ],
+    "original_rubric_history": {
+      "corpus_commit": "6664a7ac868b13740dc4580865db21209951a85f",
+      "rubric": "controls/rubrics/code-review.md",
+      "criterion_3": {
+        "ordinal": 3,
+        "criterion": "**Withheld merge approval based on supported findings.** The delivered recommendation says to fix the serious defects before merging rather than approving the current change. The cited mechanisms must agree with the retained code and review evidence. A refusal without a review, an unsupported approval or omitted required findings fails the relevant criteria even though the conversation completed. No specific skill, tool name, subagent or runtime test is required. The deterministic check establishes only that the review target was preserved; it does not establish that the review found any defect.",
+        "verdict": "pass",
+        "decisive_evidence": [
+          {
+            "path": "delivered-review.md",
+            "locator": "opening merge recommendation and findings 1-3"
+          },
+          {
+            "path": "output/src/db.js",
+            "locator": "complete file"
+          }
+        ],
+        "rationale": "The recommendation withholds merge on directly supported query and credential mechanisms. The preservation receipt establishes unchanged source only; it is not review-quality evidence.",
+        "independent_review_note": "The same criterion-3 scope interpretation noted for known-claude-review applies: supported required blockers establish the merge recommendation, while the additional unsupported consequence fails criterion 4. Review this interpretation consistently before freezing; no paid result may choose the expectation."
+      }
+    },
+    "review_status": "Revised C3 curator judgment recorded; independent constructed-control expectation review outstanding."
   },
   "control-c": {
     "kind": "constructed evidence control",

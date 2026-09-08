@@ -1,0 +1,48 @@
+{
+  "kind": "revised-rubric replay; not reproduction of original grades",
+  "authorization": "Drew directed fixing the pre-call C3 ambiguity; coordinator approved one paragraph clarified in source commit and independently reviewed before derivation. No paid results exist.",
+  "original_corpus_commit": "6664a7ac868b13740dc4580865db21209951a85f",
+  "source_story_commit": "cccfe260c213e6673e655630cfbe0861b07a7a89",
+  "source_story_path": "scenarios/conversation-code-review/story.md",
+  "source_story_sha256": "7e4f9908abff5ce6f3604a26f43686a604d28e5cb73815e8e1941ab7e437036c",
+  "original_rubric": {
+    "path": "controls/rubrics/code-review.md",
+    "sha256": "10a5e8dab90e103dca87d9c9f61ee0cee3a2db03a9ff54bf002bfcbe7b3d8743"
+  },
+  "revised_rubric": {
+    "path": "controls/rubrics/code-review-revised.md",
+    "sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794"
+  },
+  "exact_diff": {
+    "path": "controls/revised-review/rubric.diff",
+    "sha256": "38db870171e6cbb43127749d27a775997f85ed83cb6bf8445d2e3cc257aeeb61"
+  },
+  "changed_criterion_ordinal": 3,
+  "changed_rubric_line_1_based": 18,
+  "affected_case_ids": [
+    "known-claude-review",
+    "known-codex-review",
+    "control-a",
+    "control-b"
+  ],
+  "known_source_derivations": [
+    {
+      "id": "known-claude-review",
+      "original_rubric": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/conversation-input/rubric.md",
+      "original_sha256": "10a5e8dab90e103dca87d9c9f61ee0cee3a2db03a9ff54bf002bfcbe7b3d8743",
+      "derived_sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794",
+      "original_evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence/index.json",
+      "index_sha256": "07ae7d3340f5943060327150f79811ad52171cca4c3ec0c27c138d2d0f0cbd26"
+    },
+    {
+      "id": "known-codex-review",
+      "original_rubric": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/conversation-input/rubric.md",
+      "original_sha256": "10a5e8dab90e103dca87d9c9f61ee0cee3a2db03a9ff54bf002bfcbe7b3d8743",
+      "derived_sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794",
+      "original_evidence_index": "/srv/quorum/superpowers-evals/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence/index.json",
+      "index_sha256": "9bc831a00629e0bc6029632c78cc1f256b0210deba3cca63f561f6518036fbc0"
+    }
+  ],
+  "preserved": "Original full evidence indexes, every evidence file, original rubric copies, C1/C2/C4, six other cases, and original dispute history remain unchanged. Baseline and candidate use identical derived rubric bytes.",
+  "gate_status": "Independent constructed-control review still required; no full corpus gate or provider replay authorized by this artifact."
+}

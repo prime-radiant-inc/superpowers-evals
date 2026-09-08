@@ -1,0 +1,34 @@
+{
+  "kind": "revised-rubric replay contract validation; no provider calls",
+  "original_corpus_commit": "6664a7ac868b13740dc4580865db21209951a85f",
+  "reviewed_source_commit": "cccfe260c213e6673e655630cfbe0861b07a7a89",
+  "original_artifact_files_hash_checked": 72,
+  "known_evidence_index_rubric_files_hash_checked": 578,
+  "index_validation": {
+    "argv": [
+      "bun",
+      "-e",
+      "import { readFileSync, readdirSync } from \"node:fs\";\nimport { resolve, basename, join } from \"node:path\";\nimport { parseEvidenceIndex, validateEvidenceIndex } from \"/Users/drewritter/prime-rad/gauntlet/.worktrees/conversation-assessment/src/context/scoped-read.ts\";\nconst dir = resolve(\"docs/experiments/2026-09-08-conversation-release\");\nconst cases = JSON.parse(readFileSync(join(dir,\"cases.json\"),\"utf8\")).cases;\nconst expected = JSON.parse(readFileSync(join(dir,\"expected.json\"),\"utf8\"));\nconst originalReview = readFileSync(join(dir,\"controls/rubrics/code-review.md\"),\"utf8\");\nconst revisedReview = readFileSync(join(dir,\"controls/rubrics/code-review-revised.md\"),\"utf8\");\nconst originalLines = originalReview.split(\"\\n\");\nconst revisedLines = revisedReview.split(\"\\n\");\nconst changed = originalLines.flatMap((line,index)=>line===revisedLines[index]?[]:[index]);\nconst criterionLines = originalLines.flatMap((line,index)=>line.startsWith(\"- \")?[index]:[]);\nif(originalLines.length!==revisedLines.length || changed.length!==1 || changed[0]!==criterionLines[2]) throw new Error(\"Derivation changed more than C3\");\nlet total = 0;\nfor (const row of cases) {\n const retained = row.evidence_root.startsWith(\"/srv/\");\n const root = retained ? join(\"/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-release/known\", basename(resolve(row.evidence_root,\"..\")),\"evidence\") : resolve(dir,row.evidence_root);\n const indexFile = retained ? join(root,\"index.json\") : resolve(dir,row.evidence_index);\n const index = parseEvidenceIndex(JSON.parse(readFileSync(indexFile,\"utf8\")));\n validateEvidenceIndex(root,index);\n for (const file of index.files) if (/(^|\\/)(expected\\.json|rubric[^/]*\\.md|rubrics|revised-review|conversation-input|gauntlet-agent|result\\.(json|md)|corpus-manifest\\.json)(\\/|$)/.test(file)) throw new Error(\"Private assessment input indexed: \"+file);\n for (const c of expected[row.id].criteria) for (const decisive of c.decisive_evidence) if (!index.files.includes(decisive.path)) throw new Error(row.id+\" decisive path absent: \"+decisive.path);\n const rubric = readFileSync(resolve(dir,row.rubric),\"utf8\");\n if (expected[row.id].criteria.length !== rubric.split(\"\\n\").filter(line => line.startsWith(\"- \")).length) throw new Error(\"Criterion count mismatch\");\n for (const c of expected[row.id].criteria) if (!rubric.includes(c.criterion)) throw new Error(\"Criterion bytes differ\");\n if (retained) {\n  const original = readFileSync(resolve(root,\"../conversation-input/rubric.md\"),\"utf8\");\n  const derived = row.rubric.endsWith(\"code-review-revised.md\") ? original.replace(originalLines[changed[0]],revisedLines[changed[0]]) : original;\n  if(rubric!==derived) throw new Error(\"Known original-to-replay derivation differs\");\n }\n if (!retained) { const actual = readdirSync(root,{recursive:true,withFileTypes:true}).filter(e=>e.isFile()).map(e=>resolve(e.parentPath,e.name).slice(root.length+1)).filter(p=>p!==\"index.json\").sort(); if (JSON.stringify(actual)!==JSON.stringify(index.files)) throw new Error(\"Constructed index omits a file\"); }\n total += index.files.length;\n console.log(row.id+\": index valid (\"+index.files.length+\" files), applicable rubric and decisive paths match\");\n}\nconsole.log(\"Validated \"+cases.length+\" indexes / \"+total+\" indexed files; only review C3 differs from original rubrics.\");"
+    ],
+    "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls",
+    "started_at": "2026-09-08T08:13:51.928414+00:00",
+    "finished_at": "2026-09-08T08:13:51.970549+00:00",
+    "exit_code": 0,
+    "stdout": "known-claude-review: index valid (271 files), applicable rubric and decisive paths match\nknown-codex-design: index valid (72 files), applicable rubric and decisive paths match\nknown-codex-review: index valid (71 files), applicable rubric and decisive paths match\nknown-claude-design: index valid (156 files), applicable rubric and decisive paths match\ncontrol-a: index valid (7 files), applicable rubric and decisive paths match\ncontrol-b: index valid (7 files), applicable rubric and decisive paths match\ncontrol-c: index valid (6 files), applicable rubric and decisive paths match\ncontrol-d: index valid (6 files), applicable rubric and decisive paths match\ncontrol-e: index valid (18 files), applicable rubric and decisive paths match\ncontrol-f: index valid (18 files), applicable rubric and decisive paths match\nValidated 10 indexes / 632 indexed files; only review C3 differs from original rubrics.\n",
+    "stderr": ""
+  },
+  "source_projection_sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794",
+  "assertions": [
+    "exactly four base rows redirect only their rubric field; six other rows and expectations unchanged",
+    "only review C3 changes; source-projected rubric equals the independently derived rubric for each original known review",
+    "C1/C2/C4 criterion records and all 34 curator verdicts/10 overall verdicts are unchanged",
+    "all affected original C3 judgments and the original dispute are preserved in original_rubric_history",
+    "every original constructed evidence file, index, rubric, offline receipt and validation receipt matches the prior committed corpus hash",
+    "all 570 real indexed files, four original indexes and four original rubrics match the prior committed manifest",
+    "all ten current indexes validate and every decisive evidence path is indexed; private derivation/expectation/rubric/report files excluded",
+    "scenario source in this corpus branch is unchanged",
+    "all six current independent oracle and scoped evidence validator source files match original validation hashes"
+  ],
+  "offline_oracle_scope": "No oracle rerun needed: only the measurement paragraph changed; every original output, indexed execution receipt, independent oracle source identity and prior validation receipt remains byte-identical. The twelve original offline rechecks remain historical receipts, not new execution.",
+  "oracle_and_validator_source_files_hash_checked": 6
+}

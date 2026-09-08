@@ -4,13 +4,13 @@
     "files": [
       {
         "path": "README.md",
-        "sha256": "d050e0203a61ead187dfe74292dd3b65020f3bacad79d9024381787e447855b1",
-        "bytes": 6599
+        "sha256": "a969011007c6fda95977969e2270767c50d163ee6e405e26526371fa8734bad8",
+        "bytes": 8650
       },
       {
         "path": "cases.json",
-        "sha256": "e641f2b74105cd50466c19e672aa177186b8a8788f3f33f85192f97ead951f0a",
-        "bytes": 2672
+        "sha256": "c7db8e8dd72a118eaa8b6d152cf7d75eee8f29b535d6def69763848a3f806503",
+        "bytes": 2704
       },
       {
         "path": "controls/a/before/src/db.js",
@@ -353,6 +353,26 @@
         "bytes": 578
       },
       {
+        "path": "controls/revised-review/derivation.json",
+        "sha256": "160bcbeec5523039ac4f39e772db04a05db1ca394d3b5a23d09d959d307b37a3",
+        "bytes": 2981
+      },
+      {
+        "path": "controls/revised-review/rubric.diff",
+        "sha256": "38db870171e6cbb43127749d27a775997f85ed83cb6bf8445d2e3cc257aeeb61",
+        "bytes": 3160
+      },
+      {
+        "path": "controls/revised-review/validation.json",
+        "sha256": "e1063a84feeb1075436bef747d82a47163c4f24ef2171433645a8773442866c3",
+        "bytes": 6585
+      },
+      {
+        "path": "controls/rubrics/code-review-revised.md",
+        "sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794",
+        "bytes": 3331
+      },
+      {
         "path": "controls/rubrics/code-review.md",
         "sha256": "10a5e8dab90e103dca87d9c9f61ee0cee3a2db03a9ff54bf002bfcbe7b3d8743",
         "bytes": 2969
@@ -374,8 +394,8 @@
       },
       {
         "path": "expected.json",
-        "sha256": "4555c8fd96cf3995a11faf87cacc98e6492560765e3b22f6299f7df28a91c30e",
-        "bytes": 43660
+        "sha256": "abcbb006a625cf57160fd8d26b7bdcee7308fb7d1a900c20a1f67c1012962afe",
+        "bytes": 54430
       }
     ],
     "retained": [
@@ -3295,5 +3315,5 @@
       }
     ]
   },
-  "corpus_sha256": "4158d34259e346f8f32cfc3e97e66df01b13dcd19d7f41d36c87ea2c68b2da45"
+  "corpus_sha256": "40f6ed194f9c62fae0e975b46f2e7278176dedfa96a3d43c198016441ca5cb57"
 }
