@@ -24,19 +24,24 @@ pricing paths.
   `6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b`
 - Pricing snapshot date: `2026-09-06`
 
-The candidate and the local cherry-picked probe checkout had the same Git tree.
-The candidate source was staged in the probe-owned directory. The canonical
-checkout and its dependency tree were mounted read-only; the only added source
-file was the dated probe.
+The operator observed that the candidate and local cherry-picked probe checkout
+had the same Git tree, then staged the candidate in the probe-owned directory.
+The operator also reported mounting the canonical checkout and dependency tree
+read-only and adding only the dated probe. No separate source-tree or mount
+provenance artifact was retained.
 
 ## Result
 
-The generated launcher was 345 bytes beyond Pi's old encoded working-directory
-component limit and had SHA-256
+Pi's old encoded working-directory component would have been 345 bytes total,
+90 bytes beyond the 255-byte component limit. The generated launcher had SHA-256
 `2c2948915eb57b72cce8b19f8e564ef7bf9be73cc90b62d72211ff8287c91b06`.
 It opened the interactive Pi 0.80.7 TUI at the deep working directory, accepted
 `Please reply with a short greeting.`, and displayed
 `Hello from the offline Pi probe.` The TUI showed `↑120 ↓25 R5`.
+The screen capture is retained separately at
+`results/conversation-startup-evidence/pi-installed-probe/final-bounded-screen.ansi`
+with SHA-256
+`6b180d85d1c57e304514d1e29bc89692247d822f3b94a4c0ff578132377fce01`.
 
 Pi wrote session `01a08355-b1e7-7a4a-8468-fae469eb7ca4` only under the
 explicit private session directory. The native user and assistant timestamps were
@@ -126,12 +131,21 @@ That result is retained privately but is not the gate evidence. The final run
 above used `/usr/bin/timeout --signal=TERM --kill-after=5s 150s`; its runtime
 receipt records that exact executable and argument vector.
 
-Raw native session, trajectory, usage, TUI, and runtime artifacts are retained
-under the ignored local
+Raw native session, trajectory, usage, and runtime artifacts are retained under
+the ignored local
 `results/conversation-startup-evidence/pi-installed-probe/final-bounded-private/`
 directory. This note excludes the private session and dummy credential files.
 The probe did not read or project the appliance credential bundle.
 
-After that copy, the operator removed the stopped probe container and only the
-two probe-owned temporary directories. The cleanup receipt reported
-`container_count=0` and `probe_directories=absent`.
+After that copy, the retained cleanup receipt reported exactly:
+
+```text
+container_count=0
+probe_directory=absent
+run_lock_count=151
+```
+
+The lock count covered historical lock files under `/srv/quorum`; none are
+attributed to this probe. The operator also observed that the earlier probe
+directory was absent and the base image remained installed, but did not retain
+those two checks in a separate artifact.
