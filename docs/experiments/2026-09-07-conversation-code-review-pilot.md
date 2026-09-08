@@ -1,7 +1,9 @@
 # Conversation-mode code review pilot
 
-Status: Drew approved the next planted-bug review proof with "sgtm". Scenario
-and suite prepared and independently reviewed; live execution pending.
+Status: completed the two attempts approved by Drew with "sgtm". Both published
+passes with complete evidence and costs. Independent inspection found a material
+assessment limitation: Claude's review included unsupported claims that its
+assessor did not flag. The original report is retained unchanged.
 
 ## Question and scope
 
@@ -77,7 +79,108 @@ suite, oracle and test; the reviewer did not rerun root's checks.
 
 Appliance preflight: the installed helper's doctor passed, no shared spend lock
 or attempt containers were present, and the three isolated source checkouts
-were clean at their previous pilot pins. No paid model call has started yet.
+were clean at their previous pilot pins. Transferred the committed source via
+a Git bundle and fast-forwarded only the isolated Evals checkout; appliance
+source validation passed.
 
-Live campaign identity, results, standard-report pointers, costs, independent
-evidence inspection and final cleanup will be recorded here after execution.
+Campaign 6b066da6-66c6-4672-9887-c3db958b64f7 registered and launched through
+the installed helper. Quorum source is
+5ec5784fb06655c07b8cd3f9d7c4390a987e9155; Gauntlet and Superpowers pins match
+those above. Registration confirms exactly two planned slots, no reserves,
+cap 2 and the expected model routes. Attempts are
+c1:conversation-code-review:conversation_claude:r1:a1 and
+c2:conversation-code-review:conversation_codex:r1:a1.
+
+### Live result
+
+Both attempts completed delivery, passed all three assessment criteria and the
+source-preservation checks, and published with publication_valid true,
+analysis_usable true and no missingness. Both role processes exited zero and
+all started-role usage is priced. There were no retries, replacements, instrument
+errors or runtime changes during the pilot.
+
+| Harness | Published run suffix (20260908) | Worker seconds | Subject USD | User USD | Assessor USD | Campaign-accounted total USD |
+|---|---|---:|---:|---:|---:|---:|
+| Claude | T032929Z-1138 | 305.919 | 0.99881575 | 1.1804866 | 0.0643252 | 2.24362775 |
+| Codex | T032930Z-eaf9 | 151.055 | 0.2634324 | 0.2078388 | 0.0332888 | 0.50456040 |
+| Total | — | 456.974 | 1.26224815 | 1.3883254 | 0.0976140 | **2.74818815** |
+
+Role totals have their own rounding; the last column uses the unchanged
+standard campaign accounting. These are frozen-pricing estimates, not invoices.
+The campaign ran 03:29:28.085–03:34:47.046 UTC on September 8, **318.961
+seconds**. Both conversation phases overlapped for **132.551 seconds**.
+Conversation/assessment durations were 285.292/19.825 seconds for Claude and
+132.551/17.779 seconds for Codex. Each assessor began after its own conversation
+ended. No speed or model ranking is justified from these two observations.
+
+Codex used gpt-5.6-sol high without a secondary-model session. Claude's lead and
+captured review subagent both used claude-opus-5. Both native captures contain
+Superpowers context. The captured output of both runs contains only package.json
+and src/db.js; the review-target SHA-256 matches the unchanged fixture:
+89d327d35e468272115f40b2f0b995a5b279ce61d5436701d7ca768913dcc6f0.
+
+### Independent inspection and negative finding
+
+Root and the independent reviewer inspected the delivered reviews, actor
+exchange, underlying source and assessments. Both actors supplied the exact
+review request without defect coaching or follow-up repair requests.
+
+Codex's final visible capture 033 and trajectory step 20 deliver the required
+SQL-injection and credential findings with concrete file locations and a
+"Not ready to merge" recommendation. Trajectory steps 11 and 19 retain the
+actual before/after diff, supporting the parameterization-regression claim.
+Its assessment cites the delivered review and code accurately; it does not
+substitute the preservation check for review quality. This pass is supportable.
+
+Claude's captures 092–094 and trajectory step 17 also deliver the required
+planted findings and withhold merge approval. However, its ten-finding review
+contains material overclaims:
+
+- It assumes db.query returns an array, acknowledges the driver is absent,
+  then says the resulting authentication bypass "stands regardless." A driver
+  returning a row or null defeats that inference.
+- It assumes SSO/passwordless null-password rows and downstream callers that
+  are not present in the fixture.
+- Plaintext comparison does not establish how passwords are stored, and a
+  missing driver does not establish that the commit was never executed.
+- SQL injection changes the constructed query; saying login necessarily
+  returns every row ignores its subsequent password check.
+
+The assessor correctly cites the required detections, but fails to flag those
+unsupported claims and broadly says the findings match the code. That is too
+permissive under the rubric's supported-findings language. The publication and
+capture are operationally valid; the published PASS establishes required-defect
+detection, not ten verified defects or an entirely accurate review. This is an
+assessment-quality finding, not missing evidence or a reason to rerun the
+harness. Neither the grading record nor the rubric was silently changed after
+the result was seen.
+
+This follow-up therefore establishes a second live deliverable type through the
+same core engine and exposes a useful next target: calibrate assessment on
+retained reviews containing both true findings and unsupported claims. The
+positive detections must not excuse invented facts. That calibration is a
+proposed next step, not another authorized paid run in this pilot. Broader
+harness coverage, a live refusal/bad-delivery test and sustained throughput
+remain unproved.
+
+### Evidence and cleanup
+
+Standard report.json/report.md and campaign records are at:
+/srv/quorum/pilots/conversation-assessment/superpowers-evals/campaigns/6b066da6-66c6-4672-9887-c3db958b64f7-conversation_code_review/.
+Published run directories under the appliance's results/ are:
+
+- conversation-code-review-claude-opus5_bedrock-linux-20260908T032929Z-1138
+- conversation-code-review-codex-openai_responses_56sol-linux-20260908T032930Z-eaf9
+
+Operation receipts are in the same pilot root under receipts/review-*. Selected
+standard reports and per-run verdict/conversation/role JSON are copied to the
+ignored local results/conversation-code-review-pilot/ directory. Generated
+reports are unmodified; native transcripts remain on the trusted appliance.
+No credential HOME or raw transcript was added to Git.
+
+The final standard report records completed, complete and termination_verified.
+Only the preexisting base container remained; no attempt containers or shared
+spend lock remained. Canonical Q/G/S checkouts were clean and retained their
+original revisions (6c215603, 588a81e8, fd02874a). The isolated Evals source was
+clean at 5ec5784f. Local scenario and experiment commits remain unpushed and
+unmerged. No work beyond the two declared attempts was launched.
