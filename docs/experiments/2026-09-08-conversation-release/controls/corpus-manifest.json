@@ -354,18 +354,18 @@
       },
       {
         "path": "controls/revised-review/derivation.json",
-        "sha256": "160bcbeec5523039ac4f39e772db04a05db1ca394d3b5a23d09d959d307b37a3",
+        "sha256": "9fdf1483aaaab34c30fffffa3fce62a7676bc76aeb7d058e469978c620817dee",
         "bytes": 2981
       },
       {
         "path": "controls/revised-review/rubric.diff",
-        "sha256": "38db870171e6cbb43127749d27a775997f85ed83cb6bf8445d2e3cc257aeeb61",
-        "bytes": 3160
+        "sha256": "91b38deb13a781a0e4ec06f342a34445b9d8c6ccdd111bcfc4656c483c838861",
+        "bytes": 1668
       },
       {
         "path": "controls/revised-review/validation.json",
-        "sha256": "e1063a84feeb1075436bef747d82a47163c4f24ef2171433645a8773442866c3",
-        "bytes": 6585
+        "sha256": "47c585d196d5ed838878209b755e481582d0c0d23bf9f20de393e80c3942227e",
+        "bytes": 7426
       },
       {
         "path": "controls/rubrics/code-review-revised.md",
@@ -3315,5 +3315,5 @@
       }
     ]
   },
-  "corpus_sha256": "40f6ed194f9c62fae0e975b46f2e7278176dedfa96a3d43c198016441ca5cb57"
+  "corpus_sha256": "f4655b238a786610b57ed668b9cdb59261c9a4f940ed32739b149485c8c1cb1c"
 }

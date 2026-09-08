@@ -27,8 +27,25 @@
     "all 570 real indexed files, four original indexes and four original rubrics match the prior committed manifest",
     "all ten current indexes validate and every decisive evidence path is indexed; private derivation/expectation/rubric/report files excluded",
     "scenario source in this corpus branch is unchanged",
-    "all six current independent oracle and scoped evidence validator source files match original validation hashes"
+    "all six current independent oracle and scoped evidence validator source files match original validation hashes",
+    "standard patch applies the exact zero-context diff to reproduce the revised rubric bytes; no whitespace-check exceptions"
   ],
   "offline_oracle_scope": "No oracle rerun needed: only the measurement paragraph changed; every original output, indexed execution receipt, independent oracle source identity and prior validation receipt remains byte-identical. The twelve original offline rechecks remain historical receipts, not new execution.",
-  "oracle_and_validator_source_files_hash_checked": 6
+  "oracle_and_validator_source_files_hash_checked": 6,
+  "diff_application": {
+    "argv": [
+      "patch",
+      "--batch",
+      "-p0",
+      "-i",
+      "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/revised-review/rubric.diff"
+    ],
+    "cwd": "/var/folders/tr/340j5f7135d104xjncvt4kxr0000gn/T/release-control-diff-n3k79q99",
+    "started_at": "2026-09-08T08:16:32.178517+00:00",
+    "finished_at": "2026-09-08T08:16:32.185268+00:00",
+    "exit_code": 0,
+    "stdout": "patching file 'controls/rubrics/code-review.md'\n",
+    "stderr": "",
+    "result": "Applying the zero-context exact diff to the original rubric produces the derived rubric byte for byte."
+  }
 }

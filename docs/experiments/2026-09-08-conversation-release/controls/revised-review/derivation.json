@@ -15,7 +15,7 @@
   },
   "exact_diff": {
     "path": "controls/revised-review/rubric.diff",
-    "sha256": "38db870171e6cbb43127749d27a775997f85ed83cb6bf8445d2e3cc257aeeb61"
+    "sha256": "91b38deb13a781a0e4ec06f342a34445b9d8c6ccdd111bcfc4656c483c838861"
   },
   "changed_criterion_ordinal": 3,
   "changed_rubric_line_1_based": 18,
