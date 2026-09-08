@@ -213,3 +213,19 @@ for (const item of cases)
     expect(result.signal).toBe('SIGTERM');
     expect(readdirSync(f.scratch)).toEqual([]);
   });
+
+test('review oracle permits wall-clock logging when admission stays monotonic', () => {
+  const item = cases[1];
+  if (!item) throw new Error('review fixture missing');
+  const f = fixture(item.helper);
+  const path = join(f.output, item.file);
+  const good = item.fix(readFileSync(path, 'utf8'));
+  writeFileSync(
+    path,
+    good.replace(
+      'now = time.monotonic()',
+      'print(f"admission checked at {time.time()}")\n        now = time.monotonic()',
+    ),
+  );
+  expect(oracle(item.name, f).status).toBe(0);
+});

@@ -12,8 +12,10 @@ passed = False
 detail = ""
 try:
     now = [100.0]
+    # Wall time may be read for logging, but only monotonic progress should
+    # expire events. A wall-clock admission implementation stays stuck here.
     with patch("time.monotonic", side_effect=lambda: now[0]), patch(
-        "time.time", side_effect=AssertionError("wall clock used for elapsed time")
+        "time.time", return_value=1700000000.0
     ):
         limiter_class = importlib.import_module("ratelimit.limiter").SlidingWindowLimiter
         limiter = limiter_class(limit=3, window_seconds=60)
