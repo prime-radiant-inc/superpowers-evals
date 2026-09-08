@@ -1,0 +1,69 @@
+{
+  "claude-baseline": {
+    "overall": "observational",
+    "note": "Original frozen assessor passed 3/3. Do not require a fresh judge to reproduce the original error."
+  },
+  "codex-baseline": {
+    "overall": "pass",
+    "criteria": [
+      true,
+      true,
+      true
+    ]
+  },
+  "claude-grounding": {
+    "overall": "fail",
+    "criteria": [
+      true,
+      true,
+      null,
+      false
+    ],
+    "note": "Criterion 3 may also fail because the original wording includes support; criterion 4 must catch material unsupported claims."
+  },
+  "codex-grounding": {
+    "overall": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "sample-a": {
+    "overall": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "sample-b": {
+    "overall": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "sample-c": {
+    "overall": "fail",
+    "criteria": [
+      true,
+      true,
+      null,
+      false
+    ]
+  },
+  "sample-d": {
+    "overall": "fail",
+    "criteria": [
+      false,
+      true,
+      null,
+      true
+    ]
+  }
+}

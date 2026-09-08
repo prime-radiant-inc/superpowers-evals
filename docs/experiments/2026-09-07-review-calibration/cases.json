@@ -1,0 +1,52 @@
+{
+  "cases": [
+    {
+      "id": "claude-baseline",
+      "rubric": "rubric-baseline.md",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T032929Z-1138/evidence",
+      "evidence_index": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T032929Z-1138/evidence/index.json"
+    },
+    {
+      "id": "codex-baseline",
+      "rubric": "rubric-baseline.md",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T032930Z-eaf9/evidence",
+      "evidence_index": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T032930Z-eaf9/evidence/index.json"
+    },
+    {
+      "id": "claude-grounding",
+      "rubric": "rubric-grounding.md",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T032929Z-1138/evidence",
+      "evidence_index": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-claude-opus5_bedrock-linux-20260908T032929Z-1138/evidence/index.json"
+    },
+    {
+      "id": "codex-grounding",
+      "rubric": "rubric-grounding.md",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T032930Z-eaf9/evidence",
+      "evidence_index": "/srv/quorum/pilots/conversation-assessment/results/conversation-code-review-codex-openai_responses_56sol-linux-20260908T032930Z-eaf9/evidence/index.json"
+    },
+    {
+      "id": "sample-a",
+      "rubric": "rubric-grounding.md",
+      "evidence_root": "samples/a",
+      "evidence_index": "samples/a/index.json"
+    },
+    {
+      "id": "sample-b",
+      "rubric": "rubric-grounding.md",
+      "evidence_root": "samples/b",
+      "evidence_index": "samples/b/index.json"
+    },
+    {
+      "id": "sample-c",
+      "rubric": "rubric-grounding.md",
+      "evidence_root": "samples/c",
+      "evidence_index": "samples/c/index.json"
+    },
+    {
+      "id": "sample-d",
+      "rubric": "rubric-grounding.md",
+      "evidence_root": "samples/d",
+      "evidence_index": "samples/d/index.json"
+    }
+  ]
+}

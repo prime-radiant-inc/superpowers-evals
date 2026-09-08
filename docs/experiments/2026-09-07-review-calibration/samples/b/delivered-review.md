@@ -1,0 +1,7 @@
+Not ready to merge. Two serious issues need correction.
+
+1. High: findUserByEmail replaces the previous parameterized query with SQL containing the email value directly. An email containing a quote and SQL syntax can alter the query instead of being treated as a value. Restore parameter binding before merging. This establishes a query-injection defect; it does not by itself establish the final login result.
+
+2. High: on the successful-login branch, console.log includes user.password_hash. Credential material would be written to logs when that branch executes. Remove that field from the log before merging. The supplied files do not establish which accounts or inputs reach that branch.
+
+Conditional follow-up, not an established additional defect: if deployment forwards these logs to a third-party collector, the logged credential material would also leave the application host. No logging configuration is supplied, so I cannot determine whether that happens. Verify it during remediation.

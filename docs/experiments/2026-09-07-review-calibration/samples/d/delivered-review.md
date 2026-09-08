@@ -1,0 +1,1 @@
+Not ready to merge. High: on the successful-login branch, console.log includes user.password_hash. Credential material would be written to logs when that branch executes. Remove that field from the log before merging. The supplied files do not establish which accounts or inputs reach that branch.
