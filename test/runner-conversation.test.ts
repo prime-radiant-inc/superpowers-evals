@@ -224,13 +224,13 @@ test('cancellation after oracle starts no assessment', async () => {
   ).toHaveLength(1);
 });
 
-test('runner rejects a non-Claude harness even when it uses the Claude normalizer', async () => {
+test('runner rejects an unsupported family even when it uses the Pi normalizer', async () => {
   const args = setup();
   const agents = join(args.runDir, 'agents');
   mkdirSync(agents);
   writeFileSync(
     join(agents, 'fake.yaml'),
-    'name: fake\nruntime_family: fake\nbinary: /usr/bin/true\nnormalizer: claude\nhome_config_subdir: .claude\nsession_log_dir: "${QUORUM_AGENT_HOME}/logs"\nsession_log_glob: "*.jsonl"\nrequired_env: []\nos_support: [linux]\n',
+    'name: fake\nruntime_family: fake\nbinary: /usr/bin/true\nnormalizer: pi\nhome_config_subdir: .pi/agent\nsession_log_dir: "${QUORUM_AGENT_HOME}/logs"\nsession_log_glob: "*.jsonl"\nrequired_env: []\nos_support: [linux]\n',
   );
   const credentialsPath = join(args.runDir, 'credentials.yaml');
   writeFileSync(credentialsPath, '{}\n');
@@ -246,7 +246,7 @@ test('runner rejects a non-Claude harness even when it uses the Claude normalize
   });
   expect(result.verdict.error?.stage).toBe('setup');
   expect(result.verdict.final_reason).toContain(
-    'conversation mode supports only Linux Claude and Codex',
+    'conversation mode supports only Linux',
   );
   expect(existsSync(join(result.runDir, 'coding-agent-workdir'))).toBe(false);
 });
@@ -298,6 +298,100 @@ test('full runner uses prepared launcher/home and returns the persisted complete
   ).toEqual(result.verdict.conversation);
   expect(runWasStopped()).toBe(false);
 });
+
+test('full runner admits Pi through its provisioned launcher without an effort argument', async () => {
+  const args = setup('full-run');
+  writeFileSync(join(args.scenarioDir, 'setup.sh'), '#!/bin/sh\n:\n');
+  chmodSync(join(args.scenarioDir, 'setup.sh'), 0o755);
+  const credentialsPath = join(args.runDir, 'credentials.yaml');
+  writeFileSync(
+    credentialsPath,
+    'test_subject:\n  model: gpt-5.6-sol\n  api: openai-responses\n  base_url: https://api.openai.com/v1\n  api_key_env: QUORUM_PI_TEST_KEY\n  auth: api-key\n  harnesses: [pi]\n',
+  );
+
+  const shimDir = join(args.runDir, 'shims');
+  const globalModules = join(args.runDir, 'global-modules');
+  const sessionFixture = join(args.runDir, 'pi-session.jsonl');
+  mkdirSync(join(globalModules, 'pi-subagents'), { recursive: true });
+  mkdirSync(shimDir);
+  writeFileSync(
+    join(shimDir, 'npm'),
+    `#!/bin/sh\nprintf '%s\\n' '${globalModules}'\n`,
+  );
+  writeFileSync(
+    join(shimDir, 'pi'),
+    `#!/bin/sh
+set -eu
+if [ "${'${1-}'}" = "--version" ]; then
+  printf '%s\\n' 'pi 0.0-test'
+  exit 0
+fi
+printf '%s\\n' "$@" > pi-launch-argv.txt
+printf '%s\\n' "${'${PI_PROVIDER-}'}/${'${PI_MODEL-}'}" > pi-launch-model.txt
+mkdir -p "$HOME/.pi/agent/sessions/native"
+cp '${sessionFixture}' "$HOME/.pi/agent/sessions/native/session.jsonl"
+`,
+  );
+  chmodSync(join(shimDir, 'npm'), 0o755);
+  chmodSync(join(shimDir, 'pi'), 0o755);
+
+  const savedPath = Bun.env['PATH'];
+  const savedKey = Bun.env['QUORUM_PI_TEST_KEY'];
+  Bun.env['PATH'] = `${shimDir}:${savedPath ?? ''}`;
+  Bun.env['QUORUM_PI_TEST_KEY'] = 'offline-pi-key';
+  try {
+    const { runScenario } = await import('../src/runner/index.ts');
+    const result = await runScenario({
+      scenarioDir: args.scenarioDir,
+      codingAgent: 'pi',
+      codingAgentsDir: resolve(import.meta.dir, '../coding-agents'),
+      credential: 'test_subject',
+      credentialsPath,
+      outRoot: join(args.runDir, 'out'),
+      gauntletBin: args.gauntletBin,
+      superpowers: { mode: 'none' },
+      onRunDir(runDir) {
+        const raw = readFileSync(
+          join(import.meta.dir, 'fixtures/pi-session.slice.jsonl'),
+          'utf8',
+        );
+        const [header, ...rows] = raw.trimEnd().split('\n');
+        const session = JSON.parse(header as string);
+        session.cwd = join(runDir, 'coding-agent-workdir');
+        writeFileSync(
+          sessionFixture,
+          `${[JSON.stringify(session), ...rows].join('\n')}\n`,
+        );
+      },
+    });
+    expect(result.verdict.error).toBeNull();
+    expect(result.verdict.conversation?.status).toBe('completed');
+    expect(
+      existsSync(join(result.runDir, 'evidence/native/native/session.jsonl')),
+    ).toBe(true);
+    expect(
+      readFileSync(
+        join(result.runDir, 'evidence/output/pi-launch-model.txt'),
+        'utf8',
+      ).trim(),
+    ).toBe('quorum/gpt-5.6-sol');
+    const launcherArgs = readFileSync(
+      join(result.runDir, 'evidence/output/pi-launch-argv.txt'),
+      'utf8',
+    )
+      .trim()
+      .split('\n');
+    expect(launcherArgs).toContain('--provider');
+    expect(launcherArgs).toContain('--model');
+    expect(launcherArgs).not.toContain('--effort');
+    expect(launcherArgs).not.toContain('--session-dir');
+  } finally {
+    if (savedPath === undefined) delete Bun.env['PATH'];
+    else Bun.env['PATH'] = savedPath;
+    if (savedKey === undefined) delete Bun.env['QUORUM_PI_TEST_KEY'];
+    else Bun.env['QUORUM_PI_TEST_KEY'] = savedKey;
+  }
+}, 10_000);
 test('conversation Windows rejection runs no setup or role', async () => {
   const args = setup();
   const agents = join(args.runDir, 'agents');
@@ -323,7 +417,7 @@ test('conversation Windows rejection runs no setup or role', async () => {
   });
   expect(result.verdict.error?.stage).toBe('setup');
   expect(result.verdict.final_reason).toContain(
-    'conversation mode supports only Linux Claude and Codex',
+    'conversation mode supports only Linux',
   );
   expect(existsSync(join(result.runDir, 'coding-agent-workdir'))).toBe(false);
 });
@@ -353,6 +447,86 @@ test('Codex delivery uses native cwd-bound message evidence', async () => {
   expect(v.conversation?.endpoint).toBe('delivery');
   expect(existsSync(join(args.runDir, 'evidence/trajectory.json'))).toBe(true);
 });
+
+test('Pi delivery retains the real native session only at the launch cwd', async () => {
+  const args = setup('pi-correct');
+  const verdict = await runPreparedConversation({
+    ...args,
+    codingAgent: 'pi',
+    normalizer: 'pi',
+    maxTime: '3s',
+  });
+  expect(verdict.final).toBe('fail');
+  expect(verdict.conversation).toMatchObject({
+    status: 'completed',
+    endpoint: 'delivery',
+  });
+  const files: string[] = JSON.parse(
+    readFileSync(join(args.runDir, 'evidence/index.json'), 'utf8'),
+  ).files;
+  expect(files).toContain('native/native.jsonl');
+  expect(files).toContain('trajectory.json');
+  const trajectory = JSON.parse(
+    readFileSync(join(args.runDir, 'evidence/trajectory.json'), 'utf8'),
+  );
+  expect(trajectory.agent.name).toBe('pi');
+  expect(
+    trajectory.steps.some(
+      (step: { tool_calls?: unknown[] }) => step.tool_calls?.length,
+    ),
+  ).toBe(true);
+});
+
+test('Pi delivery rejects a native session from the wrong cwd before assessment', async () => {
+  const args = setup('pi-wrong-cwd');
+  const verdict = await runPreparedConversation({
+    ...args,
+    codingAgent: 'pi',
+    normalizer: 'pi',
+    maxTime: '3s',
+  });
+  expect(verdict.error?.stage).toBe('capture');
+  expect(verdict.final_reason).toContain(
+    'native conversation capture unavailable',
+  );
+  const files: string[] = JSON.parse(
+    readFileSync(join(args.runDir, 'evidence/index.json'), 'utf8'),
+  ).files;
+  expect(files.some((path) => path.startsWith('native/'))).toBe(false);
+  expect(files).not.toContain('trajectory.json');
+  expect(
+    readFileSync(join(args.runDir, 'invocations.jsonl'), 'utf8')
+      .trim()
+      .split('\n'),
+  ).toHaveLength(1);
+});
+
+test('Pi cancellation retains native evidence and confirms private runtime cleanup', async () => {
+  const args = setup('pi-cancel');
+  const marker = join(args.runDir, 'runtime-pid');
+  const verdict = await runPreparedConversation({
+    ...args,
+    codingAgent: 'pi',
+    normalizer: 'pi',
+    shouldStop: () => existsSync(marker),
+  });
+  expect(verdict.error?.stage).toBe('stopped');
+  expect(verdict.conversation?.status).toBe('completed');
+  expect(existsSync(join(args.runDir, 'evidence/native/native.jsonl'))).toBe(
+    true,
+  );
+  expect(existsSync(join(args.runDir, 'evidence/trajectory.json'))).toBe(true);
+  const roles = JSON.parse(
+    readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'),
+  );
+  expect(roles.conversation.stop_cause).toBe('cancelled');
+  expect(roles.conversation.process_exit.signal).toBe('SIGTERM');
+  const socket = readFileSync(join(args.runDir, 'runtime-socket'), 'utf8');
+  expect(existsSync(socket)).toBe(false);
+  const pid = Number(readFileSync(marker, 'utf8'));
+  expect(() => process.kill(-pid, 0)).toThrow();
+});
+
 test('assessment reads only its allocated result file', async () => {
   const args = setup('missing-result');
   const v = await runPreparedConversation(args);

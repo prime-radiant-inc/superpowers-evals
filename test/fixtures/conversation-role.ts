@@ -12,11 +12,15 @@ import { getEnv } from '../../src/env.ts';
 
 const [role, input, ...flags] = process.argv.slice(2);
 const get = (name: string) => flags[flags.indexOf(name) + 1] as string;
-const runDir = process.cwd();
 if (role === '--version') {
   process.stdout.write('offline fixture\n');
   process.exit(0);
 }
+// macOS resolves /var to /private/var when applying the child cwd. Derive the
+// caller's lexical run path from the completion target so retained evidence is
+// relative to the same spelling Quorum uses.
+const runDir =
+  role === 'converse' ? dirname(get('--completion')) : process.cwd();
 const mode = existsSync(join(runDir, 'fixture-mode'))
   ? readFileSync(join(runDir, 'fixture-mode'), 'utf8')
   : 'full-run';
@@ -47,7 +51,8 @@ if (role === 'converse') {
       get('--completion'),
       JSON.stringify({
         status: 'completed',
-        endpoint: mode === 'codex' ? 'delivery' : 'refusal',
+        endpoint:
+          mode === 'codex' || mode.startsWith('pi-') ? 'delivery' : 'refusal',
         reason: 'Explicit refusal',
         timestamp: new Date().toISOString(),
         evidence: {
@@ -85,6 +90,36 @@ if (role === 'converse') {
         .map((row) => JSON.stringify(row))
         .join('\n'),
     );
+  if (mode.startsWith('pi-')) {
+    const raw = readFileSync(
+      join(import.meta.dir, 'pi-session.slice.jsonl'),
+      'utf8',
+    );
+    const [header, ...rows] = raw.trimEnd().split('\n');
+    const session = JSON.parse(header as string);
+    session.cwd =
+      mode === 'pi-wrong-cwd' ? join(runDir, 'scenario') : get('--workspace');
+    writeFileSync(log, `${[JSON.stringify(session), ...rows].join('\n')}\n`);
+  }
+  if (mode === 'pi-cancel') {
+    const socket = get('--tmux-socket');
+    const started = spawnSync('tmux', [
+      '-S',
+      socket,
+      'new-session',
+      '-d',
+      'sleep 30',
+    ]);
+    if (started.status !== 0) process.exit(13);
+    const panes = spawnSync(
+      'tmux',
+      ['-S', socket, 'list-panes', '-F', '#{pane_pid}'],
+      { encoding: 'utf8' },
+    );
+    writeFileSync(join(runDir, 'runtime-pid'), panes.stdout.trim());
+    writeFileSync(join(runDir, 'runtime-socket'), socket);
+    await new Promise(() => {});
+  }
   if (mode === 'cleanup-zero')
     spawnSync('tmux', [
       '-S',

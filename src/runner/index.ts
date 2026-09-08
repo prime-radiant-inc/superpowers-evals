@@ -1503,7 +1503,7 @@ async function runInner(
     readQuorumMode(story) === 'conversation'
   ) {
     throw new RunnerError(
-      'conversation mode supports only Linux Claude and Codex',
+      'conversation mode supports only Linux Claude, Codex, and Pi',
       'setup',
     );
   }
@@ -1614,17 +1614,19 @@ async function runInnerBody(
 
   // 3. Per-scenario duration override (StoryMetaError -> setup runner error).
   let storyMaxTime: string | null;
-  let conversationNormalizer: 'claude' | 'codex' | null = null;
+  let conversationNormalizer: 'claude' | 'codex' | 'pi' | null = null;
   try {
     storyMaxTime = readQuorumMaxTime(storyPath);
     if (readQuorumMode(storyPath) === 'conversation') {
       if (
         os !== 'linux' ||
-        !['claude', 'codex'].includes(cfg.runtime_family ?? cfg.name) ||
-        (cfg.normalizer !== 'claude' && cfg.normalizer !== 'codex')
+        !['claude', 'codex', 'pi'].includes(cfg.runtime_family ?? cfg.name) ||
+        (cfg.normalizer !== 'claude' &&
+          cfg.normalizer !== 'codex' &&
+          cfg.normalizer !== 'pi')
       ) {
         throw new RunnerError(
-          'conversation mode supports only Linux Claude and Codex',
+          'conversation mode supports only Linux Claude, Codex, and Pi',
           'setup',
         );
       }

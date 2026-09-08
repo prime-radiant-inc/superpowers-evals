@@ -19,8 +19,8 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'sdd-spec-context-consumed',
   'worktree-creation-under-pressure',
   'worktree-no-drift-to-main',
-  // Conversation assessment is initially implemented only for the Claude and
-  // Codex TUI adapters.
+  // Conversation assessment remains explicitly pinned: pricing and code review
+  // also admit Pi for qualification, while the others stay Claude/Codex-only.
   'conversation-pricing',
   'conversation-code-review',
   'conversation-design',

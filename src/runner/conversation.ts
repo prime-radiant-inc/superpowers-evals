@@ -55,7 +55,7 @@ export type PreparedConversation = {
   runHomeDir: string;
   configDir: string;
   codingAgent: string;
-  normalizer: 'claude' | 'codex';
+  normalizer: 'claude' | 'codex' | 'pi';
   logDir: string;
   logGlob: string;
   snapshot: ReturnType<typeof snapshotDir>;
