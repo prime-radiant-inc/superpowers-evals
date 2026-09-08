@@ -1,0 +1,188 @@
+{
+  "status": "registered before fresh conversations",
+  "cutoff_at": "2026-09-08T23:10:00.000Z",
+  "allocation_usd": 12,
+  "max_attempts": 8,
+  "global_cap": 4,
+  "conversation_seconds": 600,
+  "attempt_seconds": 900,
+  "image_id": "sha256:f45020decb13169ae12d3051382ffb8efb6a395c2c78a18a9fce516a1a85fcb8",
+  "assessor": "baseline prompt plus verified provider-error feedback; candidate 2d3c18c remains unpromoted",
+  "campaigns": [
+    {
+      "stage": "pi-pricing",
+      "campaign_id": "4d0d37a7-035f-4024-b2e9-b48a99ecf2a1",
+      "input_digest": "7a95887eb04e4bf8dd8ff9f5599999ecb23782e3822eecbf07336d1558aaf2ac",
+      "refs": {
+        "superpowers_by_arm": {
+          "conversation_pi": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+        },
+        "evals": "0a69d7c2d9c55e12d8b138d7d2725b286c670a67",
+        "gauntlet": "ed9cb8058081261f9acd2c78fc049799560188bf"
+      },
+      "planned_slots": [
+        {
+          "sample_id": "c1:conversation-pricing:conversation_pi:r1",
+          "primary_block_id": "c1:conversation-pricing:b1",
+          "comparison_id": "c1",
+          "scenario": "conversation-pricing",
+          "arm": "conversation_pi",
+          "replicate": 1
+        }
+      ],
+      "execution_surface": [
+        {
+          "name": "conversation_pi",
+          "agent": "pi",
+          "credential": "pi_gpt56_sol",
+          "auth": "api-key",
+          "api": "openai-responses",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-5.6-sol",
+          "key_env_names": [
+            "OPENAI_API_KEY"
+          ]
+        }
+      ],
+      "grader": {
+        "credential": "sonnet5_bedrock",
+        "model": "anthropic.claude-sonnet-5"
+      }
+    },
+    {
+      "stage": "pi-review",
+      "campaign_id": "fdd61cfc-d23e-4e94-8acb-0bbe533e2e70",
+      "input_digest": "1fa16576df477aef5b9e8fe8afcac705c2ee575b8f1d891ccdea2393d5f7f750",
+      "refs": {
+        "superpowers_by_arm": {
+          "conversation_pi": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+        },
+        "evals": "0a69d7c2d9c55e12d8b138d7d2725b286c670a67",
+        "gauntlet": "ed9cb8058081261f9acd2c78fc049799560188bf"
+      },
+      "planned_slots": [
+        {
+          "sample_id": "c1:conversation-code-review:conversation_pi:r1",
+          "primary_block_id": "c1:conversation-code-review:b1",
+          "comparison_id": "c1",
+          "scenario": "conversation-code-review",
+          "arm": "conversation_pi",
+          "replicate": 1
+        }
+      ],
+      "execution_surface": [
+        {
+          "name": "conversation_pi",
+          "agent": "pi",
+          "credential": "pi_gpt56_sol",
+          "auth": "api-key",
+          "api": "openai-responses",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-5.6-sol",
+          "key_env_names": [
+            "OPENAI_API_KEY"
+          ]
+        }
+      ],
+      "grader": {
+        "credential": "sonnet5_bedrock",
+        "model": "anthropic.claude-sonnet-5"
+      }
+    },
+    {
+      "stage": "driver",
+      "campaign_id": "bf7500a7-c83a-48e5-82cf-a51b8b358f36",
+      "input_digest": "3c1206d4bcfc509518ca6f39ea36f5760870c18c4a933b07fed20774c51792b5",
+      "refs": {
+        "superpowers_by_arm": {
+          "conversation_claude": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+          "conversation_codex": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+        },
+        "evals": "0a69d7c2d9c55e12d8b138d7d2725b286c670a67",
+        "gauntlet": "ed9cb8058081261f9acd2c78fc049799560188bf"
+      },
+      "planned_slots": [
+        {
+          "sample_id": "c1:conversation-design:conversation_claude:r1",
+          "primary_block_id": "c1:conversation-design:b1",
+          "comparison_id": "c1",
+          "scenario": "conversation-design",
+          "arm": "conversation_claude",
+          "replicate": 1
+        },
+        {
+          "sample_id": "c2:conversation-review-feedback:conversation_claude:r1",
+          "primary_block_id": "c2:conversation-review-feedback:b1",
+          "comparison_id": "c2",
+          "scenario": "conversation-review-feedback",
+          "arm": "conversation_claude",
+          "replicate": 1
+        },
+        {
+          "sample_id": "c2:conversation-review-feedback:conversation_claude:r2",
+          "primary_block_id": "c2:conversation-review-feedback:b2",
+          "comparison_id": "c2",
+          "scenario": "conversation-review-feedback",
+          "arm": "conversation_claude",
+          "replicate": 2
+        },
+        {
+          "sample_id": "c3:conversation-design:conversation_codex:r1",
+          "primary_block_id": "c3:conversation-design:b1",
+          "comparison_id": "c3",
+          "scenario": "conversation-design",
+          "arm": "conversation_codex",
+          "replicate": 1
+        },
+        {
+          "sample_id": "c4:conversation-review-feedback:conversation_codex:r1",
+          "primary_block_id": "c4:conversation-review-feedback:b1",
+          "comparison_id": "c4",
+          "scenario": "conversation-review-feedback",
+          "arm": "conversation_codex",
+          "replicate": 1
+        },
+        {
+          "sample_id": "c4:conversation-review-feedback:conversation_codex:r2",
+          "primary_block_id": "c4:conversation-review-feedback:b2",
+          "comparison_id": "c4",
+          "scenario": "conversation-review-feedback",
+          "arm": "conversation_codex",
+          "replicate": 2
+        }
+      ],
+      "execution_surface": [
+        {
+          "name": "conversation_claude",
+          "agent": "claude",
+          "credential": "opus5_bedrock",
+          "auth": "bedrock-bearer",
+          "api": "mantle",
+          "model": "anthropic.claude-opus-5",
+          "effort": "high",
+          "key_env_names": [
+            "AWS_BEARER_TOKEN_BEDROCK"
+          ]
+        },
+        {
+          "name": "conversation_codex",
+          "agent": "codex",
+          "credential": "openai_responses_56sol",
+          "auth": "api-key",
+          "api": "openai-responses",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-5.6-sol",
+          "effort": "high",
+          "key_env_names": [
+            "OPENAI_API_KEY"
+          ]
+        }
+      ],
+      "grader": {
+        "credential": "sonnet5_bedrock",
+        "model": "anthropic.claude-sonnet-5"
+      }
+    }
+  ],
+  "gates": "Pi pricing must publish usable lifecycle/capture evidence before Pi review; any Pi lifecycle/capture/publication failure closes Pi. No replacement calls. Root polls cumulative observed fresh costs and cancels on allocation or instrumentation failure. Audit driver adherence and delivery independently before official grade exposure."
+}

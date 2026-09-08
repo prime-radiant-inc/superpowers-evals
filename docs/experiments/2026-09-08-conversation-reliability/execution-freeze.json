@@ -1,0 +1,13 @@
+{
+  "q_sha": "0a69d7c2d9c55e12d8b138d7d2725b286c670a67",
+  "g_sha": "2d3c18cef537425d2d1765bfc0c3002723b30e30",
+  "superpowers_sha": "b36e0829c6d0140e93cfef2ca599b1b07d4a7797",
+  "cutoff_at": "2026-09-08T23:10:00.000Z",
+  "protocol_sha256": "f247785be98e2efc67abae0341c37635a24f8799e755acd71c674c745a7ef2e6",
+  "frozen_artifacts": {
+    "known/cases.json": "f84685751196a36f93adcbf8d8c30f49a72c66009607b9e3bae0ee4059038615",
+    "controls-plan.json": "3e96dbc8407a5ee9143d8ec318562f3d2da3e950aa4ba3afa77be4c542efb775",
+    "audit-archive.json": "78b72900d40f27d73da6decdbd1d07abc7f0ca981973a180750da5ae36ae0f84"
+  },
+  "controls_completion_rule": "After all known outcomes and material reasoning pass independent review, add only prior_summary path and exact SHA256 to controls-plan.json. Preserve every frozen field and row byte-for-byte in value; write a new controls/cases.json. Otherwise do not run controls."
+}
