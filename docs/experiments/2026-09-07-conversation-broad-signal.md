@@ -1,6 +1,7 @@
 # Conversation breadth and concurrency proof
 
-Status: declared before launch. Drew authorized preparing and merging the
+Status: initial wave aborted for instrument defects; repairs and a fresh wave
+are in progress. Drew authorized preparing and merging the
 paired implementation, updating the canonical appliance, and running a broad
 set of tasks. Drew explicitly requested direct main merges without PRs.
 
@@ -88,4 +89,56 @@ turn observed overlap into an unmeasured speedup or sustained-capacity claim.
 
 ## Results
 
-Pending canonical installation and the declared campaigns.
+### Initial breadth wave: aborted
+
+Campaign `5e3f46dc-502a-4796-a98a-b7d5f09e828e` froze Quorum
+`8aefc97320816149c041fd85c069deb50f0e98ce`, Gauntlet
+`74d2037aed14f413db482b7635783e4e0498c316`, the declared Superpowers ref,
+and image `sha256:4a47a6daafc7bb73271b0bb6b6ef41fb0c6ba272012209bd32b352d6c8e931bb`.
+Canonical prepare job `job-20260908T053509Z-de37` passed.
+
+Nine of twelve attempts were prepared before cancellation. Python setup failed
+because the generated `/etc/passwd` home contained the colons in an attempt ID.
+Setup intentionally strips HOME/XDG variables; uv used the malformed passwd
+entry and tried to create its cache under the unwritable `attempts/c1` prefix.
+This was a container identity projection defect, not a Python scenario failure.
+
+The Claude review driver sent repeated Enter against a stale security-notes
+screen. The next Enter selected the permissions screen's default **No, exit**.
+It then called this a refusal despite never submitting the task. A successful
+prior pilot used the same Claude 2.1.209 and launcher: it waited for the changed
+screen and selected **Yes, I accept**. This is a driver navigation and outcome
+classification failure, not established evidence of a Claude crash or CLI
+regression. The strict native-capture requirement kept it from becoming a
+behavioral pass.
+
+Codex produced retained review and design outputs, but the cancelled campaign
+has no usable selected outcomes. Do not count these as a completed breadth
+comparison. The standard report is cancelled, incomplete, and termination
+verified. It records $0.8119028 known cost with incomplete coverage across nine
+attempts; missing and unpublished usage is not zero. Cancellation verified the
+controller was dead, then had to wait for the existing 150-second stale-lock
+threshold before it could finish reconciling workers. No locks were manually
+deleted. No attempt containers remained running afterward.
+
+The immutable report snapshot and original artifacts remain under
+`/srv/quorum/superpowers-evals/campaigns/5e3f46dc-502a-4796-a98a-b7d5f09e828e-conversation_broad_signal/`.
+Local helper receipts are in the ignored
+`results/conversation-broad-signal/breadth-*.json` files. The report returned at
+`2026-09-08T05:40:20.146344Z`; campaign elapsed was 244.935 seconds, including
+the cancellation interval, so it is not a useful throughput baseline.
+
+### Repair and fresh sequence
+
+Keep the aborted wave intact. Repair the passwd home with a colon-free
+in-container alias to the same private home; retain the existing launcher and
+capture paths. Clarify startup navigation and provide an explicit conversation
+error outcome instead of forcing a launch failure into delivery or refusal.
+Verify both fixes before registering fresh identities for the same 12 + 4 + 4
+sequence. These are new runs after instrument repair, not replacements hidden
+inside the cancelled campaign. Report the nine initial attempts separately
+from the twenty planned fresh attempts. The original $60 operator allocation
+includes both waves. Do not count the aborted wave toward either concurrency
+cohort or revise its original results.
+
+Fresh campaign identities and results are pending.
