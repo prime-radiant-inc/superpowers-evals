@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "inherited_corpus": {
+    "path": "../conversation-release/controls/corpus-manifest.json",
+    "file_sha256": "e09923b4b9f980b41b6933a6b388f6354af839c8cf7de7c757570107d5b2433e",
+    "payload_sha256": "f4655b238a786610b57ed668b9cdb59261c9a4f940ed32739b149485c8c1cb1c",
+    "scope": "four retained known cases and six unchanged constructed controls"
+  },
+  "added_retained_cases": [
+    {
+      "id": "conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5/evidence",
+      "rubric": {
+        "path": "conversation-input/rubric.md",
+        "sha256": "c32442838d1a9abf5b37d09c2489cb4ef1e1f134f030f554f6ad43276ac3b57b",
+        "bytes": 994
+      },
+      "index": {
+        "path": "index.json",
+        "sha256": "56bc5df3ed824bdd3914a1a31116bd1e7473b72e9c24567aea48b58cef5e2d70",
+        "bytes": 2603
+      },
+      "indexed_file_count": 71,
+      "indexed_bytes": 3448353,
+      "indexed_files_sha256": "02c34825d46272b420564334a3fae571a79d5321bb401b6d567471705211db7a"
+    },
+    {
+      "id": "conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88",
+      "evidence_root": "/srv/quorum/pilots/conversation-assessment/results/conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88/evidence",
+      "rubric": {
+        "path": "conversation-input/rubric.md",
+        "sha256": "44fccd47919539b952f36f4c941cd9b49753e5fe28de1afcf89752f42a384cd0",
+        "bytes": 1275
+      },
+      "index": {
+        "path": "index.json",
+        "sha256": "edf75faaa60e0711d976320f9c801ae72394a56b23917adb51c5c50f71867dac",
+        "bytes": 3811
+      },
+      "indexed_file_count": 109,
+      "indexed_bytes": 5439345,
+      "indexed_files_sha256": "09a3bb0ece63791dced20203b4bae871fa82f06ae0c53ff5564ef15d818ea4d8"
+    }
+  ],
+  "indexed_files_sha256_method": "SHA-256 of the compact JSON encoding of the index-order array [{path,sha256,bytes}], with each file read from its evidence root"
+}

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "status": "prepared; source SHAs and cutoff must be frozen in execution envelopes before the first provider call",
+  "artifacts": {
+    "base_cases": {
+      "path": "cases.json",
+      "sha256": "f85afdb2d32e5471c8b9c4bf26787bade2f2255306b28c40026f286d115a6e11"
+    },
+    "expectations": {
+      "path": "expected.json",
+      "sha256": "7ca7eb4f00491e234bed2259745d686830210c1eb3f358dc869bdee3cb46d9e7"
+    },
+    "retained_evidence": {
+      "path": "retained-evidence-manifest.json",
+      "sha256": "8b5ef37a54953603c7d5f7c6572004d3d304681e8c778ff7b59f02aa8138dbae"
+    }
+  },
+  "source_freeze": {
+    "quorum_sha": null,
+    "candidate": {
+      "root": "/srv/quorum/pilots/conversation-assessment/gauntlet-reliability",
+      "sha": null
+    },
+    "rule": "Resolve clean installed Git HEADs and write both exact 40-character SHAs into each strict execution envelope before calls. Null is a preparation marker and is not accepted by run.ts."
+  },
+  "time_freeze": {
+    "cutoff_at": null,
+    "live_window_minutes": 240,
+    "retained_window_minutes": 90,
+    "child_timeout_seconds": 120,
+    "cleanup_reserve_seconds": 2,
+    "rule": "Choose one exact ISO-8601 cutoff before the first call, no later than four hours after execution_started_at. Use that same cutoff for both stages. Both stages share one 90-minute retained-assessment window from the known execution start. Null is a preparation marker and is not accepted by run.ts."
+  },
+  "economics": {
+    "model": "anthropic.claude-sonnet-5",
+    "allocation_usd": 8,
+    "max_calls": 24,
+    "pricing_path": "docs/experiments/2026-09-06-pr2258-pricing/current.json",
+    "pricing_sha256": "6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b"
+  },
+  "row_expansion": {
+    "source": "candidate only",
+    "repetitions_per_case": 2,
+    "order": "For each base case in the listed stage order, emit candidate repetition 1 followed by candidate repetition 2. Each row carries the frozen candidate root and SHA.",
+    "known": [
+      "known-claude-review",
+      "known-codex-design",
+      "known-codex-review",
+      "known-claude-design",
+      "conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5",
+      "conversation-review-feedback-codex-openai_responses_56sol-linux-20260908T092135Z-fa88"
+    ],
+    "controls": [
+      "control-a",
+      "control-b",
+      "control-c",
+      "control-d",
+      "control-e",
+      "control-f"
+    ],
+    "known_rows": 12,
+    "control_rows": 12
+  },
+  "stage_gate": {
+    "order": [
+      "known",
+      "controls"
+    ],
+    "controls_requirement": "The known summary must be completed, contain all 12 valid graded rows, have complete repriceable usage, retain matching source, expectation, input, pricing, cutoff and timing identity, and leave cumulative spend below the allocation. Separately, root must independently verify that every known outcome and material rationale agrees with the frozen expectations before launching controls; the dated operator intentionally does not implement this semantic judgment.",
+    "stop_conditions": [
+      "instrument failure or malformed result",
+      "missing or unpriced usage",
+      "shared spend lease loss or cancellation",
+      "insufficient child and cleanup time",
+      "observed cumulative spend at or above the allocation",
+      "independent known-stage grade or reasoning disagreement with frozen expectations"
+    ]
+  },
+  "interpretation": {
+    "controls_label": "constructed evidence controls; not observed live Coding-Agent sessions",
+    "historical_baseline": "Earlier baseline errors are historical observations only. This candidate-only execution is not a fresh matched baseline comparison and does not estimate a population error rate.",
+    "feedback_case": "Preserve the explicit clock-pressure contamination, the fact that the agent proposed the clock change first, and the supported local 3 passed and clean-diff receipts."
+  }
+}
