@@ -1,0 +1,21 @@
+{
+  "quorum_revision": "5ec5784fb06655c07b8cd3f9d7c4390a987e9155",
+  "gauntlet_revision": "74d2037aed14f413db482b7635783e4e0498c316",
+  "pricing_sha256": "6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b",
+  "digest_definition": "SHA256 over sorted index.files plus index.json; append UTF8 path, NUL, and raw SHA256 digest of each file.",
+  "originals": [
+    {
+      "subject": "claude",
+      "evidence_files": 198,
+      "evidence_digest": "d01c2d2eb1ac74253d71401aba97747af2c5a9789f54d03acc2dd9f62b96ece1",
+      "verdict_sha256": "1b2f6a5d7cf75ef4bd82d3aab4128ed3ad1994229a09ff01047795d9fd510be1"
+    },
+    {
+      "subject": "codex",
+      "evidence_files": 75,
+      "evidence_digest": "c468a83fa5543993abd47c992a73107d348b4db1165e3095dccf262897deac56",
+      "verdict_sha256": "50c17114d1c47d3ace634175efb2b50e544b4b739d14ae91f6a6971dda70c1e4"
+    }
+  ],
+  "original_rubric_sha256": "d905f05793641e13178d092a7371ef0a9c16474f8d2821139b2648f2b6906464"
+}

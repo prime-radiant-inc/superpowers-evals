@@ -54,6 +54,14 @@ scenario or pretend to create a helper-owned job. Record this reason and run
 the appliance doctor afterward. Do not change canonical checkouts, images,
 credentials, original campaign files, or source evidence.
 
+For its relative imports, stage only the one-off `run.ts` as an untracked file
+under the owned pilot Quorum checkout at this same relative path. Execute it
+with a separate committed-input directory and a new output directory. Reject
+tracked Q/G changes, and remove this staged file after the process exits; retain
+its committed copy with the experiment. This temporary operator file does not
+alter the pinned runner implementation. Set `OBOL_PRICING_DIR` to the pinned
+pricing directory before starting Bun, so the parent cost reader uses it too.
+
 Run at most eight cases, with a two-minute external deadline per case and no
 automatic retries. Stop on instrument failure, missing/unpriced usage, loss of
 the spend lease, cancellation, or after cumulative cost reaches $3. This is a
