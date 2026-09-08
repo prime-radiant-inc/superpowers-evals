@@ -23,7 +23,13 @@ import {
   AttemptPublicationStorageError,
   AttemptPublishError,
   publishAttempt,
+  publishExecution,
 } from '../src/campaign/attempt-publish.ts';
+import { readAttemptEvidence } from '../src/campaign/report-evidence.ts';
+import {
+  parseAttemptManifest,
+  writeAttemptManifest,
+} from '../src/runner/manifest.ts';
 
 const sha = (body: string): string =>
   createHash('sha256').update(body).digest('hex');
@@ -485,11 +491,12 @@ test('publish tolerates empty placeholder directories beside listed files', () =
   }
 });
 
-test('publish still rejects an unlisted directory that holds anything', () => {
+test('publish still rejects a zero-byte file inside nested unlisted directories', () => {
   const paths = staged('run-pub-18');
   const runDir = join(paths.attemptDir, 'staging', 'run-pub-18');
+  writeAttemptManifest(runDir, identity);
   mkdirSync(join(runDir, 'scratch', 'nested'), { recursive: true });
-  writeFileSync(join(runDir, 'scratch', 'nested', 'marker'), 'no\n');
+  writeFileSync(join(runDir, 'scratch', 'nested', 'marker'), '');
   try {
     expect(() =>
       publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
@@ -501,15 +508,18 @@ test('publish still rejects an unlisted directory that holds anything', () => {
   }
 });
 
-test('publish still rejects an unlisted symlink even when it points at an empty directory', () => {
+test('publish still rejects a symlink inside nested unlisted directories', () => {
   const paths = staged('run-pub-19');
   const runDir = join(paths.attemptDir, 'staging', 'run-pub-19');
   const outside = mkdtempSync(join(tmpdir(), 'empty-target-'));
-  symlinkSync(outside, join(runDir, 'linked'));
+  writeAttemptManifest(runDir, identity);
+  mkdirSync(join(runDir, 'scratch', 'nested'), { recursive: true });
+  symlinkSync(outside, join(runDir, 'scratch', 'nested', 'linked'));
   try {
     expect(() =>
       publishAttempt({ ...paths, expectedAttemptId: expectedAttemptId() }),
-    ).toThrow(/unlisted artifact refused: linked/);
+    ).toThrow(/unlisted artifact refused: scratch/);
+    expect(existsSync(runDir)).toBe(true);
     expect(existsSync(join(paths.resultsRoot, 'run-pub-19'))).toBe(false);
   } finally {
     clean(paths);
@@ -685,11 +695,135 @@ test('publish requires the explicit expected attempt id', () => {
   }
 });
 
-import { publishExecution } from '../src/campaign/attempt-publish.ts';
 import {
   blockActivation,
   twoArmExperiment,
 } from './fixtures/core-comparison/factory.ts';
+
+test('V2 publication preserves an errored conversation across a recursively empty assessment tree', () => {
+  const graderCost = 0.022926;
+  const graderTokens = 15_412;
+  const verdict = {
+    schema: 1,
+    campaign: identity,
+    final: 'indeterminate',
+    final_reason: 'conversation failed before assessment',
+    gauntlet: {
+      status: 'errored',
+      summary: 'conversation startup failed',
+      reasoning: 'Pi failed before the assessment role started',
+      run_id: null,
+    },
+    checks: [],
+    error: { stage: 'gauntlet', message: 'Pi startup failed' },
+    started_at: '2026-09-08T08:56:43Z',
+    finished_at: '2026-09-08T08:56:44Z',
+    economics: {
+      coding_agent: null,
+      gauntlet: {
+        est_cost_usd: graderCost,
+        has_unpriced_model: false,
+        tokens: { total: graderTokens },
+        obol: { unpriced_models: [] },
+      },
+      total_est_cost_usd: null,
+      partial: true,
+    },
+    conversation: {
+      status: 'errored',
+      endpoint: null,
+      reason: 'Pi startup failed',
+      timestamp: '2026-09-08T08:56:44Z',
+      evidence: null,
+    },
+  };
+  const conversationUsage = `${JSON.stringify({
+    model: 'conversation-grader',
+    total_tokens: graderTokens,
+    est_cost_usd: graderCost,
+  })}\n`;
+  const paths = staged('run-v2-error', {
+    files: [
+      { path: 'verdict.json', body: `${JSON.stringify(verdict)}\n` },
+      {
+        path: 'gauntlet-agent/context/HOWTO.md',
+        body: 'Assess the completed conversation.\n',
+      },
+      {
+        path: 'conversation-agent/conversation/usage.jsonl',
+        body: conversationUsage,
+      },
+    ],
+  });
+  const runDir = join(paths.attemptDir, 'staging', 'run-v2-error');
+  mkdirSync(join(runDir, 'gauntlet-agent', 'results', 'allocated'), {
+    recursive: true,
+  });
+  writeAttemptManifest(runDir, identity);
+  const manifest = parseAttemptManifest(
+    readFileSync(join(runDir, 'manifest.json'), 'utf8'),
+  );
+  expect(
+    manifest.files.some((file) =>
+      file.path.startsWith('gauntlet-agent/results/'),
+    ),
+  ).toBe(false);
+
+  const intent = blockActivation(twoArmExperiment()).attempts[0]!;
+  intent.identity = identity;
+  intent.output_root = paths.attemptDir;
+  const bound = { intent, container_id: 'a'.repeat(64) };
+  const stopped = {
+    execution_attempt_id: identity.execution_attempt_id,
+    container_id: bound.container_id,
+    proof: 'inspected_stopped' as const,
+    observed_at: '2026-09-08T08:56:45Z',
+  };
+
+  try {
+    const published = publishExecution({
+      bound,
+      stopped,
+      resultsRoot: paths.resultsRoot,
+    });
+    expect(existsSync(runDir)).toBe(false);
+    const publishedDir = join(paths.resultsRoot, published.runId);
+    const publishedVerdict = JSON.parse(
+      readFileSync(join(publishedDir, 'verdict.json'), 'utf8'),
+    );
+    expect(publishedVerdict).toMatchObject({
+      final: 'indeterminate',
+      error: verdict.error,
+      conversation: verdict.conversation,
+      economics: {
+        coding_agent: null,
+        gauntlet: {
+          est_cost_usd: graderCost,
+          tokens: { total: graderTokens },
+        },
+        partial: true,
+      },
+    });
+    expect(published.artifacts).toContainEqual({
+      path: 'run-v2-error/conversation-agent/conversation/usage.jsonl',
+      sha256: sha(conversationUsage),
+      bytes: Buffer.byteLength(conversationUsage),
+    });
+
+    const evidence = readAttemptEvidence({
+      resultsRoot: paths.resultsRoot,
+      expectedIdentity: identity,
+      artifacts: published.artifacts,
+    });
+    expect(evidence.publication_valid).toBe(true);
+    expect(evidence.observed_outcome).toBe('indeterminate');
+    expect(evidence.grader_cost_usd).toBe(graderCost);
+    expect(evidence.grader_tokens).toBe(graderTokens);
+    expect(evidence.subject_cost_usd).toBeNull();
+  } finally {
+    clean(paths);
+  }
+});
 
 test('V2 publication authenticates full identity and returns immutable byte references only after death', () => {
   const paths = staged('run-v2');
