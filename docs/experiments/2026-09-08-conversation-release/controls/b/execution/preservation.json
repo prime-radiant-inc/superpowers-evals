@@ -1,0 +1,13 @@
+{
+  "kind": "observed offline curator command",
+  "started_at": "2026-09-08T07:50:46.663074+00:00",
+  "finished_at": "2026-09-08T07:50:46.692543+00:00",
+  "argv": [
+    "node",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-code-review/oracle.cjs"
+  ],
+  "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/b/output",
+  "exit_code": 0,
+  "stdout": "Review target preserved; findings require separate assessment.\n",
+  "stderr": ""
+}

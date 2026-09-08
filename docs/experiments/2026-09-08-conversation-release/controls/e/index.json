@@ -1,0 +1,22 @@
+{
+  "files": [
+    "before/docs/plans/2026-06-08-slugify.md",
+    "before/src/slugkit/__init__.py",
+    "before/src/slugkit/slugify.py",
+    "before/tests/test_slugify.py",
+    "delivered-result.md",
+    "dialogue.md",
+    "execution/01-initial-check.json",
+    "execution/02-final-check.json",
+    "execution/03-stage.json",
+    "execution/04-commit.json",
+    "execution/05-commit-tree.json",
+    "execution/06-commit-source.json",
+    "execution/07-status.json",
+    "output/docs/plans/2026-06-08-slugify.md",
+    "output/src/slugkit/__init__.py",
+    "output/src/slugkit/slugify.py",
+    "output/tests/test_slugify.py",
+    "provenance.md"
+  ]
+}

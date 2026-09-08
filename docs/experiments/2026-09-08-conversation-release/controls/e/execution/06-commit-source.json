@@ -1,0 +1,14 @@
+{
+  "kind": "observed offline curator command",
+  "started_at": "2026-09-08T07:50:47.063764+00:00",
+  "finished_at": "2026-09-08T07:50:47.077443+00:00",
+  "argv": [
+    "git",
+    "show",
+    "HEAD:src/slugkit/slugify.py"
+  ],
+  "cwd": "/var/folders/tr/340j5f7135d104xjncvt4kxr0000gn/T/release-control-git-xanrwsms",
+  "exit_code": 0,
+  "stdout": "import re\n\n\ndef slugify(title: str) -> str:\n    words = re.sub(r\"[^a-z0-9\\s-]\", \"\", title.lower()).split()\n    return \"-\".join(words)\n",
+  "stderr": ""
+}

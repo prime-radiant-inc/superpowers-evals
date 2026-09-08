@@ -1,0 +1,11 @@
+{
+  "files": [
+    "before/src/db.js",
+    "delivered-review.md",
+    "dialogue.md",
+    "execution/preservation.json",
+    "output/package.json",
+    "output/src/db.js",
+    "provenance.md"
+  ]
+}

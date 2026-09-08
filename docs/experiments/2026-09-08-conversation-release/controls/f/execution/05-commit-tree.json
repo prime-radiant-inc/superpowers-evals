@@ -1,0 +1,16 @@
+{
+  "kind": "observed offline curator command",
+  "started_at": "2026-09-08T07:50:47.346272+00:00",
+  "finished_at": "2026-09-08T07:50:47.361216+00:00",
+  "argv": [
+    "git",
+    "show",
+    "--format=fuller",
+    "--stat",
+    "HEAD"
+  ],
+  "cwd": "/var/folders/tr/340j5f7135d104xjncvt4kxr0000gn/T/release-control-git-xdznqvxd",
+  "exit_code": 0,
+  "stdout": "commit 4eed3c140a7b281a807e2345590ce7f518c8124f\nAuthor:     Constructed control curator <control@example.invalid>\nAuthorDate: Tue Sep 8 00:50:47 2026 -0700\nCommit:     Constructed control curator <control@example.invalid>\nCommitDate: Tue Sep 8 00:50:47 2026 -0700\n\n    Update slugify in constructed control\n\n src/slugkit/slugify.py | 7 +------\n 1 file changed, 1 insertion(+), 6 deletions(-)\n",
+  "stderr": ""
+}

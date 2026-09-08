@@ -1,0 +1,15 @@
+{
+  "kind": "observed offline curator command",
+  "started_at": "2026-09-08T07:50:47.322306+00:00",
+  "finished_at": "2026-09-08T07:50:47.345940+00:00",
+  "argv": [
+    "git",
+    "commit",
+    "-m",
+    "Update slugify in constructed control"
+  ],
+  "cwd": "/var/folders/tr/340j5f7135d104xjncvt4kxr0000gn/T/release-control-git-xdznqvxd",
+  "exit_code": 0,
+  "stdout": "[main 4eed3c1] Update slugify in constructed control\n 1 file changed, 1 insertion(+), 6 deletions(-)\n",
+  "stderr": ""
+}

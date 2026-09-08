@@ -1,0 +1,13 @@
+{
+  "kind": "observed offline curator command",
+  "started_at": "2026-09-08T07:50:46.744626+00:00",
+  "finished_at": "2026-09-08T07:50:46.795369+00:00",
+  "argv": [
+    "node",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.cjs"
+  ],
+  "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/d/output",
+  "exit_code": 0,
+  "stdout": "conversation oracle: pass\n",
+  "stderr": ""
+}

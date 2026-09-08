@@ -1,0 +1,241 @@
+{
+  "kind": "offline corpus validation; no assessor or provider calls",
+  "runtime_versions": {
+    "bun": "1.3.14",
+    "node": "v22.23.2",
+    "python3": "Python 3.14.4",
+    "git": "git version 2.50.1 (Apple Git-155)"
+  },
+  "source_sha256": {
+    "/Users/drewritter/prime-rad/gauntlet/.worktrees/conversation-assessment/src/context/scoped-read.ts": "009068020308d6078f5306e0c85ba904159fd315619d22b69dc0ba2a9804ef9b",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-code-review/oracle.cjs": "ebd31bf0fc8bb89470045e504a68e031921a8cf2f2b12da32af9572324de9c31",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.cjs": "aade40c1129f556ad05cd268df75cdc7a9d9c13f5cc78659f35bc62524beca39",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.py": "03652a05a867140809690ebf4b07ebb10443d2d281b4dfd72aa5c4d3ae2bc822",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-verification/oracle.cjs": "aade40c1129f556ad05cd268df75cdc7a9d9c13f5cc78659f35bc62524beca39",
+    "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-verification/oracle.py": "5230f464ae8172273137ac1e2cfb4498bc53a889fefa78166426b593aa56b01f"
+  },
+  "index_validation": {
+    "argv": [
+      "bun",
+      "-e",
+      "import { readFileSync, readdirSync } from \"node:fs\";\nimport { resolve, basename, join } from \"node:path\";\nimport { parseEvidenceIndex, validateEvidenceIndex } from \"/Users/drewritter/prime-rad/gauntlet/.worktrees/conversation-assessment/src/context/scoped-read.ts\";\nconst dir = resolve(\"docs/experiments/2026-09-08-conversation-release\");\nconst cases = JSON.parse(readFileSync(join(dir,\"cases.json\"),\"utf8\")).cases;\nconst expected = JSON.parse(readFileSync(join(dir,\"expected.json\"),\"utf8\"));\nlet total = 0;\nfor (const row of cases) {\n const retained = row.evidence_root.startsWith(\"/srv/\");\n const root = retained ? join(\"/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-release/known\", basename(resolve(row.evidence_root,\"..\")),\"evidence\") : resolve(dir,row.evidence_root);\n const indexFile = retained ? join(root,\"index.json\") : resolve(dir,row.evidence_index);\n const index = parseEvidenceIndex(JSON.parse(readFileSync(indexFile,\"utf8\")));\n validateEvidenceIndex(root,index);\n for (const file of index.files) if (/(^|\\/)(expected\\.json|rubric\\.md|rubrics|conversation-input|gauntlet-agent|result\\.(json|md)|corpus-manifest\\.json)(\\/|$)/.test(file)) throw new Error(\"Private assessment input indexed: \"+file);\n for (const c of expected[row.id].criteria) for (const decisive of c.decisive_evidence) if (!index.files.includes(decisive.path)) throw new Error(row.id+\" decisive path absent: \"+decisive.path);\n const rubric = readFileSync(resolve(dir,row.rubric),\"utf8\");\n if (expected[row.id].criteria.length !== rubric.split(\"\\n\").filter(line => line.startsWith(\"- \")).length) throw new Error(\"Criterion count mismatch\");\n for (const c of expected[row.id].criteria) if (!rubric.includes(c.criterion)) throw new Error(\"Criterion bytes differ\");\n if (retained && rubric !== readFileSync(resolve(root,\"../conversation-input/rubric.md\"),\"utf8\")) throw new Error(\"Original rubric differs\");\n if (!retained) { const actual = readdirSync(root,{recursive:true,withFileTypes:true}).filter(e=>e.isFile()).map(e=>resolve(e.parentPath,e.name).slice(root.length+1)).filter(p=>p!==\"index.json\").sort(); if (JSON.stringify(actual)!==JSON.stringify(index.files)) throw new Error(\"Constructed index omits a file\"); }\n total += index.files.length;\n console.log(row.id+\": index valid (\"+index.files.length+\" files), criterion paths and rubric match\");\n}\nconsole.log(\"Validated \"+cases.length+\" indexes / \"+total+\" indexed files.\");"
+    ],
+    "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls",
+    "started_at": "2026-09-08T07:56:02.776844+00:00",
+    "finished_at": "2026-09-08T07:56:02.819172+00:00",
+    "exit_code": 0,
+    "stdout": "known-claude-review: index valid (271 files), criterion paths and rubric match\nknown-codex-design: index valid (72 files), criterion paths and rubric match\nknown-codex-review: index valid (71 files), criterion paths and rubric match\nknown-claude-design: index valid (156 files), criterion paths and rubric match\ncontrol-a: index valid (7 files), criterion paths and rubric match\ncontrol-b: index valid (7 files), criterion paths and rubric match\ncontrol-c: index valid (6 files), criterion paths and rubric match\ncontrol-d: index valid (6 files), criterion paths and rubric match\ncontrol-e: index valid (18 files), criterion paths and rubric match\ncontrol-f: index valid (18 files), criterion paths and rubric match\nValidated 10 indexes / 632 indexed files.\n",
+    "stderr": ""
+  },
+  "offline_rechecks": [
+    {
+      "id": "known-claude-review",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-code-review/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-release/known/conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d/evidence/output",
+        "started_at": "2026-09-08T07:56:02.820115+00:00",
+        "finished_at": "2026-09-08T07:56:02.845242+00:00",
+        "exit_code": 0,
+        "stdout": "Review target preserved; findings require separate assessment.\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "known-codex-design",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-release/known/conversation-design-codex-openai_responses_56sol-linux-20260908T060519Z-87cf/evidence/output",
+        "started_at": "2026-09-08T07:56:02.845926+00:00",
+        "finished_at": "2026-09-08T07:56:02.887689+00:00",
+        "exit_code": 0,
+        "stdout": "conversation oracle: pass\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "known-codex-review",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-code-review/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-release/known/conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed/evidence/output",
+        "started_at": "2026-09-08T07:56:02.888078+00:00",
+        "finished_at": "2026-09-08T07:56:02.912702+00:00",
+        "exit_code": 0,
+        "stdout": "Review target preserved; findings require separate assessment.\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "known-claude-design",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-release/known/conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07/evidence/output",
+        "started_at": "2026-09-08T07:56:02.913377+00:00",
+        "finished_at": "2026-09-08T07:56:02.955458+00:00",
+        "exit_code": 0,
+        "stdout": "conversation oracle: pass\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-a",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-code-review/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/a/output",
+        "started_at": "2026-09-08T07:56:02.955966+00:00",
+        "finished_at": "2026-09-08T07:56:02.980807+00:00",
+        "exit_code": 0,
+        "stdout": "Review target preserved; findings require separate assessment.\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-b",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-code-review/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/b/output",
+        "started_at": "2026-09-08T07:56:02.981752+00:00",
+        "finished_at": "2026-09-08T07:56:03.005935+00:00",
+        "exit_code": 0,
+        "stdout": "Review target preserved; findings require separate assessment.\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-c",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/c/output",
+        "started_at": "2026-09-08T07:56:03.006733+00:00",
+        "finished_at": "2026-09-08T07:56:03.048375+00:00",
+        "exit_code": 0,
+        "stdout": "conversation oracle: pass\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-d",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-design/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/d/output",
+        "started_at": "2026-09-08T07:56:03.049055+00:00",
+        "finished_at": "2026-09-08T07:56:03.091085+00:00",
+        "exit_code": 0,
+        "stdout": "conversation oracle: pass\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-e",
+      "stage": "before",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-verification/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/e/before",
+        "started_at": "2026-09-08T07:56:03.091692+00:00",
+        "finished_at": "2026-09-08T07:56:03.137491+00:00",
+        "exit_code": 1,
+        "stdout": "conversation oracle: fail (AssertionError: slugify('Hello World') returned 'Hello World')\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-e",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-verification/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/e/output",
+        "started_at": "2026-09-08T07:56:03.138201+00:00",
+        "finished_at": "2026-09-08T07:56:03.185504+00:00",
+        "exit_code": 0,
+        "stdout": "conversation oracle: pass\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-f",
+      "stage": "before",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-verification/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/f/before",
+        "started_at": "2026-09-08T07:56:03.186501+00:00",
+        "finished_at": "2026-09-08T07:56:03.233122+00:00",
+        "exit_code": 1,
+        "stdout": "conversation oracle: fail (AssertionError: slugify('Hello World') returned 'Hello World')\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "control-f",
+      "stage": "output",
+      "observed": {
+        "argv": [
+          "node",
+          "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/scenarios/conversation-verification/oracle.cjs"
+        ],
+        "cwd": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-release-controls/docs/experiments/2026-09-08-conversation-release/controls/f/output",
+        "started_at": "2026-09-08T07:56:03.233964+00:00",
+        "finished_at": "2026-09-08T07:56:03.280608+00:00",
+        "exit_code": 1,
+        "stdout": "conversation oracle: fail (AssertionError: slugify('Hello, World!') returned 'hello,-world!')\n",
+        "stderr": ""
+      }
+    }
+  ],
+  "assertions": [
+    "all ten indexes validated with existing Gauntlet validator",
+    "all 34 criteria are exact unchanged rubric text",
+    "every decisive path indexed; private expectation/rubric/assessor paths excluded",
+    "all constructed case files indexed except each index itself",
+    "known local rubric bytes match the committed assessment rubric",
+    "all 12 oracle reruns returned the required behavioral result",
+    "constructed rerun stdout, stderr and status match original receipts",
+    "verification tests unchanged and committed-source receipts match delivered output"
+  ],
+  "publication_identity_check": {
+    "report_path": "/Users/drewritter/prime-rad/superpowers-evals/.worktrees/conversation-assessment/results/conversation-broad-signal/breadth-fresh-report.json",
+    "report_sha256": "1c47942cb6ab7629fd23c67c6169a057b2af150019fd7edaac16d6209d5d99cc",
+    "campaign_id": "f4f42c37-3a00-4c1d-b5df-e76766a568fc",
+    "checked_files": 582,
+    "result": "Every fetched full evidence/index/input file matches SHA-256 and byte length in the retained standard report artifact references."
+  }
+}
