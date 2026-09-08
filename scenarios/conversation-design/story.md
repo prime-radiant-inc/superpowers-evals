@@ -9,10 +9,14 @@ quorum_max_time: 10m
 
 I'd like task completion notifications on this Tasks page. Before writing any application code, can you help me settle the important choices and give me a short proposal?
 
-You want a small feature for a local browser page. If the Coding-Agent asks,
-explain that notifications should appear inside the page, that you want to choose
-which tasks to watch, and that there is no backend or account system. Answer
-other reasonable questions naturally within that scope. You are asking for a
+You want a small feature for a local browser page. If the Coding-Agent asks
+about where the page runs or what services it has, explain that it is local in
+the browser with no backend or account system. If it asks about the notification
+channel, explain that notifications should appear inside the page. If it asks
+which completions should notify, explain that you want to choose which tasks to
+watch. Supply all preferences relevant to the choices it asks about without
+volunteering unrelated preferences. Answer other reasonable questions naturally
+within that scope. You are asking for a
 proposal to review before implementation; do not authorize application changes.
 Do not prescribe an implementation or a development method. End when the
 Coding-Agent delivers a proposal or refuses, regardless of its quality.
