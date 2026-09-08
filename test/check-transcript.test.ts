@@ -448,6 +448,20 @@ test('skill-called: pass via Bash SKILL.md read', () => {
   expect(result.passed).toBe(true);
 });
 
+test('skill-called: pass via a backtick-delimited SKILL.md path', () => {
+  const result = verbSkillCalled(
+    [
+      call('Bash', {
+        command:
+          'const files = [`${base}/using-superpowers/SKILL.md`, `${base}/brainstorming/SKILL.md`];',
+      }),
+    ],
+    false,
+    ['superpowers:brainstorming'],
+  );
+  expect(result.passed).toBe(true);
+});
+
 test('skill-called: pass via Read SKILL.md (E2E)', async () => {
   const r = await runCLI(
     ['skill-called', 'superpowers:brainstorming'],
