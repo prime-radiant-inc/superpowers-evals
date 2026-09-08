@@ -84,8 +84,8 @@ if (cost !== undefined && provider !== 'quorum') metrics.cost_usd = cost;
 **Dependency:** Task 1 must prove configuration feasibility and provide actual composer captures.
 
 **Files:**
-- Quorum: `src/agents/index.ts`, `coding-agents/claude-context/launch-agent`, `src/runner/conversation.ts`, `test/agent-claude.test.ts`, `test/claude-mantle-provision.test.ts`, `test/runner-conversation.test.ts`.
-- Gauntlet: `src/conversation/converse.ts`, `src/cli/converse.ts`, new `src/conversation/claude-startup.ts`, `test/conversation/converse.test.ts`, new focused startup test file if useful.
+- Quorum: `src/agents/index.ts`, `coding-agents/claude-context/launch-agent`, `src/runner/conversation.ts`, `test/agent-claude.test.ts`, `test/claude-mantle-provision.test.ts`, `test/runner-conversation.test.ts`, `test/runner-conversation-gauntlet-integration.test.ts`.
+- Gauntlet: `src/conversation/converse.ts`, `src/cli/args.ts`, `src/cli/converse.ts`, new `src/conversation/claude-startup.ts`, `test/conversation/converse.test.ts`, existing CLI argument tests and new focused startup test file if useful.
 
 **Interfaces:** Add optional closed `startup?: 'claude'` to `ConverseOptions`, parsed by `gauntlet converse --startup claude`. Quorum supplies it only for the Claude normalizer. Add `isClaudeReady(screen: string): boolean`, based on Task 1 captures. Keep readiness waiting inside the conversation's current deadline/capture/cleanup lifecycle; no generic callbacks or terminal driver.
 
