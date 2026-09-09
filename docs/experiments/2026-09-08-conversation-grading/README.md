@@ -7,6 +7,7 @@ criterion judgments; Quorum rejects a contradictory persisted status.
 
 The [approved plan](../../superpowers/plans/2026-09-08-conversation-grading-contract.md)
 sets the scope. [cases.json](cases.json) fixes identities, order, rubrics and gold.
+The completed diagnostic and delivery evidence are recorded in [results.md](results.md).
 The operator launches one assessment and exits; the coordinator inspects its
 settlement and writes a semantic review before requesting the next ordinal.
 
