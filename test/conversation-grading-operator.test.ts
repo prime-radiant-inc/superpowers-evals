@@ -9,6 +9,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -24,6 +25,8 @@ import {
   retainedAssessmentEnv,
   runChild,
 } from '../docs/experiments/2026-09-08-conversation-reliability/run.ts';
+import { getEnv } from '../src/env.ts';
+import { estimateUsageSidecar } from '../src/obol/index.ts';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -618,3 +621,196 @@ test('one-case launch gives the shared environment private HOME and TMPDIR', asy
   };
   await runAssessmentCase(f.path, 1, f.deps);
 });
+
+const gauntletRoot = getEnv('GAUNTLET_ROOT');
+test.skipIf(!gauntletRoot)(
+  'actual Gauntlet CLI repairs a typed report error and covers both priced turns',
+  async () => {
+    const pricingDirectory = join(
+      import.meta.dir,
+      '../docs/experiments/2026-09-06-pr2258-pricing',
+    );
+    expect(getEnv('OBOL_PRICING_DIR')).toBe(pricingDirectory);
+    const f = fixture();
+    f.manifest.g_root = realpathSync(gauntletRoot!);
+    f.manifest.g_sha = git(f.manifest.g_root, 'rev-parse', 'HEAD');
+    for (const row of f.manifest.cases) {
+      writeFileSync(
+        row.rubric,
+        `---\nid: ${row.scenario_id}\ntitle: Retained grading transport test\nstatus: ready\n---\nAssess the supplied retained evidence.\n\n## Acceptance Criteria\n- The evidence demonstrates the criterion.\n`,
+      );
+      row.rubric_sha256 = digest(row.rubric);
+    }
+    json(f.path, f.manifest);
+    type Request = {
+      model: string;
+      messages: {
+        role: string;
+        content:
+          | string
+          | {
+              type: string;
+              is_error?: boolean;
+              content?: string;
+              tool_use_id?: string;
+            }[];
+      }[];
+    };
+    const requests: Request[] = [];
+    const failures: string[] = [];
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(httpRequest) {
+        if (
+          new URL(httpRequest.url).pathname !== '/v1/messages' ||
+          httpRequest.headers.get('x-api-key') !== 'offline-only'
+        ) {
+          failures.push(
+            'unexpected localhost API path or dummy authentication',
+          );
+          return new Response('Unexpected path', { status: 400 });
+        }
+        const request = (await httpRequest.json()) as Request;
+        requests.push(request);
+        if (requests.length > 2) {
+          failures.push('assessment exceeded the two-response repair script');
+          return Response.json(
+            {
+              type: 'error',
+              error: {
+                type: 'invalid_request_error',
+                message: 'Finite offline response script exhausted',
+              },
+            },
+            { status: 400 },
+          );
+        }
+        const turn = requests.length;
+        return Response.json({
+          id: `repair-message-${turn}`,
+          type: 'message',
+          role: 'assistant',
+          model: request.model,
+          content: [
+            {
+              type: 'tool_use',
+              id: `repair-tool-${turn}`,
+              name: 'report_result',
+              input: {
+                summary: 'Retained criterion assessed.',
+                reasoning: 'The retained evidence demonstrates the criterion.',
+                criteria:
+                  turn === 1
+                    ? 'not an array'
+                    : [
+                        {
+                          verdict: 'pass',
+                          evidence:
+                            'evidence.txt: Retained conversation evidence.',
+                        },
+                      ],
+              },
+            },
+          ],
+          stop_reason: 'tool_use',
+          stop_sequence: null,
+          usage: { input_tokens: 10 * turn, output_tokens: 5 * turn },
+        });
+      },
+    });
+    const controller = new AbortController();
+    const deadline = setTimeout(
+      () => controller.abort('offline integration timeout'),
+      8_000,
+    );
+    f.deps.signal = controller.signal;
+    try {
+      f.deps.child = runChild;
+      f.deps.priceUsage = estimateUsageSidecar;
+      f.deps.graderEnv = () => ({
+        PATH: getEnv('PATH'),
+        ANTHROPIC_API_KEY: 'offline-only',
+        ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}`,
+        OBOL_PRICING_DIR: pricingDirectory,
+      });
+      await runAssessmentCase(f.path, 1, f.deps);
+      expect(failures).toEqual([]);
+      expect(requests).toHaveLength(2);
+      expect(requests.map((request) => request.model)).toEqual([
+        'anthropic.claude-sonnet-5',
+        'anthropic.claude-sonnet-5',
+      ]);
+      const repair = requests[1]!.messages
+        .flatMap((message) =>
+          Array.isArray(message.content) ? message.content : [],
+        )
+        .find((block) => block.type === 'tool_result');
+      expect(repair).toMatchObject({
+        tool_use_id: 'repair-tool-1',
+        is_error: true,
+      });
+      expect(repair?.content).toContain('criteria: expected array, got string');
+      const out = read(f.receipt(1, 'launch')).output_path as string;
+      expect(read(join(out, 'result.json'))).toMatchObject({
+        runId: basename(out),
+        scenario: 'claude-design',
+        status: 'pass',
+        criteria: [
+          {
+            criterion: 'The evidence demonstrates the criterion.',
+            verdict: 'pass',
+          },
+        ],
+        usage: { turns: 2, inputTokens: 30, outputTokens: 15 },
+      });
+      expect(statSync(join(out, 'result.md')).size).toBeGreaterThan(0);
+      const events = readFileSync(join(out, 'run.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(
+        events.find((event) => event.type === 'tool_result'),
+      ).toMatchObject({ turn: 1, name: 'report_result', error: true });
+      expect(
+        events
+          .filter((event) => event.type === 'llm_response')
+          .map((event) => event.turn),
+      ).toEqual([1, 2]);
+      expect(verifyAssessmentUsage(out)).toBe(2);
+      const usagePath = join(out, 'usage.jsonl');
+      const rows = readFileSync(usagePath, 'utf8').trim().split('\n');
+      expect(rows).toHaveLength(2);
+      const estimate = await estimateUsageSidecar(usagePath);
+      expect(estimate).toMatchObject({
+        total_input: 30,
+        total_output: 15,
+        unpriced_models: [],
+        pricing_as_of: '2026-09-06',
+      });
+      // Frozen rates: 30 input tokens at $2/M plus 15 output tokens at $10/M.
+      expect(estimate?.est_cost_usd).toBeCloseTo(0.00021, 10);
+      expect(read(f.receipt(1, 'settled'))).toMatchObject({
+        outcome: { code: 0, signal: null, timedOut: false, spawnError: false },
+        covered_turns: 2,
+        coverage_complete: true,
+        cost_usd: 0.00021,
+        operational_error: null,
+      });
+      // A real one-row subtotal still cannot establish coverage for this two-turn repair.
+      const partial = temporary();
+      for (const name of ['result.json', 'run.jsonl'])
+        copyFileSync(join(out, name), join(partial, name));
+      writeFileSync(join(partial, 'usage.jsonl'), `${rows[0]}\n`);
+      expect(
+        (await estimateUsageSidecar(join(partial, 'usage.jsonl')))
+          ?.est_cost_usd,
+      ).toBeCloseTo(0.00007, 10);
+      expect(() => verifyAssessmentUsage(partial)).toThrow();
+    } finally {
+      clearTimeout(deadline);
+      await server.stop(true);
+    }
+  },
+  15_000,
+);
