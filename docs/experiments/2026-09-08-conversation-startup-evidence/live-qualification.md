@@ -1,6 +1,8 @@
-# Proposed conversation engine qualification
+# Conversation engine qualification
 
-Status: proposal only; no new execution or spend authorized.
+Status: Drew approved this allocation; all three cells completed and passed
+their engine gates. Both deliverables were promoted. See the
+[live results](live-results.md) for standard-report outcomes and installed proof.
 
 Run three small cells through the existing isolated appliance pilot after the
 offline candidate passes review. This qualifies Claude startup and Pi evidence,
@@ -26,7 +28,7 @@ simulated-user and assessment roles use `sonnet5_bedrock`. The pricing snapshot 
 Use the exact reviewed Quorum/Gauntlet candidate pair recorded in the final
 offline results; verify both installed pilot revisions before registration.
 
-Proposed new allocation: **$10 total observed spend**, with a **60-minute wall
+Approved new allocation: **$10 total observed spend**, with a **60-minute wall
 limit from the first launch**. The allocation is an operator stopping rule,
 not a hard provider billing cap: active costs can lag execution. Do not transfer
 any prior allocation. Record the absolute wall cutoff before launching cell 1.

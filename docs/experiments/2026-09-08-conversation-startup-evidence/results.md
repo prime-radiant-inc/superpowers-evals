@@ -1,7 +1,8 @@
 # Conversation startup and Pi evidence results
 
 Date: 2026-09-08
-Status: offline checks passed; live qualification is not authorized.
+Status: offline checks passed. Subsequent authorized live qualification and
+promotion are recorded in [live results](live-results.md).
 
 ## Question
 
@@ -15,7 +16,8 @@ Runtime baseline: Quorum `7aad7f0af36f58caae250484df6272822b42bdaf`, Gauntlet
 `b36e0829c6d0140e93cfef2ca599b1b07d4a7797`. Installed probes used image
 `sha256:01fb1cd08f1e31c82fccedbaadead09e6ff97bca1f5d66f2f0904728ad536e8c`
 with dummy credentials and external networking disabled. The image digest is
-recorded in each detailed receipt; canonical installation remains unchanged.
+recorded in each detailed receipt; canonical installation was unchanged during
+the offline phase.
 
 ## Evidence established
 
@@ -115,17 +117,19 @@ variable was permitted only as a fallback and was never used. Treating either
 local method as real routing proof would overstate the evidence; Mantle
 authentication remains a separate live gate.
 
-## Next gate
+## Subsequent live gate
 
-The [proposed live qualification](live-qualification.md) is three finite cells
-through the existing appliance pilot: Claude pricing, Pi pricing, then Pi review
-only if Pi pricing instrumentation passes. It specifies fresh identities, pinned
-inputs, one attempt per cell, no reserve, a proposed new $10 observed allocation
-and a 60-minute wall limit. No campaign has been registered or launched by this
-offline work. Previous campaigns and their allocations remain closed.
+The [live qualification](live-qualification.md) used three finite cells through
+the existing appliance pilot: Claude pricing, Pi pricing, then Pi review after
+Pi pricing instrumentation passed. Drew separately approved fresh identities,
+pinned inputs, one attempt per cell, no reserve, a new $10 observed allocation
+and a 60-minute wall limit. All three passed their engine gates for $2.53704565;
+the [live results](live-results.md) record their evidence and subsequent direct
+main/canonical campaign promotion. Previous campaigns and allocations stayed
+closed.
 
 Execution, assessment and accounting remain separate. A completed bad
 implementation or review is useful evidence; a behavioral pass is not the engine
 admission gate. Held grader and simulated-user prompt candidates remain
-unpromoted. Each deliverable requires its own live gate before direct main
-integration and canonical appliance update.
+unpromoted. Each delivered engine repair passed its own live gate before direct
+main integration and canonical campaign installation.
