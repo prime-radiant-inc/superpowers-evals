@@ -1,7 +1,7 @@
 # Conversation startup and Pi evidence results
 
 Date: 2026-09-08
-Status: offline implementation in progress; no live qualification authorized.
+Status: offline checks passed; live qualification is not authorized.
 
 ## Question
 
@@ -40,6 +40,14 @@ merges the bypass-prompt setting. It preserves the generated launcher and plugin
 Its loopback-only endpoint setting is a probe fixture, not a new production
 routing feature. Dummy Mantle readiness does not prove real authentication.
 
+The implementation completes those config mirrors and selects the closed
+`--startup claude` path. Gauntlet waits for the recognized composer before its
+first simulated-user request and sends no startup input. It retains initial and
+changed startup screens using its existing capture writer. If Quorum must stop
+the process, the fallback record can reference the last durable startup screen;
+it does not claim an atomic snapshot at the instant of termination. Completed
+startup events prevent a later interruption from borrowing a stale ready screen.
+
 ## Negative results and review corrections
 
 - Claude's early probe ran as root, then exposed missing approval in one config
@@ -61,6 +69,12 @@ routing feature. Dummy Mantle readiness does not prove real authentication.
   default macOS temporary path. Root's exact-head rerun with canonical short
   `TMPDIR=/private/tmp` passed 60 tests and 206 assertions. The earlier failure is
   retained; host load was not established as its cause.
+- Task review found that tmux's styled output could fail the plain-screen
+  readiness predicate, and forced termination could lose an unpersisted startup
+  screen. The correction normalizes terminal styling and preserves startup
+  observations before interruption. Styled paired tests and actual outer-role
+  cancellation/deadline tests now pass with zero early provider requests, usable
+  evidence and subject-process cleanup. Both findings passed scoped re-review.
 
 ## Candidate validation
 
@@ -68,9 +82,38 @@ Pi's focused normalizer/capture/Obol checks passed 82 tests and 215 assertions;
 lint and typecheck passed. Source review found no implementation defect. The
 60-test affected admission/session run above resolved its validation finding.
 
-Final paired runtime identities, combined repository checks and broad review
-will be recorded here after the Claude readiness implementation is integrated.
-Until then this is not a completed candidate or a main-promotion receipt.
+Validated paired runtime: Quorum
+`2d71009cc52a5a3b994f1a385ea136abb5c15b78` and Gauntlet
+`f5d66447ce4234fd5c0901fad372935332003491`. Subsequent experiment-record commits
+do not change that runtime.
+
+| Final check | Result |
+| --- | --- |
+| Quorum `env -u GAUNTLET_ROOT TMPDIR=/private/tmp bun run check` | Lint/typecheck passed; 3744 tests passed, 22 skipped, zero failed, 20719 assertions; dashboard typecheck and 144 tests passed with 393 assertions |
+| Quorum `bun run quorum check` | All scenarios, credentials, arms and suites valid |
+| Gauntlet `env -u GAUNTLET_ROOT TMPDIR=/private/tmp bun run check` | Both typechecks and UI builds passed; 1357 tests passed, two skipped, zero failed, 3539 assertions |
+| Quorum `GAUNTLET_ROOT=<candidate Gauntlet worktree> TMPDIR=/private/tmp bun test test/runner-conversation-gauntlet-integration.test.ts` | Seven actual CLI/tmux/local-provider cases passed with 183 assertions |
+
+The Quorum full check omits the seven explicitly enabled paired cases, which
+were then run separately on this assembled tree. Its other 15 skips are
+conditional Windows, Docker and legacy integration checks. Gauntlet's two
+conditional API-client tests remain skipped. These checks do not establish a
+full Linux container qualification, real provider authentication or concurrency
+capacity. Full logs and task-review receipts are retained in the private ledger
+and results directory. No pre-commit hook was bypassed.
+
+## Decisions during implementation
+
+The installed probes themselves serve as the behavioral tests; no additional
+tests of rendered probe scripts were added. A probe defect could invalidate its
+conclusion, so the receipts and assertions received independent review. That
+review found and corrected the direct-response false positive above.
+
+The Claude loopback endpoint was supplied through private settings to preserve
+the actual generated launcher. A throwaway launcher with one explicit endpoint
+variable was permitted only as a fallback and was never used. Treating either
+local method as real routing proof would overstate the evidence; Mantle
+authentication remains a separate live gate.
 
 ## Next gate
 
