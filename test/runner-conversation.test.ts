@@ -98,6 +98,10 @@ test('completed refusal retains evidence and failing oracle still reaches isolat
     .map((l) => JSON.parse(l));
   expect(calls.map((c) => c.role)).toEqual(['converse', 'assess']);
   expect(calls[0].input).not.toContain('Acceptance Criteria');
+  expect(calls[0].flags).toContain('--startup');
+  expect(calls[0].flags[calls[0].flags.indexOf('--startup') + 1]).toBe(
+    'claude',
+  );
   expect(calls[1].input).not.toContain('Please fix pricing');
   expect(calls[0].env.home).toBe(args.runHomeDir);
   expect(calls[1].env.home).toBeUndefined();
@@ -481,6 +485,12 @@ test('Codex delivery uses native cwd-bound message evidence', async () => {
   expect(v.final).toBe('fail');
   expect(v.conversation?.endpoint).toBe('delivery');
   expect(existsSync(join(args.runDir, 'evidence/trajectory.json'))).toBe(true);
+  const invocation = JSON.parse(
+    readFileSync(join(args.runDir, 'invocations.jsonl'), 'utf8')
+      .trim()
+      .split('\n')[0]!,
+  );
+  expect(invocation.flags).not.toContain('--startup');
 });
 
 test('Pi delivery retains the real native session only at the launch cwd', async () => {

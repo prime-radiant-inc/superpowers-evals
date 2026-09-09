@@ -73,6 +73,19 @@ test('provision on the Mantle path appends the effort line after the Bedrock env
     expect(readFileSync(join(home.configDir, '.claude-env'), 'utf8')).toBe(
       "CLAUDE_CODE_USE_MANTLE=1\nAWS_REGION='us-east-1'\nAWS_BEARER_TOKEN_BEDROCK='bedrock-key-xyz'\nCLAUDE_CODE_EFFORT_LEVEL='xhigh'\n",
     );
+    const nested = JSON.parse(
+      readFileSync(join(home.configDir, '.claude.json'), 'utf8'),
+    );
+    expect(nested.hasCompletedOnboarding).toBe(true);
+    expect(nested).toEqual(
+      JSON.parse(
+        readFileSync(join(home.configDir, '..', '.claude.json'), 'utf8'),
+      ),
+    );
+    expect(
+      JSON.parse(readFileSync(join(home.configDir, 'settings.json'), 'utf8'))
+        .skipDangerousModePermissionPrompt,
+    ).toBe(true);
   } finally {
     cleanup();
   }

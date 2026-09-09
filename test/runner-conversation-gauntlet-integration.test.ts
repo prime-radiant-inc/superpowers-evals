@@ -3,6 +3,7 @@
 import { expect, test } from 'bun:test';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -39,6 +40,158 @@ function resultTexts(request: Request): string[] {
   );
 }
 
+for (const interruption of ['cancelled', 'timed_out'] as const)
+  test.skipIf(!gauntletRoot)(
+    'retains visible Claude startup evidence when the outer role is ' +
+      interruption,
+    async () => {
+      const runDir = mkdtempSync(join(tmpdir(), 'wire-startup-'));
+      const workdir = join(runDir, 'work');
+      const scenarioDir = join(runDir, 'scenario');
+      const home = join(runDir, 'home');
+      const logs = join(home, 'logs');
+      for (const path of [workdir, scenarioDir, logs])
+        mkdirSync(path, { recursive: true });
+      let providerRequests = 0;
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch() {
+          providerRequests++;
+          return new Response('startup barrier called provider', {
+            status: 500,
+          });
+        },
+      });
+      try {
+        writeFileSync(
+          join(scenarioDir, 'story.md'),
+          '---\nid: wire-startup\ntitle: Startup interruption\nstatus: ready\nquorum_mode: conversation\nquorum_max_time: 10m\n---\nPlease fix pricing.\n\n## Acceptance Criteria\n- Pricing returns 42.\n',
+        );
+        writeFileSync(join(scenarioDir, 'oracle.cjs'), 'process.exit(1);\n');
+        writeFileSync(
+          join(scenarioDir, 'checks.sh'),
+          'pre() { :; }\npost() { :; }\n',
+        );
+        const subjectPid = join(runDir, 'subject-pid');
+        const subject = join(runDir, 'subject.ts');
+        writeFileSync(
+          subject,
+          "import { writeFileSync } from 'node:fs';\n" +
+            'writeFileSync(' +
+            JSON.stringify(subjectPid) +
+            ', String(process.pid));\n' +
+            "process.stdout.write('\\u001b[1mClaude Code v2.1.209\\u001b[0m\\n\\u001b[33mTrust this folder\\u001b[0m\\n\\u001b[38;5;111m❯ 2. No\\u001b[0m\\n');\n" +
+            'await new Promise(() => {});\n',
+        );
+        const launcher = join(workdir, 'launch-agent.sh');
+        writeFileSync(
+          launcher,
+          '#!/bin/sh\nexec ' +
+            shellQuote(process.execPath) +
+            ' ' +
+            shellQuote(subject) +
+            '\n',
+        );
+        chmodSync(launcher, 0o755);
+        const gauntlet = join(runDir, 'gauntlet');
+        writeFileSync(
+          gauntlet,
+          '#!/bin/sh\nexec ' +
+            shellQuote(process.execPath) +
+            ' ' +
+            shellQuote(join(gauntletRoot!, 'src/index.ts')) +
+            ' "$@"\n',
+        );
+        chmodSync(gauntlet, 0o755);
+
+        const startupWasCaptured = () => {
+          try {
+            const roles = GauntletRolesSchema.parse(
+              JSON.parse(
+                readFileSync(join(runDir, 'gauntlet-roles.json'), 'utf8'),
+              ),
+            );
+            const exchange = join(
+              runDir,
+              roles.conversation.out_dir,
+              'exchange.jsonl',
+            );
+            return (
+              existsSync(exchange) &&
+              readFileSync(exchange, 'utf8').includes('"kind":"startup"')
+            );
+          } catch {
+            return false;
+          }
+        };
+        const verdict = await runPreparedConversation({
+          runDir,
+          scenarioDir,
+          storyPath: join(scenarioDir, 'story.md'),
+          launcherPath: launcher,
+          workdir,
+          launchCwd: workdir,
+          runHomeDir: home,
+          configDir: home,
+          codingAgent: 'claude',
+          normalizer: 'claude',
+          logDir: logs,
+          logGlob: '*.jsonl',
+          snapshot: snapshotDir(logs, '*.jsonl'),
+          checksSh: join(scenarioDir, 'checks.sh'),
+          checksRepoRoot: resolve(import.meta.dir, '..'),
+          preRecords: [],
+          expectedChecks: null,
+          gauntletBin: gauntlet,
+          graderModel: 'claude-sonnet-4-6',
+          maxTime: interruption === 'cancelled' ? '5s' : '1s',
+          envBase: {
+            HOME: home,
+            PATH: getEnv('PATH'),
+            ANTHROPIC_API_KEY: 'offline-only',
+            ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}`,
+          },
+          shouldStop:
+            interruption === 'cancelled' ? startupWasCaptured : () => false,
+          identity: {
+            scenario: 'wire-startup',
+            agent: 'claude',
+            credential: 'offline',
+            os: 'linux',
+          },
+        });
+
+        expect(providerRequests).toBe(0);
+        expect(verdict.conversation).toMatchObject({
+          status: interruption === 'cancelled' ? 'stopped' : 'timed_out',
+          endpoint: null,
+          evidence: { quote: '❯ 2. No' },
+        });
+        const visible = verdict.conversation?.evidence;
+        expect(visible).not.toBeNull();
+        expect(existsSync(join(runDir, visible!.path))).toBe(true);
+        const retained = JSON.parse(
+          readFileSync(join(runDir, 'evidence/conversation.json'), 'utf8'),
+        );
+        expect(retained.evidence.path).toMatch(/^visible\/captures\//);
+        expect(
+          existsSync(join(runDir, 'evidence', retained.evidence.path)),
+        ).toBe(true);
+        const roles = GauntletRolesSchema.parse(
+          JSON.parse(readFileSync(join(runDir, 'gauntlet-roles.json'), 'utf8')),
+        );
+        expect(roles.conversation.stop_cause).toBe(interruption);
+        const pid = Number(readFileSync(subjectPid, 'utf8'));
+        expect(() => process.kill(-pid, 0)).toThrow();
+      } finally {
+        await server.stop(true);
+        rmSync(runDir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
 for (const outcome of [
   'correct',
   'incorrect',
@@ -65,6 +218,7 @@ for (const outcome of [
       let assessmentTurns = 0;
       let answered = false;
       let sawQuestion = false;
+      let conversationRequestsBeforeReady = 0;
       let assessedOutput = '';
       const unclear =
         outcome === 'mixed-unclear' || outcome === 'investigate-unclear';
@@ -79,6 +233,7 @@ for (const outcome of [
         outcome === 'refusal'
           ? 'I refuse to change pricing.'
           : 'Delivered pricing.js.';
+      const readyMarker = join(runDir, 'subject-ready');
       const server = Bun.serve({
         hostname: '127.0.0.1',
         port: 0,
@@ -97,6 +252,7 @@ for (const outcome of [
           let input: Record<string, unknown>;
           try {
             if (isConversation) {
+              if (!existsSync(readyMarker)) conversationRequestsBeforeReady++;
               if (++conversationTurns > 20)
                 throw new Error(
                   'conversation exhausted scripted response bound',
@@ -225,7 +381,11 @@ for (const outcome of [
         writeFileSync(
           subject,
           `import { writeFileSync } from 'node:fs';
-process.stdout.write('Which currency?\\n');
+await Bun.sleep(200);
+process.stdout.write('\u001b[1;38;5;111m');
+process.stdout.write('╭─── Claude Code v2.1.209 ───╮\\n❯  \\n⏵⏵ bypass permissions on (shift+tab to cycle)\\nWhich currency?\\n');
+process.stdout.write('\u001b[0m');
+writeFileSync(${JSON.stringify(readyMarker)}, 'ready');
 for await (const chunk of Bun.stdin.stream()) {
   const answer = new TextDecoder().decode(chunk).trim();
   if (answer !== 'USD') process.exit(8);
@@ -297,6 +457,7 @@ await new Promise(() => {});
             verdict: 'unclear',
           });
         expect(sawQuestion).toBe(true);
+        expect(conversationRequestsBeforeReady).toBe(0);
         expect(readFileSync(join(runDir, 'answer.txt'), 'utf8')).toBe('USD');
         expect(verdict.conversation).toMatchObject({
           status: 'completed',
