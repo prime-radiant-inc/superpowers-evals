@@ -143,6 +143,63 @@ function regularFile(root: string, path: string): string {
   accessSync(full, constants.R_OK);
   return full;
 }
+const CaptureGridSchema = z.object({
+  cells: z.array(z.array(z.object({ ch: z.string() }))),
+});
+function renderedCapture(path: string): string {
+  const grid = CaptureGridSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+  return grid.cells
+    .map((row) =>
+      row
+        .map((cell) => cell.ch)
+        .join('')
+        .trimEnd(),
+    )
+    .join('\n')
+    .trimEnd();
+}
+function observedStartupEvidence(
+  runDir: string,
+  conversationOut: string,
+): ConversationRecord['evidence'] {
+  const exchangePath = join(conversationOut, 'exchange.jsonl');
+  if (!existsSync(exchangePath)) return null;
+  const rows = readFileSync(exchangePath, 'utf8').trimEnd().split('\n');
+  for (let index = rows.length - 1; index >= 0; index--) {
+    try {
+      const row = rows[index];
+      if (row === undefined) continue;
+      const event = z
+        .object({
+          kind: z.literal('startup'),
+          status: z.enum(['observed', 'ready', 'exited', 'timed_out']),
+          capture: z.string(),
+        })
+        .passthrough()
+        .parse(JSON.parse(row));
+      if (event.status !== 'observed') return null;
+      const ansi = regularFile(conversationOut, event.capture);
+      if (
+        !event.capture.startsWith('captures/') ||
+        !event.capture.endsWith('.ansi')
+      )
+        continue;
+      const json = regularFile(
+        conversationOut,
+        event.capture.replace(/\.ansi$/, '.json'),
+      );
+      const quote = renderedCapture(json)
+        .split('\n')
+        .findLast((line) => line.trim() !== '')
+        ?.trim();
+      if (quote === undefined || quote === '') continue;
+      return { path: relative(runDir, ansi), quote };
+    } catch {
+      /* Ignore partial, malformed, or unsafe startup evidence. */
+    }
+  }
+  return null;
+}
 
 async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
   const evidenceRoot = join(a.runDir, 'evidence');
@@ -175,12 +232,13 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
   const incomplete = (
     status: 'stopped' | 'timed_out' | 'errored',
     reason: string,
+    evidence: ConversationRecord['evidence'] = null,
   ): ConversationRecord => ({
     status,
     endpoint: null,
     reason,
     timestamp: new Date().toISOString(),
-    evidence: null,
+    evidence,
   });
   const fail = (
     failureStage: RunErrorStage,
@@ -275,6 +333,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
             ? 'timed_out'
             : 'errored',
         'conversation ended without a valid endpoint',
+        observedStartupEvidence(a.runDir, conversationOut),
       );
     conversation = retainConversationRecord(a.runDir, conversation);
     stage = 'capture';
@@ -318,18 +377,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
         conversationOut,
         visible.replace(/\.ansi$/, '.json'),
       );
-      const grid = z
-        .object({ cells: z.array(z.array(z.object({ ch: z.string() }))) })
-        .parse(JSON.parse(readFileSync(captureJson, 'utf8')));
-      const rendered = grid.cells
-        .map((row) =>
-          row
-            .map((cell) => cell.ch)
-            .join('')
-            .trimEnd(),
-        )
-        .join('\n')
-        .trimEnd();
+      const rendered = renderedCapture(captureJson);
       if (!rendered.includes(conversation.evidence.quote))
         throw new Error('completion evidence is not a retained visible quote');
       writeJson(join(evidenceRoot, 'conversation.json'), {
