@@ -112,3 +112,22 @@ The structured assessor fields remain a testable hypothesis, not evidence that
 the grader is now reliable. The declared semantic gates must establish that.
 No additional platform, campaign, ensemble, or statistical subsystem is
 recommended by this review.
+
+## Follow-up disposition
+
+Drew authorized the four spec corrections and an implementation plan, explicitly
+withholding execution. The revised spec resolves all four findings. The
+[single release plan](../plans/2026-09-08-conversation-evals-routine-use.md)
+assigns prior-response evidence validation to Task 2, complete atomic judgments
+and expectation-defect disposition to Task 3, and observed appliance stopping
+to Task 4. Tasks 6–7 integrate and qualify that same release.
+
+Grading, runtime and scope reviewers approved the revised documents after two
+plan corrections: the retained control-gold path and ownership of an existing
+operator fixture's assessment-contract update. The original findings above
+remain attributed to the frozen spec they reviewed. No finding requires a
+framework or scheduler change, corpus expansion or another launch pilot.
+
+Document checks verified links, source pointers, allocation arithmetic, task
+coverage and unchecked execution steps. This is reviewed planning, not source,
+test, deployment or live-acceptance proof. Execution remains withheld.

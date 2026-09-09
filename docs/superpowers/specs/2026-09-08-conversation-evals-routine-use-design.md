@@ -1,7 +1,8 @@
 # Conversation evals: routine Superpowers comparisons
 
-Status: proposed for Drew's review. This request authorizes the spec, not
-implementation or provider spending. Continue the existing PRI-3102 work.
+Status: revised after the committed review-team findings; implementation plan
+requested for review only. Drew explicitly withheld execution. Continue the
+existing PRI-3102 work.
 
 ## The next stage
 
@@ -128,8 +129,11 @@ Do not mechanically split every conjunction: legitimate alternatives and
 qualifications must retain their meaning.
 
 For existing regression cases, author separately identified decomposed rubrics
-with an independently reviewed mapping to each original obligation. Folding the
-new judgments through that mapping must reproduce the settled original result.
+with an independently reviewed mapping to each original obligation, preserving
+alternatives and fail/unclear semantics. Require each atomic judgment to match
+its independently supported expectation and the folded judgments to reproduce
+the settled original results. Matching original results alone cannot establish
+that the decomposition preserves meaning.
 Keep original rubrics, gold and evidence unchanged. Every acceptance scenario,
 including existing ones, must allow stock agents to pass through equivalent
 good behavior. Setup and checks must support both conditions; using a named
@@ -146,12 +150,16 @@ what the assessor must submit for each criterion:
 - `basis`: why that observation satisfies or violates this criterion;
 - `limitations`: material contrary evidence or uncertainty, including an
   explicit statement when none was found;
-- `references`: nonempty indexed paths actually read successfully in this
-  assessment that support the observation and its limits.
+- `references`: nonempty indexed paths whose contents were successfully delivered
+  in the assessor's history before the report-generating response, supporting
+  the observation and its limits.
 
-Reference validation establishes that the assessor inspected the cited files;
-it does not establish semantic correctness. An omission can cite the inspected
-question sequence and complete proposal. An exploit claim must be considered
+Failed reads and newly requested reads in the same response as the report do
+not qualify; an earlier successful delivery of the path can. Reference validation
+establishes prior availability to the model, not comprehension or semantic
+correctness. An empty evidence index is an input error before the first provider
+request; a valid unclear judgment can cite available but insufficient evidence.
+An omission can cite the inspected question sequence and complete proposal. An exploit claim must be considered
 alongside the actual source and missing driver contract. A test-history claim
 must be compared with the relevant command results and their order, preserving
 the difference between initial failure and final recovery.
@@ -204,9 +212,10 @@ without a bespoke parser or a parallel reporting product.
 
 Complete source review and meaningful offline checks together. Exercise actual
 brief/rubric separation through the paired CLI, independent checks, report
-rejection/repair, writer/exit/consumer behavior, refusal/error distinctions and
-no further subject input after completion. Test report data and behavior rather
-than large generated strings or prompt wording. Preserve completed bad work.
+rejection/repair, prior-response evidence delivery, writer/exit/consumer behavior,
+refusal/error distinctions and no further subject input after completion. Test
+report data and behavior rather than large generated strings or prompt wording.
+Preserve completed bad work.
 
 Freeze the source pair, case identities, derived-rubric mapping and independent
 expectations before qualification. An independent reviewer establishes expected
@@ -222,8 +231,9 @@ the latest five retained grading cases, the real Claude debugging false-history
 case, its passing Codex debugging counterpart, and verification controls e/f
 from the release corpus. These distinguish required omissions, conditional
 security risks, unsupported exploit assertions, correct recovery, false accounts
-of original tests, and false final success. Require supported original-criterion
-outcomes through the decomposition map and materially sound decisive rationale.
+of original tests, and false final success. Require every atomic verdict to
+match its frozen expectation, every folded original verdict to match, and all
+decisive rationale to be materially sound, including the overall explanation.
 Alternative supported explanations are acceptable.
 
 **Driver: six controlled subject situations, two repetitions each, 12 conversation
@@ -254,6 +264,18 @@ candidate's qualification; a later candidate requires a new frozen source
 identity and the integrated repair round below, never an in-place prompt or
 gold edit.
 
+An independently substantiated expectation or mapping defect is distinct from
+a candidate semantic miss. Preserve the original judgments, candidate results
+and review history; mark the affected qualification unqualified and pause its
+remaining admissions while primary evidence resolves the issue. Candidate
+output or disagreement alone cannot establish a defect. A substantive correction
+gets separately identified rubric/map/gold versions and an independently reviewed
+semantic delta, then requires the relevant full qualification within the same
+repair and allocation limits. It cannot retroactively promote an old candidate
+or be described as lossless decomposition. A material change in what the scenario
+measures returns to scope discussion; unresolved interpretation cannot establish
+a treatment effect. No adjudication service is introduced.
+
 ### Fresh decision campaign
 
 After instrument qualification, use one ordinary campaign with the following
@@ -282,9 +304,11 @@ assessment bounds, and a 900-second outer attempt bound. Use
 existing frozen pricing snapshot. The declared Pi scope is code review;
 do not silently extend its scenario allowlist to the other families.
 
-Independently inspect every fresh interaction and delivered result before
-exposing its official grade to that reviewer. Record driver fidelity, expected
-subject judgments and assessment support against exact immutable evidence.
+Independently inspect every fresh interaction and delivered result, and save
+driver-fidelity findings and expected subject judgments before exposing the
+official grade to that reviewer. Then inspect the grade and save assessment
+support or disagreement against the same immutable evidence. Unresolved
+independent interpretation remains unqualified, not automatically a grader error.
 Use existing registration and retained launch/provisioning evidence to verify
 the intended source/model/effort/image identities, stock absence of Superpowers
 and treatment installation of the pinned revision. Record any unexpected
@@ -328,19 +352,40 @@ roles as well as coding agents. These are work/time bounds and an observed
 cost threshold, not a hard provider invoice cap. Freeze one absolute cutoff
 six hours after the first paid qualification admission. Intervening review,
 repair and waiting time count; source freezes and new registrations never reset
-the clock. Do not admit a session or attempt unless its declared bound and
-cleanup fit the remaining window. These ceilings do not promise that every
-maximum stage will fit.
+the clock. These ceilings do not promise that every maximum stage will fit.
 
 The appliance owns running work. Use existing status/costs/cancellation and
-ownership paths; stop new work on the cost/time boundary, settled accounting
-failure, unsafe ownership or a material scope change. Expected pending usage
-while a role runs is not an accounting failure. Missing or unpriceable returned
-usage after its role/attempt settles, lost required evidence or inability to
-reconcile an owned execution does stop admission. Preserve known subtotals and
-pending coverage rather than inventing zero cost. Active work may accrue cost
-before cancellation completes. Do not add a budget-control subsystem. Preserve
-all failed attempts, stopped stages, source versions and negative results.
+ownership paths through one finite appliance-owned release caller:
+
+- Directly owned qualification sessions check remaining time and cumulative
+  settled costs before each launch. Their role bound and cleanup must fit before
+  the cancellation threshold, 60 seconds before the original cutoff.
+- Ordinary campaigns keep their autonomous dispatcher. While a campaign runs,
+  read status/costs and newly settled evidence, then wait at most 15 seconds
+  before the next observation. Bound each observation to 10 seconds, with
+  independent reads concurrent. Under a responsive owner, a boundary can take
+  up to 25 seconds to be observed. Read failure or timeout requests cancellation.
+  The cancellation-threshold timer runs independently of slow observations.
+- Request existing cancellation when the $150 known subtotal is observed, a
+  settled accounting/evidence failure is observed, ownership becomes unsafe,
+  scope changes, or time reaches the 60-second cancellation threshold. Cancel
+  active work as well; do not wait for it to consume its normal attempt bound.
+  Admit no further qualification session or campaign after this stop decision.
+  The 10-second read timeout does not kill an in-progress cancellation operation;
+  retain ownership until it settles and verify termination through existing paths.
+- Expected pending usage while a role runs is not an accounting failure. Missing
+  or unpriceable returned usage after its role/attempt settles, lost required
+  evidence or inability to reconcile an owned execution is. Preserve known
+  subtotals and pending coverage rather than inventing zero cost.
+
+This is observed campaign-level stopping, not a synchronous per-attempt release
+budget guard. A campaign may start an intervening attempt before cancellation
+is observed. Host stalls, cancellation and termination reconciliation can
+overrun the cutoff; retain their duration, spend and termination evidence and
+report the limit breach. The cutoff and reserve are stopping policy, not a
+guarantee of a six-hour last-process exit or a hard invoice cap. Use existing
+termination reconciliation rather than introducing new admission, scheduler,
+budget-control or recovery mechanisms. Preserve all stopped and failed work.
 
 Approval to execute the eventual plan includes these predeclared stages and
 the integrated repair allowance; it does not require Drew to approve each bug,
