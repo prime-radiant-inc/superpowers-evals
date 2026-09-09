@@ -19,7 +19,6 @@ import {
 } from 'node:path';
 import { z } from 'zod';
 import { loadStateConfig } from '../../../src/appliance/config.ts';
-import { readBundleEnvForProjection } from '../../../src/appliance/credential-scope.ts';
 import { inspectLock } from '../../../src/appliance/locks.ts';
 import { createDurableMarker } from '../../../src/campaign/journal.ts';
 import {
@@ -31,22 +30,17 @@ import { verifyPricingSnapshot } from '../../../src/campaign/pricing-snapshot.ts
 import { EvidenceIndexSchema } from '../../../src/contracts/conversation.ts';
 import { GauntletResultSchema } from '../../../src/contracts/gauntlet.ts';
 import { GauntletLayerSchema } from '../../../src/contracts/verdict.ts';
-import {
-  APPLIANCE_SCOPED_GRADER_MODE,
-  QUORUM_GRADER_SOURCE_MODE,
-  SUPERVISOR_NETWORK_ENV_NAMES,
-} from '../../../src/credentials/grader.ts';
 import { getEnv } from '../../../src/env.ts';
 import { estimateUsageSidecar } from '../../../src/obol/index.ts';
-import { gauntletEnvBase } from '../../../src/runner/gauntlet-env.ts';
 import { RealClock } from '../../../src/scheduler/clock.ts';
 import {
+  createRetainedAssessmentHeartbeatScheduler,
   gitHead,
+  retainedAssessmentEnv,
   runChild,
 } from '../2026-09-08-conversation-reliability/run.ts';
 
 const MODEL = 'anthropic.claude-sonnet-5';
-const MANTLE_URL = 'https://bedrock-mantle.us-east-1.api.aws/anthropic';
 const CHILD_MS = 120_000;
 const CLEANUP_MS = 2_000;
 const WINDOW_MS = 45 * 60_000;
@@ -744,48 +738,14 @@ async function main(): Promise<void> {
         return acquireLiveSpendLock({
           clock: new RealClock(),
           identity: realProcessIdentityProbe,
-          scheduler: {
-            every(ms, beat) {
-              const timer = setInterval(() => {
-                try {
-                  beat();
-                } catch {
-                  lost();
-                }
-              }, ms);
-              return () => clearInterval(timer);
-            },
-          },
+          scheduler: createRetainedAssessmentHeartbeatScheduler(lost),
         });
       },
       graderEnv() {
-        const bundle = readBundleEnvForProjection(
+        return retainedAssessmentEnv(
           loaded.config.credential_bundle.path,
-          ['AWS_BEARER_TOKEN_BEDROCK', ...SUPERVISOR_NETWORK_ENV_NAMES],
+          pricing.directory,
         );
-        const bearer = bundle.get('AWS_BEARER_TOKEN_BEDROCK');
-        if (!bearer) throw new Error('blessed bundle has no Bedrock bearer');
-        const source: Record<string, string | undefined> = {
-          [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
-          QUORUM_GRADER_ANTHROPIC_API_KEY: bearer,
-          QUORUM_GRADER_ANTHROPIC_BASE_URL: MANTLE_URL,
-        };
-        for (const name of [
-          'PATH',
-          'USER',
-          'SHELL',
-          'LANG',
-          'LC_ALL',
-          'TERM',
-          'TZ',
-        ])
-          source[name] = getEnv(name);
-        for (const name of SUPERVISOR_NETWORK_ENV_NAMES)
-          source[name] = bundle.get(name);
-        return {
-          ...gauntletEnvBase(source),
-          OBOL_PRICING_DIR: pricing.directory,
-        };
       },
     });
   } finally {

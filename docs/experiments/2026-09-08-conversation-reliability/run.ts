@@ -27,6 +27,7 @@ import { readBundleEnvForProjection } from '../../../src/appliance/credential-sc
 import { inspectLock } from '../../../src/appliance/locks.ts';
 import {
   acquireLiveSpendLock,
+  type HeartbeatScheduler,
   realProcessIdentityProbe,
 } from '../../../src/campaign/locks.ts';
 import { verifyPricingSnapshot } from '../../../src/campaign/pricing-snapshot.ts';
@@ -797,6 +798,47 @@ async function pricedUsage(path: string): Promise<number | null> {
   return usage?.unpriced_models.length === 0 ? usage.est_cost_usd : null;
 }
 
+/** Keep ownership loss inside the operator cancellation path. */
+export function createRetainedAssessmentHeartbeatScheduler(
+  lost: () => void,
+): HeartbeatScheduler {
+  return {
+    every(ms, beat) {
+      const timer = setInterval(() => {
+        try {
+          beat();
+        } catch {
+          lost();
+        }
+      }, ms);
+      return () => clearInterval(timer);
+    },
+  };
+}
+
+/** Project the blessed retained-assessment credential and network policy. */
+export function retainedAssessmentEnv(
+  bundlePath: string,
+  pricingDirectory: string,
+): Record<string, string | undefined> {
+  const names = ['AWS_BEARER_TOKEN_BEDROCK', ...SUPERVISOR_NETWORK_ENV_NAMES];
+  const bundle = readBundleEnvForProjection(bundlePath, names);
+  const bearer = bundle.get('AWS_BEARER_TOKEN_BEDROCK');
+  if (!bearer) throw new Error('blessed bundle has no Bedrock bearer');
+  const source: Record<string, string | undefined> = {
+    [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
+    QUORUM_GRADER_ANTHROPIC_API_KEY: bearer,
+    QUORUM_GRADER_ANTHROPIC_BASE_URL: MANTLE_URL,
+  };
+  for (const name of SYSTEM_ENV) source[name] = getEnv(name);
+  for (const name of SUPERVISOR_NETWORK_ENV_NAMES)
+    source[name] = bundle.get(name);
+  return {
+    ...gauntletEnvBase(source),
+    OBOL_PRICING_DIR: pricingDirectory,
+  };
+}
+
 async function main(): Promise<void> {
   const [flag, inputArg, outputArg, ...extra] = process.argv.slice(2);
   if (flag !== '--execute' || !inputArg || !outputArg || extra.length)
@@ -852,18 +894,7 @@ async function main(): Promise<void> {
           return acquireLiveSpendLock({
             clock: new RealClock(),
             identity: realProcessIdentityProbe,
-            scheduler: {
-              every(ms, beat) {
-                const timer = setInterval(() => {
-                  try {
-                    beat();
-                  } catch {
-                    lost();
-                  }
-                }, ms);
-                return () => clearInterval(timer);
-              },
-            },
+            scheduler: createRetainedAssessmentHeartbeatScheduler(lost),
           });
         },
         verifyInputs() {
@@ -876,29 +907,10 @@ async function main(): Promise<void> {
         },
         async execute(entry, out, signal) {
           if (Object.keys(env).length === 0) {
-            const names = [
-              'AWS_BEARER_TOKEN_BEDROCK',
-              ...SUPERVISOR_NETWORK_ENV_NAMES,
-            ];
-            const bundle = readBundleEnvForProjection(
+            env = retainedAssessmentEnv(
               loaded.config.credential_bundle.path,
-              names,
+              pricing.directory,
             );
-            const bearer = bundle.get('AWS_BEARER_TOKEN_BEDROCK');
-            if (!bearer)
-              throw new Error('blessed bundle has no Bedrock bearer');
-            const source: Record<string, string | undefined> = {
-              [QUORUM_GRADER_SOURCE_MODE]: APPLIANCE_SCOPED_GRADER_MODE,
-              QUORUM_GRADER_ANTHROPIC_API_KEY: bearer,
-              QUORUM_GRADER_ANTHROPIC_BASE_URL: MANTLE_URL,
-            };
-            for (const name of SYSTEM_ENV) source[name] = getEnv(name);
-            for (const name of SUPERVISOR_NETWORK_ENV_NAMES)
-              source[name] = bundle.get(name);
-            env = {
-              ...gauntletEnvBase(source),
-              OBOL_PRICING_DIR: pricing.directory,
-            };
           }
           return await runChild({
             args: [

@@ -19,7 +19,11 @@ import {
   runAssessmentCase,
   verifyAssessmentUsage,
 } from '../docs/experiments/2026-09-08-conversation-grading/run.ts';
-import { runChild } from '../docs/experiments/2026-09-08-conversation-reliability/run.ts';
+import {
+  createRetainedAssessmentHeartbeatScheduler,
+  retainedAssessmentEnv,
+  runChild,
+} from '../docs/experiments/2026-09-08-conversation-reliability/run.ts';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -540,4 +544,77 @@ test('a clean source checkout cannot import a symlinked parser outside its root'
   json(f.path, f.manifest);
   await expect(runAssessmentCase(f.path, 1, f.deps)).rejects.toThrow();
   expect(f.calls()).toBe(0);
+});
+
+test('shared retained environment maps only the blessed bearer and supervisor network', () => {
+  const bundle = temporary();
+  writeFileSync(
+    join(bundle, 'credentials.env'),
+    'AWS_BEARER_TOKEN_BEDROCK=blessed-fixture-bearer\nANTHROPIC_API_KEY=unblessed-key\nANTHROPIC_AUTH_TOKEN=unblessed-token\nOPENAI_API_KEY=unrelated-key\nHTTPS_PROXY=http://fixture-proxy.invalid:8080\n',
+    { mode: 0o600 },
+  );
+  const env = retainedAssessmentEnv(bundle, '/frozen/pricing');
+  expect(env['ANTHROPIC_API_KEY']).toBe('blessed-fixture-bearer');
+  expect(env['ANTHROPIC_BASE_URL']).toBe(
+    'https://bedrock-mantle.us-east-1.api.aws/anthropic',
+  );
+  expect(env['HTTPS_PROXY']).toBe('http://fixture-proxy.invalid:8080');
+  expect(env['OBOL_PRICING_DIR']).toBe('/frozen/pricing');
+  for (const name of [
+    'AWS_BEARER_TOKEN_BEDROCK',
+    'ANTHROPIC_AUTH_TOKEN',
+    'OPENAI_API_KEY',
+    'QUORUM_GRADER_SOURCE_MODE',
+    'QUORUM_GRADER_ANTHROPIC_API_KEY',
+  ])
+    expect(env).not.toHaveProperty(name);
+});
+test('shared retained environment refuses missing bearer even with another provider credential', () => {
+  const bundle = temporary();
+  writeFileSync(
+    join(bundle, 'credentials.env'),
+    'ANTHROPIC_API_KEY=unblessed-key\n',
+    { mode: 0o600 },
+  );
+  expect(() => retainedAssessmentEnv(bundle, '/frozen/pricing')).toThrow();
+});
+test('shared retained heartbeat scheduler reports loss and cancels future beats', async () => {
+  let losses = 0,
+    beats = 0;
+  const scheduler = createRetainedAssessmentHeartbeatScheduler(() => {
+    losses++;
+  });
+  const cancel = scheduler.every(2, () => {
+    beats++;
+    throw new Error('lease identity lost');
+  });
+  try {
+    await Bun.sleep(20);
+    expect(losses).toBeGreaterThan(0);
+    expect(losses).toBe(beats);
+  } finally {
+    cancel();
+  }
+  const settled = beats;
+  await Bun.sleep(20);
+  expect(beats).toBe(settled);
+});
+test('one-case launch gives the shared environment private HOME and TMPDIR', async () => {
+  const f = fixture(),
+    bundle = temporary(),
+    child = f.deps.child;
+  writeFileSync(
+    join(bundle, 'credentials.env'),
+    'AWS_BEARER_TOKEN_BEDROCK=blessed-fixture-bearer\n',
+    { mode: 0o600 },
+  );
+  f.deps.graderEnv = () => retainedAssessmentEnv(bundle, '/frozen/pricing');
+  f.deps.child = async (options) => {
+    expect(options.env['HOME']).toBe(join(options.cwd, 'home'));
+    expect(options.env['TMPDIR']).toBe(join(options.cwd, 'tmp'));
+    expect(options.env['ANTHROPIC_API_KEY']).toBe('blessed-fixture-bearer');
+    expect(options.env).not.toHaveProperty('AWS_BEARER_TOKEN_BEDROCK');
+    return child(options);
+  };
+  await runAssessmentCase(f.path, 1, f.deps);
 });
