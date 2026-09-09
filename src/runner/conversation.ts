@@ -245,6 +245,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
           socketPath,
           '--model',
           `agent=${a.graderModel}`,
+          ...(a.normalizer === 'claude' ? ['--startup', 'claude'] : []),
           '--max-time',
           a.maxTime,
         ],

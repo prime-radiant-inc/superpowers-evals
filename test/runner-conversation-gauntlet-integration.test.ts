@@ -3,6 +3,7 @@
 import { expect, test } from 'bun:test';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -65,6 +66,7 @@ for (const outcome of [
       let assessmentTurns = 0;
       let answered = false;
       let sawQuestion = false;
+      let conversationRequestsBeforeReady = 0;
       let assessedOutput = '';
       const unclear =
         outcome === 'mixed-unclear' || outcome === 'investigate-unclear';
@@ -79,6 +81,7 @@ for (const outcome of [
         outcome === 'refusal'
           ? 'I refuse to change pricing.'
           : 'Delivered pricing.js.';
+      const readyMarker = join(runDir, 'subject-ready');
       const server = Bun.serve({
         hostname: '127.0.0.1',
         port: 0,
@@ -97,6 +100,7 @@ for (const outcome of [
           let input: Record<string, unknown>;
           try {
             if (isConversation) {
+              if (!existsSync(readyMarker)) conversationRequestsBeforeReady++;
               if (++conversationTurns > 20)
                 throw new Error(
                   'conversation exhausted scripted response bound',
@@ -225,7 +229,9 @@ for (const outcome of [
         writeFileSync(
           subject,
           `import { writeFileSync } from 'node:fs';
-process.stdout.write('Which currency?\\n');
+await Bun.sleep(200);
+writeFileSync(${JSON.stringify(readyMarker)}, 'ready');
+process.stdout.write('╭─── Claude Code v2.1.209 ───╮\\n❯  \\n⏵⏵ bypass permissions on (shift+tab to cycle)\\nWhich currency?\\n');
 for await (const chunk of Bun.stdin.stream()) {
   const answer = new TextDecoder().decode(chunk).trim();
   if (answer !== 'USD') process.exit(8);
@@ -297,6 +303,7 @@ await new Promise(() => {});
             verdict: 'unclear',
           });
         expect(sawQuestion).toBe(true);
+        expect(conversationRequestsBeforeReady).toBe(0);
         expect(readFileSync(join(runDir, 'answer.txt'), 'utf8')).toBe('USD');
         expect(verdict.conversation).toMatchObject({
           status: 'completed',

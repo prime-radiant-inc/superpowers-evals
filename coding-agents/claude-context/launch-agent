@@ -50,14 +50,9 @@
 #
 # Auth is either ANTHROPIC_API_KEY (direct API) or CLAUDE_CODE_USE_MANTLE +
 # AWS_REGION + AWS_BEARER_TOKEN_BEDROCK (Bedrock/Mantle), whichever
-# $CLAUDE_ENV_FILE set, plus provision()'s API-key approval; the project-trust
-# block provision() writes into .claude.json suppresses the trust prompt. No
-# onboarding skeleton, IS_DEMO, or marketplace-disable is needed — claude boots
-# headless and runs/auto-completes onboarding each run (that is what activates
-# auth). (IS_DEMO=1 is NOT used: it skips that first-run flow on a never-onboarded
-# config, so claude comes up "Not logged in" — reproduced 2/2. The auth resolver
-# itself is IS_DEMO-independent; it's the onboarding-skip on a fresh config that
-# bites.)
+# $CLAUDE_ENV_FILE set. provision() mirrors the final API-key approval, project
+# trust, and completed-onboarding state into Claude's two config locations, and
+# its settings suppress the dangerous-mode confirmation used by this launcher.
 set -euo pipefail
 cd "$QUORUM_AGENT_CWD" || { echo "launch-agent: cannot cd to $QUORUM_AGENT_CWD" >&2; exit 1; }
 # Scrub any host-inherited Bedrock/AWS/gate vars, and ANTHROPIC_API_KEY, BEFORE

@@ -75,10 +75,9 @@ function withEnv(
   }
 }
 
-// Pre-seed configDir/.claude.json so provision() extends an existing file. Claude
-// no longer copies a home skeleton (IS_DEMO/onboarding state is unnecessary —
-// recent claude boots on API-key auth + the trust block alone), so prior state
-// is modeled by writing .claude.json directly rather than via a skeleton copy.
+// Pre-seed configDir/.claude.json so provision() extends an existing file.
+// Prior state is modeled by writing .claude.json directly rather than through a
+// home skeleton.
 function seedClaudeJson(configDir: string, claudeJson: unknown): void {
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, '.claude.json'), JSON.stringify(claudeJson));
@@ -158,6 +157,19 @@ test('provision seeds the customApiKeyResponses approval fingerprint and scrubs 
       expect(claudeJson.customApiKeyResponses.approved).toEqual([fingerprint]);
       // The matching fingerprint is removed from rejected; others stay.
       expect(claudeJson.customApiKeyResponses.rejected).toEqual(['other']);
+      expect(claudeJson).toEqual(
+        JSON.parse(
+          readFileSync(join(home.configDir, '..', '.claude.json'), 'utf8'),
+        ),
+      );
+      expect(
+        (claudeJson as { hasCompletedOnboarding?: boolean })
+          .hasCompletedOnboarding,
+      ).toBe(true);
+      expect(
+        JSON.parse(readFileSync(join(home.configDir, 'settings.json'), 'utf8'))
+          .skipDangerousModePermissionPrompt,
+      ).toBe(true);
     });
   } finally {
     cleanup();
@@ -361,14 +373,18 @@ test('provision merges apiKeyHelper into pre-existing settings.json', () => {
       );
       agent.provision(home, undefined as never, apiKeyCredential);
 
-      const settings: { apiKeyHelper?: string; permissions?: unknown } =
-        JSON.parse(readFileSync(settingsPath, 'utf8'));
+      const settings: {
+        apiKeyHelper?: string;
+        permissions?: unknown;
+        skipDangerousModePermissionPrompt?: boolean;
+      } = JSON.parse(readFileSync(settingsPath, 'utf8'));
       // apiKeyHelper must be added.
       expect(settings.apiKeyHelper).toBe(
         join(home.configDir, 'api-key-helper.sh'),
       );
       // The pre-existing permissions key must survive.
       expect(settings.permissions).toEqual({ allow: [] });
+      expect(settings.skipDangerousModePermissionPrompt).toBe(true);
     });
   } finally {
     cleanup();
@@ -415,12 +431,12 @@ test('provision (oauth credential) writes CLAUDE_CODE_OAUTH_TOKEN to .claude-env
           false,
         );
         const settingsPath = join(home.configDir, 'settings.json');
-        if (existsSync(settingsPath)) {
-          const settings: { apiKeyHelper?: string } = JSON.parse(
-            readFileSync(settingsPath, 'utf8'),
-          );
-          expect(settings.apiKeyHelper).toBeUndefined();
-        }
+        const settings: {
+          apiKeyHelper?: string;
+          skipDangerousModePermissionPrompt?: boolean;
+        } = JSON.parse(readFileSync(settingsPath, 'utf8'));
+        expect(settings.apiKeyHelper).toBeUndefined();
+        expect(settings.skipDangerousModePermissionPrompt).toBe(true);
         const claudeJson: {
           customApiKeyResponses?: unknown;
           hasCompletedOnboarding?: boolean;
@@ -428,12 +444,9 @@ test('provision (oauth credential) writes CLAUDE_CODE_OAUTH_TOKEN to .claude-env
           readFileSync(join(home.configDir, '.claude.json'), 'utf8'),
         );
         expect(claudeJson.customApiKeyResponses).toBeUndefined();
-        // Token auth requires SKIPPING first-run onboarding: on a fresh
+        // Token auth requires skipping first-run onboarding: on a fresh
         // config the interactive login-method prompt fires before the env
-        // token is consulted (reproduced live 2026-08-11); with onboarding
-        // marked complete the TUI authenticates straight from the token.
-        // The api-key path deliberately does NOT set this — its onboarding
-        // run is what activates api-key auth.
+        // token is consulted (reproduced live 2026-08-11).
         expect(claudeJson.hasCompletedOnboarding).toBe(true);
         // Claude reads the TOP-LEVEL $HOME/.claude.json, not
         // configDir/.claude.json (live run 2026-08-11: the nested file was

@@ -114,10 +114,9 @@ class DefaultAgent implements CodingAgent {
   }
 }
 
-/** Claude-family provisioning: create the config dir, trust the run's project so
- *  the CLI never prompts, and write a mode-0600 .claude-env carrying the API key
- *  for the launcher. No onboarding skeleton is seeded — recent claude boots on
- *  API-key auth + the trust block (it runs/auto-completes onboarding each run). */
+/** Claude-family provisioning: create the config dir, trust the run's project,
+ *  seed the selected auth path, and suppress configured startup prompts before
+ *  the launcher starts Claude. */
 class ClaudeAgent implements CodingAgent {
   readonly config: AgentConfig;
   constructor(config: AgentConfig) {
@@ -133,12 +132,8 @@ class ClaudeAgent implements CodingAgent {
 
     const claudeJsonPath = join(configDir, '.claude.json');
 
-    // Trust the run's project so claude doesn't prompt. No onboarding skeleton
-    // is needed — recent claude boots on API-key auth + this trust block and
-    // auto-completes onboarding each run. (IS_DEMO=1 is deliberately NOT set: it
-    // skips the first-run flow that activates auth on a fresh config, producing
-    // "Not logged in".) Parse any existing file (boundary §4.1) rather than
-    // asserting its shape.
+    // Trust the run's project so claude doesn't prompt. Parse any existing file
+    // (boundary §4.1) rather than asserting its shape.
     const claudeJson = existsSync(claudeJsonPath)
       ? ClaudeJsonSchema.parse(JSON.parse(readFileSync(claudeJsonPath, 'utf8')))
       : ClaudeJsonSchema.parse({});
@@ -149,18 +144,8 @@ class ClaudeAgent implements CodingAgent {
       hasClaudeMdExternalIncludesApproved: true,
       hasClaudeMdExternalIncludesWarningShown: true,
     };
-    // OAuth (subscription) auth requires SKIPPING first-run onboarding: on a
-    // never-onboarded config the interactive login-method prompt fires before
-    // the env CLAUDE_CODE_OAUTH_TOKEN is consulted, dead-ending the run
-    // (reproduced live 2026-08-11: fresh HOME + token → "Select login method";
-    // hasCompletedOnboarding: true + token → authenticated straight away, TUI
-    // and -p both). The api-key path deliberately does NOT set this — there,
-    // the first-run flow is what activates api-key auth (see the IS_DEMO note
-    // above).
-    const onboarding =
-      credential?.auth === 'oauth' ? { hasCompletedOnboarding: true } : {};
     const claudeJsonContent = `${JSON.stringify(
-      { ...claudeJson, ...onboarding, projects },
+      { ...claudeJson, projects },
       null,
       2,
     )}\n`;
@@ -203,6 +188,7 @@ class ClaudeAgent implements CodingAgent {
         throw new ProvisionError(e instanceof Error ? e.message : String(e));
       }
     }
+    completeClaudeStartupConfiguration(configDir, claudeJsonPath);
     // Effort is a run property (arm-level in campaigns). It travels in the
     // run-scoped env file the launcher sources and forwards — not in
     // settings.json (Opus 4.8 can hold a model default across sessions
@@ -212,6 +198,44 @@ class ClaudeAgent implements CodingAgent {
     }
     return {};
   }
+}
+
+/** Mirror the fully provisioned Claude state into both config locations and
+ *  suppress the dangerous-mode confirmation used by the prepared launcher. */
+function completeClaudeStartupConfiguration(
+  configDir: string,
+  claudeJsonPath: string,
+): void {
+  const provisioned = ClaudeJsonSchema.parse(
+    JSON.parse(readFileSync(claudeJsonPath, 'utf8')),
+  );
+  const content = `${JSON.stringify(
+    { ...provisioned, hasCompletedOnboarding: true },
+    null,
+    2,
+  )}\n`;
+  writeFileSync(claudeJsonPath, content);
+  writeFileSync(join(configDir, '..', '.claude.json'), content);
+  mergeClaudeSettings(configDir, {
+    skipDangerousModePermissionPrompt: true,
+  });
+}
+
+function mergeClaudeSettings(
+  configDir: string,
+  additions: Record<string, unknown>,
+): void {
+  const settingsPath = join(configDir, 'settings.json');
+  const settings: Record<string, unknown> = existsSync(settingsPath)
+    ? (JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<
+        string,
+        unknown
+      >)
+    : {};
+  writeFileSync(
+    settingsPath,
+    `${JSON.stringify({ ...settings, ...additions }, null, 2)}\n`,
+  );
 }
 
 /** Seed all three claude auth artifacts for a run:
@@ -252,15 +276,7 @@ function seedClaudeAuth(
     `#!/bin/sh\nprintf '%s' ${shellSingleQuote(apiKey)}\n`,
   );
   chmodSync(helperPath, 0o700);
-  const settingsPath = join(configDir, 'settings.json');
-  const settings: Record<string, unknown> = existsSync(settingsPath)
-    ? (JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<
-        string,
-        unknown
-      >)
-    : {};
-  settings['apiKeyHelper'] = helperPath;
-  writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  mergeClaudeSettings(configDir, { apiKeyHelper: helperPath });
 }
 
 /** Seed the run-scoped .claude-env for the OAuth (subscription) path: carry the
