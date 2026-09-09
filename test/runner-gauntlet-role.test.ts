@@ -42,21 +42,22 @@ function setup() {
     shouldStop: () => false,
   };
 }
-test('parent deadline settles a hung role and persists its actual exit', async () => {
-  const args = setup();
-  const start = Date.now();
-  const result = await invokeGauntletRole(args);
-  expect(Date.now() - start).toBeLessThan(2000);
-  expect(result.stop_cause).toBe('timed_out');
-  expect(result.process_exit?.signal).toBeTruthy();
-  expect(result.started_at).not.toBeNull();
-  expect(result.finished_at).not.toBeNull();
-  expect(currentRoleChild()).toBeNull();
-  expect(
-    JSON.parse(readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'))
-      .conversation,
-  ).toEqual(result);
-});
+for (const role of ['conversation', 'assessment'] as const)
+  test(`parent deadline settles a hung ${role}`, async () => {
+    const args = { ...setup(), role };
+    const start = Date.now();
+    const result = await invokeGauntletRole(args);
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(result.stop_cause).toBe('timed_out');
+    expect(result.process_exit?.signal).toBeTruthy();
+    expect(result.started_at).not.toBeNull();
+    expect(result.finished_at).not.toBeNull();
+    expect(currentRoleChild()).toBeNull();
+    const records = JSON.parse(
+      readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'),
+    );
+    expect(records[role]).toEqual(result);
+  });
 test('cancel removes only the supplied private tmux server', async () => {
   const args = setup();
   const socketPath = join(args.runDir, 'owned');

@@ -133,31 +133,45 @@ if (role === 'converse') {
 }
 if (mode === 'assessment-hang') await new Promise(() => {});
 const assessmentStatus =
-  mode === 'assessed-fail'
+  mode === 'assessed-fail' || mode === 'contradictory-all-pass-fail'
     ? 'fail'
-    : mode === 'assessed-investigate'
+    : mode === 'assessed-investigate' ||
+        mode === 'contradictory-all-pass-investigate' ||
+        mode === 'contradictory-mixed-investigate' ||
+        mode === 'assessment-timeout-report'
       ? 'investigate'
       : 'pass';
+const criterionVerdicts =
+  mode === 'contradictory-mixed-investigate'
+    ? ['pass', 'pass', 'pass', 'fail']
+    : [
+        mode === 'inconsistent'
+          ? 'fail'
+          : mode === 'inconsistent-unclear' ||
+              assessmentStatus === 'investigate'
+            ? 'unclear'
+            : assessmentStatus,
+      ];
 const result = {
   status: assessmentStatus,
-  summary: 'Assessed',
-  reasoning: 'Evidence checked',
-  ...(mode === 'missing-criteria'
+  summary:
+    mode === 'assessment-timeout-report' ? 'Assessment timed out' : 'Assessed',
+  reasoning:
+    mode === 'assessment-timeout-report'
+      ? 'The assessor did not produce a valid report_result within 120000ms.'
+      : 'Evidence checked',
+  ...(mode === 'missing-criteria' || mode === 'assessment-timeout-report'
     ? {}
     : {
-        criteria: [
-          {
-            criterion: 'Fix pricing',
-            verdict:
-              mode === 'inconsistent'
-                ? 'fail'
-                : mode === 'inconsistent-unclear' ||
-                    assessmentStatus === 'investigate'
-                  ? 'unclear'
-                  : assessmentStatus,
-            evidence: 'output/src/pricing.js',
-          },
-        ],
+        criteria: criterionVerdicts.map((verdict, index) => ({
+          criterion: index === 0 ? 'Fix pricing' : `Criterion ${index + 1}`,
+          verdict:
+            mode === 'contradictory-all-pass-fail' ||
+            mode === 'contradictory-all-pass-investigate'
+              ? 'pass'
+              : verdict,
+          evidence: 'output/src/pricing.js',
+        })),
       }),
 };
 const resultOut =

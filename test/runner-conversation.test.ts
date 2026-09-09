@@ -602,6 +602,58 @@ for (const [mode, final, exit] of [
     );
   });
 
+for (const [mode, status, verdicts] of [
+  ['contradictory-all-pass-fail', 'fail', ['pass']],
+  ['contradictory-all-pass-investigate', 'investigate', ['pass']],
+  [
+    'contradictory-mixed-investigate',
+    'investigate',
+    ['pass', 'pass', 'pass', 'fail'],
+  ],
+] as const)
+  test(`${mode} is indeterminate while preserving the contradictory report and evidence`, async () => {
+    const args = setup(mode);
+    const verdict = await runPreparedConversation(args);
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error).toEqual({
+      stage: 'gauntlet',
+      message: 'Assessment inconclusive: missing or inconsistent criteria',
+    });
+    expect(verdict.gauntlet).toMatchObject({ status });
+    expect(verdict.gauntlet?.criteria?.map((row) => row.verdict)).toEqual([
+      ...verdicts,
+    ]);
+    expect(verdict.conversation?.status).toBe('completed');
+    for (const path of [
+      'conversation.json',
+      'checks.json',
+      'output/pricing.js',
+    ])
+      expect(existsSync(join(args.runDir, 'evidence', path))).toBe(true);
+  });
+
+test('a timeout-shaped completed assessment is malformed and retains its report evidence', async () => {
+  const args = setup('assessment-timeout-report');
+  const verdict = await runPreparedConversation(args);
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error).toEqual({
+    stage: 'gauntlet',
+    message: 'Assessment inconclusive: missing or inconsistent criteria',
+  });
+  expect(verdict.gauntlet).toMatchObject({
+    status: 'investigate',
+    summary: 'Assessment timed out',
+    reasoning:
+      'The assessor did not produce a valid report_result within 120000ms.',
+    process_exit: { code: 1, signal: null },
+  });
+  expect(verdict.gauntlet?.criteria).toBeUndefined();
+  expect(verdict.conversation?.status).toBe('completed');
+  expect(existsSync(join(args.runDir, 'evidence/output/pricing.js'))).toBe(
+    true,
+  );
+});
+
 test('outer runner exception retains persisted started-role accounting', async () => {
   const args = setup();
   const { runScenario } = await import('../src/runner/index.ts');

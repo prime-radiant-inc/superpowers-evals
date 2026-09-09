@@ -300,19 +300,16 @@ for (const outcome of [
                       : 'fail';
                 name = 'report_result';
                 input = {
-                  status,
                   summary: 'Retained pricing inspected',
                   reasoning: 'Assessment read output/pricing.js',
                   criteria: [
                     {
-                      criterion: 'Pricing returns 42.',
                       verdict: status === 'investigate' ? 'unclear' : status,
                       evidence: `output/pricing.js: ${assessedOutput}`,
                     },
                     ...(unclear
                       ? [
                           {
-                            criterion: 'Delivery is verified.',
                             verdict: 'unclear',
                             evidence:
                               'output/pricing.js: verification evidence is incomplete',

@@ -521,9 +521,18 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
           !c.criterion.trim() ||
           !c.evidence.trim() ||
           !['pass', 'fail', 'unclear'].includes(c.verdict),
-      ) ||
-      (gauntlet.status === 'pass' && criteria.some((c) => c.verdict !== 'pass'))
+      )
     )
+      return fail(
+        'gauntlet',
+        'Assessment inconclusive: missing or inconsistent criteria',
+      );
+    const expectedAssessmentStatus = criteria.some((c) => c.verdict === 'fail')
+      ? 'fail'
+      : criteria.every((c) => c.verdict === 'pass')
+        ? 'pass'
+        : 'investigate';
+    if (gauntlet.status !== expectedAssessmentStatus)
       return fail(
         'gauntlet',
         'Assessment inconclusive: missing or inconsistent criteria',
