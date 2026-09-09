@@ -1,13 +1,15 @@
 # Conversation assessment grading contract
 
 Date: 2026-09-08 Pacific
-Status: proposed for Drew's review; implementation and a new provider allocation
-require approval. This document does not reopen a closed experiment.
+Status: design accepted for implementation planning after the
+[staff whiteboard review](../../experiments/2026-09-08-conversation-grading-whiteboard.md).
+Writing the plan does not launch the proposed provider allocation or reopen a
+closed experiment.
 
 ## Goal and evidence
 
 Make the assessment's overall judgment follow its criterion judgments, then
-test the existing clause-level grading treatment on four retained conversations.
+test the existing clause-level grading treatment on five retained conversations.
 Keep the current conversation engine, scenario format, appliance ownership and
 standard reports.
 
@@ -127,23 +129,25 @@ permits. The gate must accept those rather than impose unrequested design rules.
 
 ## Retained acceptance set
 
-Use these four full-evidence conversations and their already-adjudicated
+Use these five full-evidence conversations and their already-adjudicated
 expectations. The two new design cases use their exact retained private rubric,
-not a newly projected or edited scenario. `known-claude-review` uses the settled
+not a newly projected or edited scenario. Both known review cases use the settled
 [clarified review rubric](../../experiments/2026-09-08-conversation-release/controls/rubrics/code-review-revised.md),
 whose criterion 3 separates the supported merge recommendation from unsupported
 additional findings. Do not substitute that package's original rubric, which
 belongs to the preserved historical disagreement. Freeze the clarified rubric's
-exact bytes in the execution manifest. Each row below gets two fresh
-assessments, adjacent in the listed order; inspect each result before starting
-the next assessment.
+exact bytes in the execution manifest. Each row below gets one fresh assessment
+in the listed order; inspect each result before starting the next assessment.
+The positive review protects against penalizing conditional risks and accurately
+scoped verification that the rubric permits.
 
 | Order | Retained case | Required criterion vector | Required overall |
 | --- | --- | --- | --- |
-| 1 | `known-claude-review`: `conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d` | pass/pass/pass/fail | fail |
-| 2 | `conversation-design-claude-opus5_bedrock-linux-20260908T195051Z-874b` | fail/fail/pass | fail |
-| 3 | `conversation-design-codex-openai_responses_56sol-linux-20260908T195053Z-0d17` | fail/fail/pass | fail |
-| 4 | `known-claude-design`: `conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07` | pass/pass/pass | pass |
+| 1 | `conversation-design-claude-opus5_bedrock-linux-20260908T195051Z-874b` | fail/fail/pass | fail |
+| 2 | `known-claude-design`: `conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07` | pass/pass/pass | pass |
+| 3 | `known-codex-review`: `conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed` | pass/pass/pass/pass | pass |
+| 4 | `conversation-design-codex-openai_responses_56sol-linux-20260908T195053Z-0d17` | fail/fail/pass | fail |
+| 5 | `known-claude-review`: `conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d` | pass/pass/pass/fail | fail |
 
 The review and positive-design expectations are recorded in
 [the frozen release judgments](../../experiments/2026-09-08-conversation-release/expected.json).
@@ -152,7 +156,7 @@ in the reliability experiment and its private `driver-grader-adjudication.md`
 and `retained-candidate-adjudication.md` receipts. Those judgments are settled;
 do not change gold to fit a candidate response.
 
-All four evidence packages are locally available. Earlier known packages are
+All five evidence packages are locally available. Earlier known packages are
 under the `conversation-assessment` worktree's private
 `results/conversation-release/known/`; the later designs are under the
 `conversation-reliability` worktree's private
@@ -162,11 +166,13 @@ and source hashes before execution. Verify the existing evidence against its
 retained authentication records. Keep gold judgments and old assessor results
 out of the new assessor's input.
 
-The case judgments and materially decisive reasoning must agree in all eight
+The case judgments and materially decisive reasoning must agree in all five
 rows. Accept independently supported alternative evidence and wording; do not
 require an identical rationale. Record minor citation imprecision separately
-when the decisive facts remain supported. Stop on a material unsupported claim
-or an incorrect criterion even if the derived overall happens to match.
+when the decisive facts remain supported. A material unsupported claim or an
+incorrect criterion permanently fails prompt promotion even if the derived
+overall happens to match. Complete the remaining fixed cases for diagnosis,
+subject to the operational stopping rules below.
 
 ## Validation and proposed execution limits
 
@@ -187,10 +193,13 @@ First prove the mechanical contract offline:
   final indeterminate for completed unclear with a failed post-check. Retain a
   regression showing generic QA still permits its independently authored
   overall status under its existing policy.
+- Run the existing paired CLI suite explicitly with `GAUNTLET_ROOT` pointing at
+  the assembled candidate; it otherwise skips. Exercise the outer child deadline
+  as well as the assessor's internal timeout fallback.
 - Run the affected tests, required repository checks and independent source
   review. Existing baseline receipts are not new candidate verification.
 
-The proposed new live allocation is **$4 total observed spend**, **eight
+The proposed new live allocation is **$4 total observed spend**, **five
 assessment calls maximum**, **45 minutes from the first launch**, concurrency
 one and 120 seconds per assessment. There are no new Coding-Agent conversations,
 replacements, second candidates or transfers from previous allocations.
@@ -200,31 +209,47 @@ Use `sonnet5_bedrock` / `anthropic.claude-sonnet-5` and the existing frozen
 2026-09-06 pricing snapshot, SHA-256
 `6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b`.
 Freeze clean candidate sources, exact inputs, model, pricing, case order and
-absolute cutoff before the first request. Reuse the existing bounded retained
-assessment operator and appliance credential/ownership path; keep any necessary
-case declarations in a dated experiment. Do not create a production replay CLI
-or a new scheduler. A closed experiment identity remains closed.
+absolute cutoff before the first request. Use a short dated entrypoint that runs
+one declared assessment through existing child, credential, lease, timeout,
+cleanup and pricing helpers. The appliance owns each bounded child while the
+coordinator polls and reviews the completed result before requesting the next
+declared row. Keep one fixed five-row allocation record and cutoff. This does
+not require another permission from Drew between rows. The closed reliability
+stage operator hardcodes different cases and limits; do not clone it or claim
+case declarations alone can reuse it unchanged. Do not create a production
+replay CLI or a new scheduler. A closed experiment identity remains closed.
 
-Stop before another call at the first material grade/rationale disagreement,
-invalid or incomplete assessment, missing/unpriced settled usage, source/input
+Before declaring accounting complete, verify usage covers every returned
+provider turn and all retained usage is priced. A repriceable partial sidecar
+does not establish complete accounting; interrupted or uncovered usage remains
+unknown. Prove that narrow coverage check with behavioral tests. Authenticate
+the later designs against their campaign report and retained inventory as well
+as checking the earlier known packages against their release corpus records.
+
+Stop before another call at an invalid or incomplete assessment,
+missing/unpriced settled usage, source/input
 mismatch, ownership loss, cancellation, observed allocation limit or insufficient
 remaining time for a bounded child and cleanup. Preserve the failure and stop;
-do not edit the prompt or rubric and continue. Normal repair within the same
-bounded assessment is not a replacement call.
+do not edit the prompt or rubric and continue. Also stop on a newly substantiated
+independent disagreement about the gold judgment. A candidate's valid semantic
+mismatch alone does not reopen settled gold: it permanently fails promotion,
+but the remaining predeclared cases continue solely for diagnosis. Normal
+repair within the same bounded assessment is not a replacement call.
 
 ## Completion and promotion
 
 Keep the mechanical contract and semantic instructions in independently
 reviewable changes. The contract can qualify on offline behavioral proof and
-source review; semantic instruction promotion additionally requires all eight
+source review; semantic instruction promotion additionally requires all five
 retained assessments to pass this gate. A semantic failure does not invalidate a
 correct deterministic reducer, and it does not authorize a new treatment.
 
 Report execution, per-criterion judgments, derived overall and accounting
 separately using the standard assessment artifacts plus a short dated experiment
 record. This candidate-only acceptance exercise provides bounded known-case
-evidence. It is not a fresh baseline comparison, population error-rate estimate
-or proof of general grader reliability.
+evidence. One assessment per case does not establish repeatability. It is not a
+fresh baseline comparison, population error-rate estimate or proof of general
+grader reliability; debugging/test-history grading remains outside this gate.
 
 After approval and the applicable gates, integrate eligible changes directly to
 main and verify canonical installation separately. Preserve original evidence,

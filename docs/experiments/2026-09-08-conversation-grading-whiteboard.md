@@ -1,7 +1,8 @@
 # Conversation grading increment: staff review
 
 Date: 2026-09-08 Pacific
-Status: review complete; recommended amendments for Drew's discussion.
+Status: review complete; Drew subsequently requested the implementation plan
+for the recommended revision.
 No implementation, tests, provider calls or appliance operations were performed.
 
 ## Recommendation
@@ -12,8 +13,9 @@ and an honest plan for operating the existing assessment child. Keep the
 mechanical fix independently shippable.
 
 This reviews [the proposed spec](../superpowers/specs/2026-09-08-conversation-grading-contract-design.md)
-at `0c712473`, Quorum `6dc62849`, and Gauntlet `f5d66447`. The spec remains the
-original proposal; the amendments below have not been approved or executed.
+at `0c712473`, Quorum `6dc62849`, and Gauntlet `f5d66447`. The recommendations
+below have since been incorporated into the spec for implementation planning.
+They have not been executed.
 
 Four independent read-only reviewers covered the contract, grading methodology,
 operations, and product direction. Contract and direction reviewers returned
