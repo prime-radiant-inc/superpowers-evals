@@ -141,10 +141,39 @@ absent from that snapshot, yielding five partial-accounting failures. Running
 the two suites in their intended separate pricing environments passed without
 source or assertion changes. Both failed receipts remain in the ledger.
 
-Only mechanical Gauntlet `256feaea` is selected for main, paired with Quorum
-`a1f441ec` plus documentation. The held prompt `9b6859b2` is rejected. Main/CI
-and canonical campaign-source installation receipts will be recorded after
-their separate delivery gates.
+Only mechanical Gauntlet `256feaea` was selected for main, paired with Quorum
+`a1f441ec` plus documentation. The held prompt `9b6859b2` is rejected.
+
+## Main and canonical installation
+
+Ordinary non-force pushes advanced Gauntlet main to
+`256feaea65ea0016dec4133f2cd031bd72be8754` and Quorum main to
+`e13ee95adeb62a67a1e339d3fd2028beb39e7e4c`, following Drew's direct-main,
+no-PR instruction. GitHub accepted Quorum's push with notices about the PR
+requirement and pending required test; no local hook was disabled.
+
+Those exact commits passed Gauntlet's
+[main check](https://github.com/prime-radiant-inc/gauntlet/actions/runs/34311763111),
+Quorum's [full check and scenario validation](https://github.com/prime-radiant-inc/superpowers-evals/actions/runs/34311773550)
+and [main CodeQL analysis](https://github.com/prime-radiant-inc/superpowers-evals/actions/runs/34311773222).
+This delivery record is a subsequent documentation-only change; its final head
+and checks are recorded separately in the private completion ledger.
+
+At `2026-09-09T04:42:08.716Z`, canonical source fast-forwards installed that
+exact pair into `/srv/quorum/superpowers-evals` and `/srv/quorum/gauntlet`,
+using the existing appliance mutation locks. Both checkouts were clean,
+the canonical helper's doctor passed, and run/sync/spend locks were released.
+Superpowers stayed at `b36e0829c6d0140e93cfef2ca599b1b07d4a7797`; the qualified
+image stayed at
+`sha256:01fb1cd08f1e31c82fccedbaadead09e6ff97bca1f5d66f2f0904728ad536e8c`.
+Canonical and pilot configurations were unchanged. The private
+`canonical-runtime-update.json` retains the before/after identities and health
+receipt beside the closed diagnostic.
+
+This is canonical **campaign-source** installation: campaign workers mount
+frozen source snapshots. The generic legacy path's image-baked Gauntlet is a
+separate deployment surface and was not refreshed. No helper `prepare`, image
+rebuild, new campaign registration or provider call was made during delivery.
 
 ## Limits and next work
 
