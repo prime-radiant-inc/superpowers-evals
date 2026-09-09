@@ -1,0 +1,121 @@
+{
+  "cases": [
+    {
+      "ordinal": 1,
+      "id": "claude-design",
+      "family": "driver",
+      "run": "conversation-design-claude-opus5_bedrock-linux-20260908T195051Z-874b",
+      "scenario_id": "conversation-design",
+      "expected": [
+        "fail",
+        "fail",
+        "pass"
+      ],
+      "rubric": "retained:conversation-design-claude-opus5_bedrock-linux-20260908T195051Z-874b/conversation-input/rubric.md",
+      "rubric_sha256": "03e5ba91a2fd85f70f62c1dbfefa22c28dfe852b680a3e288941b286566d80d1",
+      "evidence_index_sha256": "4e6bfaf63195a65b3926418d73e9249487ac59cc46ae00288a50bda4cbfe55c4",
+      "indexed_file_count": 88,
+      "gold": {
+        "refs": [
+          "private:driver-completed-independent-audit.md",
+          "private:driver-grader-adjudication.md"
+        ],
+        "sha256": [
+          "71beee8d1979bbdcfaa8044eeede4d4605c2fe3e2f5bdacd9fc5e0dde0a90a0a",
+          "61fc831ad0c028cc3c022ee7ae4e54f00b783a3a0a2fe41c237067cd3aed9da5"
+        ]
+      }
+    },
+    {
+      "ordinal": 2,
+      "id": "known-claude-design",
+      "family": "known",
+      "run": "conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07",
+      "scenario_id": "conversation-design",
+      "expected": [
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/design.md",
+      "rubric_sha256": "03e5ba91a2fd85f70f62c1dbfefa22c28dfe852b680a3e288941b286566d80d1",
+      "evidence_index_sha256": "e7791003dbd84e2150ded5e84d0cc9b5dccd67f3fd4639728d34b68343d25f47",
+      "indexed_file_count": 156,
+      "gold": {
+        "ref": "../2026-09-08-conversation-release/expected.json",
+        "case_id": "known-claude-design",
+        "sha256": "abcbb006a625cf57160fd8d26b7bdcee7308fb7d1a900c20a1f67c1012962afe"
+      }
+    },
+    {
+      "ordinal": 3,
+      "id": "known-codex-review",
+      "family": "known",
+      "run": "conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed",
+      "scenario_id": "conversation-code-review",
+      "expected": [
+        "pass",
+        "pass",
+        "pass",
+        "pass"
+      ],
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "rubric_sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794",
+      "evidence_index_sha256": "9bc831a00629e0bc6029632c78cc1f256b0210deba3cca63f561f6518036fbc0",
+      "indexed_file_count": 71,
+      "gold": {
+        "ref": "../2026-09-08-conversation-release/expected.json",
+        "case_id": "known-codex-review",
+        "sha256": "abcbb006a625cf57160fd8d26b7bdcee7308fb7d1a900c20a1f67c1012962afe"
+      }
+    },
+    {
+      "ordinal": 4,
+      "id": "codex-design",
+      "family": "driver",
+      "run": "conversation-design-codex-openai_responses_56sol-linux-20260908T195053Z-0d17",
+      "scenario_id": "conversation-design",
+      "expected": [
+        "fail",
+        "fail",
+        "pass"
+      ],
+      "rubric": "retained:conversation-design-codex-openai_responses_56sol-linux-20260908T195053Z-0d17/conversation-input/rubric.md",
+      "rubric_sha256": "03e5ba91a2fd85f70f62c1dbfefa22c28dfe852b680a3e288941b286566d80d1",
+      "evidence_index_sha256": "1ac5b0dc180eb69cec36fa023ef35c6aeca00b896baa3df4632d575661e5dc51",
+      "indexed_file_count": 86,
+      "gold": {
+        "refs": [
+          "private:driver-completed-independent-audit.md",
+          "private:driver-grader-adjudication.md"
+        ],
+        "sha256": [
+          "71beee8d1979bbdcfaa8044eeede4d4605c2fe3e2f5bdacd9fc5e0dde0a90a0a",
+          "61fc831ad0c028cc3c022ee7ae4e54f00b783a3a0a2fe41c237067cd3aed9da5"
+        ]
+      }
+    },
+    {
+      "ordinal": 5,
+      "id": "known-claude-review",
+      "family": "known",
+      "run": "conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d",
+      "scenario_id": "conversation-code-review",
+      "expected": [
+        "pass",
+        "pass",
+        "pass",
+        "fail"
+      ],
+      "rubric": "../2026-09-08-conversation-release/controls/rubrics/code-review-revised.md",
+      "rubric_sha256": "b20d64da9b9c64169e25b7602d852b94559ff1cbdf42dd8d179337110c7a9794",
+      "evidence_index_sha256": "07ae7d3340f5943060327150f79811ad52171cca4c3ec0c27c138d2d0f0cbd26",
+      "indexed_file_count": 271,
+      "gold": {
+        "ref": "../2026-09-08-conversation-release/expected.json",
+        "case_id": "known-claude-review",
+        "sha256": "abcbb006a625cf57160fd8d26b7bdcee7308fb7d1a900c20a1f67c1012962afe"
+      }
+    }
+  ]
+}
