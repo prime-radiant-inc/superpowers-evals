@@ -152,3 +152,20 @@ The three doctor cases have not run. This campaign produced no Codex or Pi
 sessions, so it cannot yet supply the approved three-harness sample. A replacement
 comparison requires a fresh registration after the runner fix and an explicit
 new live-run decision. The interrupted campaign remains a negative result.
+
+
+## Authorized restart after PRI-3120
+
+Drew authorized merging PR #58 and a fresh comparison. PR #58 merged as
+`a098eb3a156f086de41be6cc315b75ff77d7cf55`; local full checks, independent
+patch review and GitHub CI passed. The helper prepared this Quorum revision
+with Gauntlet `25a2e3e00431f8d8eb63781162ccb974d43d5405`, receipt
+`job-20260910T215830Z-b8e7`.
+
+Fresh campaign `bcc17c8e-6871-4397-b887-106391c7cba1` freezes the same
+36-slot suite, arms, skill pin, direct grader, sample counts and finite limits.
+The prior campaign's outcomes are not pooled into this comparison. Its semantic
+audit disagreements remain open observations; the checker fix does not alter
+grading. Private receipts: `~/.local/share/superpowers-evals/routine-use-bcc17c8e/`.
+
+Started through the installed helper over Tailscale SSH. Results pending.
