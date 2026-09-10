@@ -1,12 +1,4 @@
 import {
-  type NativeChildDispatch,
-  type NativeChildEvidence,
-  type NativeToolResultEvidence,
-  nativeRecordBytes,
-  nativeTextBytes,
-  withNativeEvidence,
-} from '../atif/provenance.ts';
-import {
   ATIF_SCHEMA_VERSION,
   type AtifAgent,
   type AtifMetrics,
@@ -70,6 +62,11 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function nativeTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value === '') return undefined;
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 /** json.dumps-style stringify for a non-string; passthrough for a string. */
@@ -180,44 +177,6 @@ function formatToolResult(
   return text || undefined;
 }
 
-/** Pinned pi-subagents parallel results preserve tasks order. Count expansion
- * is deliberately unavailable until its ordering has been qualified. */
-function parallelDispatches(
-  tasks: unknown,
-  results: unknown,
-): NativeChildDispatch[] | undefined {
-  if (
-    !Array.isArray(tasks) ||
-    !Array.isArray(results) ||
-    tasks.length === 0 ||
-    tasks.length !== results.length
-  )
-    return undefined;
-  const dispatches: NativeChildDispatch[] = [];
-  const paths = new Set<string>();
-  for (const [index, task] of tasks.entries()) {
-    const result = results[index];
-    if (
-      !task ||
-      typeof task !== 'object' ||
-      ('count' in task && task.count !== 1) ||
-      !result ||
-      typeof result !== 'object' ||
-      typeof result.sessionFile !== 'string' ||
-      !result.sessionFile ||
-      paths.has(result.sessionFile)
-    )
-      return undefined;
-    paths.add(result.sessionFile);
-    dispatches.push({
-      index,
-      ...(typeof task.task === 'string' ? { prompt: task.task } : {}),
-      child: { relationship: 'spawned', path: result.sessionFile },
-    });
-  }
-  return dispatches;
-}
-
 /**
  * Convert a Pi JSONL session log into a full-fidelity ATIF v1.7 trajectory.
  *
@@ -225,9 +184,6 @@ function parallelDispatches(
  * `id` → `session_id`) and a `type:"model_change"` entry (`modelId`/`provider`,
  * tracked forward as the active model). The rest are `type:"message"` entries
  * with `message.role` of `assistant`, `user`, or `toolResult`.
- * Each user/assistant entry's native record timestamp is preserved on every
- * step it produces. Metadata timestamps never become conversation timestamps;
- * linked tool results do not replace the owning call's timestamp.
  *
  * Assistant content blocks: `text` (→ step.message), `thinking` (→
  * step.reasoning_content), and `toolCall` (`{type,id,name,arguments}` →
@@ -245,26 +201,20 @@ function parallelDispatches(
  * Token/cost conventions: input→prompt, output→completion, cacheRead→cached,
  * cost.total→cost_usd, cacheWrite→step.extra.cache_write,
  * provider→step.extra.provider. Only a runner-qualified placeholder zero is
- * omitted so obol prices the retained buckets. Per-step only; no final_metrics token totals
- * (single-source invariant).
+ * omitted so obol prices the retained buckets. Per-step only; no final_metrics
+ * token totals (single-source invariant).
  */
 export function normalizePi(
   raw: string,
   version: string,
   context?: AtifNormalizationContext,
 ): AtifTrajectory {
-  const entries: Array<{ entry: PiEntry; line: number; recordBytes: number }> =
-    [];
-  for (const [index, line] of raw.split('\n').entries()) {
+  const entries: PiEntry[] = [];
+  for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as PiEntry;
-      if (parsed && typeof parsed === 'object')
-        entries.push({
-          entry: parsed,
-          line: index + 1,
-          recordBytes: nativeRecordBytes(line),
-        });
+      if (parsed && typeof parsed === 'object') entries.push(parsed);
     } catch {
       // Tolerate blank / unparseable lines — skip them.
     }
@@ -281,7 +231,7 @@ export function normalizePi(
   // usage-bearing step has a model_name for obol to price against.
   let activeModel: string | undefined;
 
-  for (const { entry, line, recordBytes } of entries) {
+  for (const entry of entries) {
     const type = entry['type'];
 
     if (type === 'session') {
@@ -300,11 +250,13 @@ export function normalizePi(
     const message = entry['message'];
     if (!message || typeof message !== 'object') continue;
     const role = message['role'];
-    const timestamp =
-      typeof entry.timestamp === 'string' &&
-      Number.isFinite(Date.parse(entry.timestamp))
-        ? entry.timestamp
-        : undefined;
+    const timestamp = nativeTimestamp(entry['timestamp']);
+    const applySource = (step: AtifStep): void => {
+      if (timestamp) step.timestamp = timestamp;
+      if (sessionId) {
+        step.extra = { ...step.extra, source_session_id: sessionId };
+      }
+    };
 
     if (role === 'user') {
       const texts: string[] = [];
@@ -327,12 +279,8 @@ export function normalizePi(
           step_id: stepId++,
           source: 'user',
           message: textMessage,
-          extra: withNativeEvidence(undefined, {
-            lines: [line],
-            origin: 'unknown',
-          }),
         };
-        if (timestamp) step.timestamp = timestamp;
+        applySource(step);
         steps.push(step);
       }
       continue;
@@ -350,93 +298,6 @@ export function normalizePi(
       );
       const result: AtifObservationResult = { source_call_id: callId };
       if (formatted !== undefined) result.content = formatted;
-      const contentBytes = nativeTextBytes(message['content']);
-      result.extra = withNativeEvidence(undefined, {
-        lines: [line],
-        origin: 'unknown',
-        ...(timestamp ? { timestamp } : {}),
-        ...(contentBytes !== undefined ? { contentBytes } : {}),
-        recordBytes,
-      });
-      if (typeof message.isError === 'boolean')
-        result.extra = {
-          ...result.extra,
-          quorum_result: {
-            isError: message.isError,
-          } satisfies NativeToolResultEvidence,
-        };
-      const details =
-        message['details'] && typeof message['details'] === 'object'
-          ? (message['details'] as Record<string, unknown>)
-          : undefined;
-      const ownerCall = owner.tool_calls?.find(
-        (candidate) => candidate.tool_call_id === callId,
-      );
-      const isParallel = details?.['mode'] === 'parallel';
-      if (isParallel && ownerCall?.function_name === 'Agent') {
-        const dispatches = parallelDispatches(
-          ownerCall.arguments['tasks'],
-          details?.['results'],
-        );
-        if (dispatches) {
-          result.extra = { ...result.extra, quorum_dispatches: dispatches };
-          ownerCall.extra = {
-            ...ownerCall.extra,
-            quorum_dispatches: dispatches,
-          };
-        }
-      }
-      const childId = isParallel ? undefined : details?.['runId'];
-      const results = details?.['results'];
-      const singleResult =
-        details?.['mode'] === 'single' &&
-        Array.isArray(results) &&
-        results.length === 1 &&
-        results[0] &&
-        typeof results[0] === 'object'
-          ? (results[0] as Record<string, unknown>)
-          : undefined;
-      const progressSummary = singleResult?.['progressSummary'];
-      const durationMs =
-        progressSummary && typeof progressSummary === 'object'
-          ? (progressSummary as Record<string, unknown>)['durationMs']
-          : undefined;
-      if (
-        typeof durationMs === 'number' &&
-        Number.isFinite(durationMs) &&
-        durationMs >= 0
-      )
-        result.extra = {
-          ...result.extra,
-          quorum_result: {
-            ...(result.extra?.['quorum_result'] as
-              | NativeToolResultEvidence
-              | undefined),
-            durationMs,
-          } satisfies NativeToolResultEvidence,
-        };
-      const childPath = isParallel
-        ? undefined
-        : (details?.['sessionFile'] ?? singleResult?.['sessionFile']);
-      if (
-        (typeof childId === 'string' && childId) ||
-        (typeof childPath === 'string' && childPath)
-      ) {
-        const child: NativeChildEvidence = {
-          relationship: 'spawned',
-          ...(typeof childId === 'string' && childId ? { id: childId } : {}),
-          ...(typeof childPath === 'string' && childPath
-            ? { path: childPath }
-            : {}),
-        };
-        result.extra = { ...result.extra, quorum_child: child };
-        const ownerCall = owner.tool_calls?.find(
-          (candidate) => candidate.tool_call_id === callId,
-        );
-        if (ownerCall?.function_name === 'Agent') {
-          ownerCall.extra = { ...ownerCall.extra, quorum_child: child };
-        }
-      }
       owner.observation ??= { results: [] };
       owner.observation.results.push(result);
       continue;
@@ -450,22 +311,15 @@ export function normalizePi(
       typeof message.model === 'string' && message.model
         ? message.model
         : activeModel;
-    const provider = message.provider;
     const { metrics, extra } = piMessageUsage(
       message.usage,
-      provider,
+      message.provider,
       model,
       context,
     );
     const applyUsage = (step: AtifStep): void => {
       if (model) step.model_name = model;
-      if (metrics) {
-        metrics.extra = withNativeEvidence(metrics.extra, {
-          lines: [line],
-          ...(timestamp ? { timestamp } : {}),
-        });
-        step.metrics = metrics;
-      }
+      if (metrics) step.metrics = metrics;
       if (extra) step.extra = { ...step.extra, ...extra };
     };
 
@@ -518,24 +372,14 @@ export function normalizePi(
         tool_call_id: callId,
         function_name: canonical,
         arguments: args,
-        extra: withNativeEvidence(undefined, { lines: [line] }),
       });
-      if (tc.function_name === 'Agent') {
-        tc.extra = {
-          ...tc.extra,
-          quorum_child: {
-            relationship: 'spawned',
-          } satisfies NativeChildEvidence,
-        };
-      }
 
       const step: AtifStep = {
         step_id: stepId++,
         source: 'agent',
         tool_calls: [tc],
-        extra: withNativeEvidence(undefined, { lines: [line] }),
       };
-      if (timestamp) step.timestamp = timestamp;
+      applySource(step);
 
       // Attach this message's text/reasoning to its FIRST tool step.
       if (!contentAttached) {
@@ -560,12 +404,8 @@ export function normalizePi(
       !contentAttached &&
       (messageText || reasoningText || metrics || extra)
     ) {
-      const step: AtifStep = {
-        step_id: stepId++,
-        source: 'agent',
-        extra: withNativeEvidence(undefined, { lines: [line] }),
-      };
-      if (timestamp) step.timestamp = timestamp;
+      const step: AtifStep = { step_id: stepId++, source: 'agent' };
+      applySource(step);
       if (messageText) step.message = messageText;
       if (reasoningText) step.reasoning_content = reasoningText;
       applyUsage(step);
@@ -584,12 +424,6 @@ export function normalizePi(
     steps,
   };
   if (sessionId) traj.session_id = sessionId;
-
-  if (sessionId) {
-    for (const step of traj.steps) {
-      step.extra = { ...step.extra, source_session_id: sessionId };
-    }
-  }
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

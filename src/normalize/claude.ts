@@ -1,13 +1,4 @@
 import {
-  appendNativeLine,
-  type NativeBoundary,
-  type NativeChildEvidence,
-  type NativeToolResultEvidence,
-  nativeRecordBytes,
-  nativeTextBytes,
-  withNativeEvidence,
-} from '../atif/provenance.ts';
-import {
   ATIF_SCHEMA_VERSION,
   type AtifAgent,
   type AtifMetrics,
@@ -45,7 +36,6 @@ function applyClaudeUsage(
   step: AtifStep,
   message: Record<string, unknown>,
   usage: ClaudeUsage | undefined,
-  evidence?: { line: number; timestamp?: string },
 ) {
   const model = message['model'];
   if (typeof model === 'string' && model) step.model_name = model;
@@ -60,15 +50,7 @@ function applyClaudeUsage(
     metrics.completion_tokens = u.output_tokens;
   if (typeof u.cache_read_input_tokens === 'number')
     metrics.cached_tokens = u.cache_read_input_tokens;
-  if (Object.keys(metrics).length > 0) {
-    if (evidence) {
-      metrics.extra = withNativeEvidence(undefined, {
-        lines: [evidence.line],
-        ...(evidence.timestamp ? { timestamp: evidence.timestamp } : {}),
-      });
-    }
-    step.metrics = metrics;
-  }
+  if (Object.keys(metrics).length > 0) step.metrics = metrics;
 
   if (typeof u.cache_creation_input_tokens === 'number') {
     step.extra = { ...step.extra, cache_write: u.cache_creation_input_tokens };
@@ -82,24 +64,9 @@ function applyClaudeUsage(
  * LAST usage seen per message.id (the most-complete streaming snapshot — the
  * Harbor oracle's rule) so each turn's usage is charged exactly once.
  */
-interface LocatedEntry {
-  entry: Entry;
-  line: number;
-  recordBytes: number;
-}
-
-interface LocatedUsage {
-  usage: ClaudeUsage;
-  line: number;
-  timestamp?: string;
-}
-
-function lastUsageByMessageId(
-  entries: LocatedEntry[],
-): Map<string, LocatedUsage> {
-  const lastUsage = new Map<string, LocatedUsage>();
-  for (const located of entries) {
-    const { entry } = located;
+function lastUsageByMessageId(entries: Entry[]): Map<string, ClaudeUsage> {
+  const lastUsage = new Map<string, ClaudeUsage>();
+  for (const entry of entries) {
     if (entry['type'] !== 'assistant') continue;
     const message = entry['message'];
     if (!message || typeof message !== 'object') continue;
@@ -107,12 +74,7 @@ function lastUsageByMessageId(
     const id = m['id'];
     const usage = m['usage'];
     if (typeof id === 'string' && id && usage && typeof usage === 'object') {
-      const timestamp = entry['timestamp'];
-      lastUsage.set(id, {
-        usage: usage as ClaudeUsage,
-        line: located.line,
-        ...(typeof timestamp === 'string' ? { timestamp } : {}),
-      });
+      lastUsage.set(id, usage as ClaudeUsage);
     }
   }
   return lastUsage;
@@ -131,27 +93,6 @@ interface Block {
 }
 
 type Entry = Record<string, unknown>;
-
-function userOrigin(entry: Entry): 'human' | 'injected' | 'parent' | 'unknown' {
-  if (entry['isSidechain'] === true) return 'parent';
-
-  const nativeOrigin = entry['origin'];
-  const kind =
-    nativeOrigin && typeof nativeOrigin === 'object'
-      ? (nativeOrigin as Record<string, unknown>)['kind']
-      : undefined;
-  const human =
-    kind === 'human' ||
-    (entry['promptSource'] === 'typed' && entry['userType'] === 'external');
-  const injected =
-    kind === 'injected' ||
-    (entry['isMeta'] === true &&
-      typeof entry['sourceToolUseID'] === 'string' &&
-      entry['sourceToolUseID'].length > 0);
-
-  if (human === injected) return 'unknown';
-  return human ? 'human' : 'injected';
-}
 
 function blocksOf(entry: Entry): Block[] {
   const message = entry['message'];
@@ -330,17 +271,16 @@ function sortedDistinct(entries: Entry[], field: string): string[] {
  * Mirrors Harbor's global uuid dedup (claude_code.py:645-657). Events without
  * a uuid are always kept.
  */
-function dedupByUuid(entries: LocatedEntry[]): LocatedEntry[] {
+function dedupByUuid(entries: Entry[]): Entry[] {
   const seen = new Set<string>();
-  const out: LocatedEntry[] = [];
-  for (const located of entries) {
-    const { entry } = located;
+  const out: Entry[] = [];
+  for (const entry of entries) {
     const uuid = entry['uuid'];
     if (typeof uuid === 'string' && uuid) {
       if (seen.has(uuid)) continue;
       seen.add(uuid);
     }
-    out.push(located);
+    out.push(entry);
   }
   return out;
 }
@@ -361,15 +301,11 @@ export function normalizeClaudeLegacy(
   onMalformedLine?: (line: number, message: string) => void,
 ): AtifTrajectory {
   // Parse all lines first so uuid dedup and the usage map see the same events.
-  const parsed: LocatedEntry[] = [];
+  const parsed: Entry[] = [];
   for (const [index, line] of raw.split('\n').entries()) {
     if (!line.trim()) continue;
     try {
-      parsed.push({
-        entry: JSON.parse(line) as Entry,
-        line: index + 1,
-        recordBytes: nativeRecordBytes(line),
-      });
+      parsed.push(JSON.parse(line) as Entry);
     } catch (error) {
       // Tolerate blank / unparseable lines — skip them.
       onMalformedLine?.(
@@ -392,7 +328,7 @@ export function normalizeClaudeLegacy(
 
   // Read agent.version (first non-empty log version) + agent.extra.
   let agentVersion = version;
-  for (const { entry } of entries) {
+  for (const entry of entries) {
     const ver = entry['version'];
     if (typeof ver === 'string' && ver) {
       agentVersion = ver;
@@ -401,50 +337,22 @@ export function normalizeClaudeLegacy(
   }
   // session_id: read from the first row that carries a non-empty sessionId field.
   let sessionId: string | undefined;
-  for (const { entry } of entries) {
+  for (const entry of entries) {
     const sid = entry['sessionId'];
     if (typeof sid === 'string' && sid) {
       sessionId = sid;
       break;
     }
   }
-  const nativeEntries = entries.map(({ entry }) => entry);
-  const cwds = sortedDistinct(nativeEntries, 'cwd');
-  const gitBranches = sortedDistinct(nativeEntries, 'gitBranch');
-  const agentIds = sortedDistinct(nativeEntries, 'agentId');
+  const cwds = sortedDistinct(entries, 'cwd');
+  const gitBranches = sortedDistinct(entries, 'gitBranch');
+  const agentIds = sortedDistinct(entries, 'agentId');
   const agentExtra: Record<string, unknown> = {};
-  const boundaries: NativeBoundary[] = [];
   if (cwds.length) agentExtra['cwds'] = cwds;
   if (gitBranches.length) agentExtra['git_branches'] = gitBranches;
   if (agentIds.length) agentExtra['agent_ids'] = agentIds;
-  if (nativeEntries.some((entry) => entry['isSidechain'] === true))
-    agentExtra['is_sidechain'] = true;
-  for (const { entry, line } of entries) {
-    if (
-      entry['type'] !== 'system' ||
-      !['compact_boundary', 'turn_duration'].includes(String(entry['subtype']))
-    )
-      continue;
-    const turnDuration = entry['subtype'] === 'turn_duration';
-    const durationMs = entry['durationMs'];
-    const timestamp = entry['timestamp'];
-    boundaries.push({
-      kind: turnDuration ? 'turn' : 'compaction',
-      ...(turnDuration ? { phase: 'complete' as const } : {}),
-      ...(turnDuration &&
-      typeof durationMs === 'number' &&
-      Number.isFinite(durationMs) &&
-      durationMs >= 0
-        ? { durationMs }
-        : {}),
-      evidence: {
-        lines: [line],
-        ...(typeof timestamp === 'string' ? { timestamp } : {}),
-      },
-    });
-  }
 
-  for (const { entry, line, recordBytes } of entries) {
+  for (const entry of entries) {
     const type = entry['type'];
     const blocks = blocksOf(entry);
 
@@ -463,17 +371,11 @@ export function normalizeClaudeLegacy(
       let step = msgId ? (turnByMsgId.get(msgId) ?? null) : null;
       const isNewStep = step === null;
       if (step === null) {
-        step = {
-          step_id: steps.length + 1,
-          source: 'agent',
-          extra: withNativeEvidence(undefined, { lines: [line] }),
-        };
+        step = { step_id: steps.length + 1, source: 'agent' };
         if (typeof entry['timestamp'] === 'string')
           step.timestamp = entry['timestamp'];
         steps.push(step);
         if (msgId) turnByMsgId.set(msgId, step);
-      } else {
-        step.extra = appendNativeLine(step.extra, line);
       }
 
       if (text)
@@ -491,16 +393,7 @@ export function normalizeClaudeLegacy(
           tool_call_id: callId,
           function_name: b.name ?? '',
           arguments: b.input ?? {},
-          extra: withNativeEvidence(undefined, { lines: [line] }),
         };
-        if (call.function_name === 'Agent') {
-          call.extra = {
-            ...call.extra,
-            quorum_child: {
-              relationship: 'spawned',
-            } satisfies NativeChildEvidence,
-          };
-        }
         step.tool_calls ??= [];
         step.tool_calls.push(call);
         callIndex.set(call.tool_call_id, step);
@@ -511,38 +404,20 @@ export function normalizeClaudeLegacy(
       // the same id keep the model name but contribute no tokens. Rows with no
       // id always charge their own usage.
       let usage: ClaudeUsage | undefined;
-      let usageEvidence: { line: number; timestamp?: string } | undefined;
       if (msgId === null) {
         const u = m['usage'];
         usage = u && typeof u === 'object' ? (u as ClaudeUsage) : undefined;
-        const timestamp = entry['timestamp'];
-        if (usage)
-          usageEvidence = {
-            line,
-            ...(typeof timestamp === 'string' ? { timestamp } : {}),
-          };
       } else if (isNewStep && !usageChargedMsgIds.has(msgId)) {
         usageChargedMsgIds.add(msgId);
-        const located = lastUsage.get(msgId);
-        usage = located?.usage ?? (m['usage'] as ClaudeUsage | undefined);
-        usageEvidence = located
-          ? {
-              line: located.line,
-              ...(located.timestamp ? { timestamp: located.timestamp } : {}),
-            }
-          : { line };
+        usage = lastUsage.get(msgId) ?? (m['usage'] as ClaudeUsage | undefined);
       }
-      applyClaudeUsage(step, m, usage, usageEvidence);
+      applyClaudeUsage(step, m, usage);
       continue;
     }
 
     if (type === 'tool_use') {
       // A flat top-level entry that is itself a tool_use block.
-      const step: AtifStep = {
-        step_id: steps.length + 1,
-        source: 'agent',
-        extra: withNativeEvidence(undefined, { lines: [line] }),
-      };
+      const step: AtifStep = { step_id: steps.length + 1, source: 'agent' };
       if (typeof entry['timestamp'] === 'string')
         step.timestamp = entry['timestamp'];
       const call: AtifToolCall = {
@@ -550,7 +425,6 @@ export function normalizeClaudeLegacy(
         function_name: (entry['name'] as string | undefined) ?? '',
         arguments:
           (entry['input'] as Record<string, unknown> | undefined) ?? {},
-        extra: withNativeEvidence(undefined, { lines: [line] }),
       };
       step.tool_calls = [call];
       callIndex.set(call.tool_call_id, step);
@@ -572,10 +446,6 @@ export function normalizeClaudeLegacy(
             step_id: steps.length + 1,
             source: 'user',
             message,
-            extra: withNativeEvidence(undefined, {
-              lines: [line],
-              origin: userOrigin(entry),
-            }),
           };
           if (ts) userStep.timestamp = ts;
           steps.push(userStep);
@@ -592,52 +462,6 @@ export function normalizeClaudeLegacy(
           if (b.tool_use_id) result.source_call_id = b.tool_use_id;
           const formatted = formatToolResult(b, toolUseResult);
           if (formatted !== undefined) result.content = formatted;
-          const contentBytes = nativeTextBytes(b.content);
-          result.extra = withNativeEvidence(undefined, {
-            lines: [line],
-            origin: 'unknown',
-            recordBytes,
-            ...(ts ? { timestamp: ts } : {}),
-            ...(contentBytes !== undefined ? { contentBytes } : {}),
-          });
-          const exitCode = toolUseResult?.exitCode ?? toolUseResult?.exit_code;
-          const resultEvidence: NativeToolResultEvidence = {};
-          if (
-            b.is_error === true ||
-            toolUseResult?.interrupted === true ||
-            (typeof exitCode === 'number' &&
-              Number.isInteger(exitCode) &&
-              exitCode !== 0)
-          )
-            resultEvidence.isError = true;
-          else if (b.is_error === false || exitCode === 0)
-            resultEvidence.isError = false;
-          const durationMs = toolUseResult?.['totalDurationMs'];
-          if (
-            typeof durationMs === 'number' &&
-            Number.isFinite(durationMs) &&
-            durationMs >= 0
-          )
-            resultEvidence.durationMs = durationMs;
-          if (Object.keys(resultEvidence).length)
-            result.extra = { ...result.extra, quorum_result: resultEvidence };
-          const childId = toolUseResult?.['agentId'];
-          if (typeof childId === 'string' && childId) {
-            const child: NativeChildEvidence = {
-              relationship: 'spawned',
-              id: childId,
-            };
-            result.extra = { ...result.extra, quorum_child: child };
-            const owner = b.tool_use_id
-              ? callIndex.get(b.tool_use_id)
-              : undefined;
-            const ownerCall = owner?.tool_calls?.find(
-              (candidate) => candidate.tool_call_id === b.tool_use_id,
-            );
-            if (ownerCall?.function_name === 'Agent') {
-              ownerCall.extra = { ...ownerCall.extra, quorum_child: child };
-            }
-          }
           results.push(result);
         } else if (b.type === 'text' && typeof b.text === 'string') {
           texts.push(b.text);
@@ -666,10 +490,6 @@ export function normalizeClaudeLegacy(
           step_id: steps.length + 1,
           source: 'user',
           message: textMessage,
-          extra: withNativeEvidence(undefined, {
-            lines: [line],
-            origin: userOrigin(entry),
-          }),
         };
         if (ts) userStep.timestamp = ts;
         steps.push(userStep);
@@ -686,7 +506,5 @@ export function normalizeClaudeLegacy(
     steps,
   };
   if (sessionId) traj.session_id = sessionId;
-  if (boundaries.length > 0)
-    traj.extra = { ...traj.extra, quorum_boundaries: boundaries };
   return traj;
 }
