@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
@@ -7,7 +8,7 @@ import {
   readFileSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { getEnv } from '../../src/env.ts';
 
 const [role, input, ...flags] = process.argv.slice(2);
@@ -101,6 +102,26 @@ if (role === 'converse') {
       mode === 'pi-wrong-cwd' ? join(runDir, 'scenario') : get('--workspace');
     writeFileSync(log, `${[JSON.stringify(session), ...rows].join('\n')}\n`);
   }
+  if (mode === 'pi-usage-only') {
+    writeFileSync(
+      log,
+      [
+        { type: 'session', id: 'usage-only', cwd: get('--workspace') },
+        {
+          type: 'message',
+          message: {
+            role: 'assistant',
+            provider: 'openai-codex',
+            model: 'gpt-5.6-sol',
+            usage: { input: 10, output: 5, cost: { total: 0.25 } },
+            content: [],
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n'),
+    );
+  }
   if (mode === 'pi-cancel') {
     const socket = get('--tmux-socket');
     const started = spawnSync('tmux', [
@@ -133,9 +154,13 @@ if (role === 'converse') {
 }
 if (mode === 'assessment-hang') await new Promise(() => {});
 const assessmentStatus =
-  mode === 'assessed-fail' || mode === 'contradictory-all-pass-fail'
+  mode === 'assessed-fail' ||
+  mode === 'unknown-usage-fail' ||
+  mode === 'contradictory-all-pass-fail' ||
+  mode === 'operational-exit'
     ? 'fail'
     : mode === 'assessed-investigate' ||
+        mode === 'unknown-usage-investigate' ||
         mode === 'contradictory-all-pass-investigate' ||
         mode === 'contradictory-mixed-investigate' ||
         mode === 'assessment-timeout-report'
@@ -153,6 +178,8 @@ const criterionVerdicts =
             : assessmentStatus,
       ];
 const result = {
+  runId: basename(out),
+  scenario: basename(out).split('_')[0],
   status: assessmentStatus,
   summary:
     mode === 'assessment-timeout-report' ? 'Assessment timed out' : 'Assessed',
@@ -178,12 +205,120 @@ const resultOut =
   mode === 'missing-result' ? join(dirname(out), 'unallocated') : out;
 mkdirSync(resultOut, { recursive: true });
 writeFileSync(join(resultOut, 'result.json'), JSON.stringify(result));
+const identity = { assessment_request_id: '001', assessment_attempt_id: '001' };
+const zeroResponse = mode === 'conversion-error' || mode === 'zero-response';
+const rows = [
+  { type: 'llm_request', turn: 1, assessment_request_id: '001' },
+  ...(!zeroResponse
+    ? [{ type: 'llm_response', turn: 1, assessment_request_id: '001' }]
+    : []),
+  ...(mode === 'pending-logical-request'
+    ? [{ type: 'llm_request', turn: 2, assessment_request_id: '002' }]
+    : []),
+  ...(mode === 'missing-run-end'
+    ? []
+    : [{ type: 'run_end', usage: { turns: zeroResponse ? 0 : 1 } }]),
+];
+writeFileSync(
+  join(out, 'run.jsonl'),
+  mode === 'empty-assessment-history'
+    ? ''
+    : `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+);
+const usageRow = {
+  type: 'obol.usage',
+  v: '2026-06-08',
+  provider: 'anthropic',
+  model: 'claude-sonnet-4-6',
+  ...identity,
+  usage: {
+    input_tokens: 12,
+    output_tokens: 5,
+    cache_creation_input_tokens: 3,
+    cache_read_input_tokens: 7,
+  },
+};
+const attemptRows = [
+  {
+    schema_version: 1,
+    event: 'admission',
+    ...identity,
+    timestamp_ms: 100,
+    outcome: 'admitted',
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+  },
+  {
+    schema_version: 1,
+    event: 'settlement',
+    ...identity,
+    timestamp_ms: 110,
+    outcome: 'response',
+    usage: 'recorded',
+    accounting_failure: false,
+    capture: 'disabled',
+  },
+];
+if (mode !== 'zero-response' && mode !== 'empty-assessment-history') {
+  writeFileSync(
+    join(out, 'assessment-attempts.jsonl'),
+    `${attemptRows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+  );
+  let usageText = `${JSON.stringify(usageRow)}\n`;
+  if (mode === 'duplicate-usage') usageText += usageText;
+  if (mode === 'truncated-usage') usageText += '{"type":';
+  if (mode === 'malformed-usage')
+    usageText += `${JSON.stringify({
+      ...usageRow,
+      assessment_attempt_id: '002',
+      usage: { input_tokens: -1, output_tokens: 500 },
+    })}\n`;
+  if (mode.startsWith('unknown-usage')) {
+    writeFileSync(
+      join(out, 'assessment-attempts.jsonl'),
+      `${[
+        attemptRows[0],
+        {
+          ...attemptRows[1],
+          usage: 'not_returned',
+          usage_unavailable: 'api_error',
+        },
+        ...attemptRows.map((row) => ({ ...row, assessment_attempt_id: '002' })),
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n')}\n`,
+    );
+    usageText = `${JSON.stringify({ ...usageRow, assessment_attempt_id: '002' })}\n`;
+  }
+  writeFileSync(
+    join(out, 'usage.jsonl'),
+    mode === 'missing-known-usage' ? '' : usageText,
+  );
+}
+if (mode !== 'missing-marker') {
+  const operational = mode === 'conversion-error';
+  writeFileSync(
+    join(out, 'assessment-completion.json'),
+    JSON.stringify({
+      schema_version: 1,
+      run_id: basename(out),
+      status: operational ? 'errored' : 'completed',
+      reason: 'Fixture decision',
+      terminal_at: new Date().toISOString(),
+      accepted_report_sha256: operational
+        ? null
+        : createHash('sha256').update(JSON.stringify(result)).digest('hex'),
+    }),
+  );
+}
 process.exit(
-  mode === 'assessment-error'
-    ? 7
-    : mode === 'exit-mismatch'
-      ? 1
-      : assessmentStatus === 'pass'
-        ? 0
-        : 1,
+  mode === 'operational-exit' || mode === 'conversion-error'
+    ? 2
+    : mode === 'assessment-error'
+      ? 7
+      : mode === 'exit-mismatch'
+        ? 1
+        : assessmentStatus === 'pass'
+          ? 0
+          : 1,
 );

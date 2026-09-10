@@ -1,0 +1,24 @@
+# Six-run PR 2236 full-diagnosis comparison. Register with --global-cap 2.
+schema_version: 2
+name: pr2236_full_diagnosis
+reserve: 0
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 1
+  max_time_s: 1200
+grader:
+  credential: sonnet5
+  model: claude-sonnet-5
+comparisons:
+  - baseline: pr2236_full_claude_before
+    treatment: pr2236_full_claude_after
+    scenarios: [diagnosing-full-session]
+    n: 1
+  - baseline: pr2236_full_codex_before
+    treatment: pr2236_full_codex_after
+    scenarios: [diagnosing-full-session]
+    n: 1
+  - baseline: pr2236_full_pi_before
+    treatment: pr2236_full_pi_after
+    scenarios: [diagnosing-full-session]
+    n: 1

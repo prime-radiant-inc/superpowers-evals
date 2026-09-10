@@ -1,0 +1,8 @@
+# PR 2236 full-diagnosis control; credential owns model and endpoint.
+schema_version: 1
+name: pr2236_full_claude_before
+agent: claude
+os: linux
+credential: opus_bedrock
+superpowers: d7bc5b0197d3f5358d8af03d4474ec3c826465be
+effort: high

@@ -189,6 +189,9 @@ function seedPiOauth(
     defaultProvider: provider,
     defaultModel: credentialModel,
     defaultThinkingLevel: 'medium',
+    // Pi's default encodes the entire cwd as one filename; campaign paths can
+    // exceed NAME_MAX. Keep sessions in the already isolated capture root.
+    sessionDir: join(configDir, 'sessions'),
   };
   writeFileSync(
     join(configDir, 'settings.json'),
@@ -286,7 +289,7 @@ function writePiModelsJson(
 // PI_CODING_AGENT_DIR collapse: home.configDir is rooted under the throwaway
 // $HOME at <runHome>/.pi/agent (pi.yaml: home_config_subdir ".pi/agent"), which
 // is exactly where pi defaults its config when PI_CODING_AGENT_DIR is unset.
-// provision seeds the files under configDir; the launcher discovers them via
+// provision seeds settings.sessionDir under configDir; the launcher discovers it via
 // the isolated $HOME and explicitly selects configDir/sessions to avoid pi's
 // cwd-encoded default directory. The runner resolves session_log_dir against
 // $QUORUM_AGENT_HOME (${QUORUM_AGENT_HOME}/.pi/agent/sessions) for capture and
@@ -397,6 +400,7 @@ export class PiAgent implements CodingAgent {
       defaultProvider: 'quorum',
       defaultModel: credential.model,
       defaultThinkingLevel: 'medium',
+      sessionDir: join(configDir, 'sessions'),
     };
     writeFileSync(
       join(configDir, 'settings.json'),

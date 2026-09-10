@@ -42,7 +42,7 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   // realpath: the published-artifact readers refuse symlinked path components
   // by design, and macOS tmpdir() lives under /var -> /private/var.
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'runner-publication-')));
-  const scenarioName = 'campaign-publication';
+  const scenarioName = 'diagnosing-full-session';
   const scenarioDir = join(root, scenarioName);
   const campaignAttemptDir = join(root, 'attempt');
   const stagingRoot = join(campaignAttemptDir, 'staging');
@@ -51,6 +51,7 @@ test('a checks-bearing campaign runner result publishes with authenticated check
   const superpowersRoot = join(root, 'superpowers');
   const shimDir = mockGauntletDir('pass');
   mkdirSync(scenarioDir, { recursive: true });
+  mkdirSync(join(scenarioDir, 'history', 'claude'), { recursive: true });
   mkdirSync(resultsRoot);
   mkdirSync(superpowersRoot);
   writeFileSync(
@@ -58,9 +59,14 @@ test('a checks-bearing campaign runner result publishes with authenticated check
     '---\nquorum_max_time: 1m\n---\nExercise campaign publication.\n',
   );
   writeFileSync(
+    join(scenarioDir, 'history', 'claude', 'manifest.json'),
+    '{"schemaVersion":1,"harness":"claude","files":[]}\n',
+  );
+  writeFileSync(
     join(scenarioDir, 'setup.sh'),
     '#!/usr/bin/env bash\nprintf fixture > present.txt\nmkdir -p scratch-empty\nln -s present.txt link-to-present\n' +
-      'mkdir -p node_modules/pkg && printf dep > node_modules/pkg/index.js && mkdir -p .venv/bin && printf py > .venv/bin/python\n',
+      'mkdir -p node_modules/pkg && printf dep > node_modules/pkg/index.js && mkdir -p .venv/bin && printf py > .venv/bin/python\n' +
+      'mkdir -p packages/app/node_modules/pkg && printf nested > packages/app/node_modules/pkg/index.js && mkdir -p packages/app/.venv/bin && printf nested-py > packages/app/.venv/bin/python && printf evidence > packages/app/evidence.md\n',
   );
   chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
   // The attempt scratch tmpfs is mounted noexec, so the check phase's sink must
@@ -194,6 +200,22 @@ test('a checks-bearing campaign runner result publishes with authenticated check
       existsSync(join(publishedDir, 'coding-agent-workdir', '.venv')),
     ).toBe(false);
     expect(
+      existsSync(
+        join(
+          publishedDir,
+          'coding-agent-workdir',
+          'packages',
+          'app',
+          'node_modules',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      existsSync(
+        join(publishedDir, 'coding-agent-workdir', 'packages', 'app', '.venv'),
+      ),
+    ).toBe(false);
+    expect(
       manifest.files.some(
         (f) => f.path.includes('node_modules') || f.path.includes('.venv'),
       ),
@@ -201,6 +223,30 @@ test('a checks-bearing campaign runner result publishes with authenticated check
     expect(
       JSON.parse(readFileSync(join(publishedDir, 'verdict.json'), 'utf8')),
     ).toMatchObject({ scenario: scenarioName });
+    expect(
+      JSON.parse(
+        readFileSync(join(publishedDir, 'diagnosis-artifacts.json'), 'utf8'),
+      ),
+    ).toMatchObject({ schemaVersion: 1, errors: [] });
+    const diagnosisArtifacts = JSON.parse(
+      readFileSync(join(publishedDir, 'diagnosis-artifacts.json'), 'utf8'),
+    ) as { files: Array<{ retainedPath: string }> };
+    expect(
+      diagnosisArtifacts.files.some(
+        (file) =>
+          file.retainedPath.includes('/node_modules/') ||
+          file.retainedPath.includes('/.venv/'),
+      ),
+    ).toBe(false);
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(publishedDir, 'diagnosis-history', 'atif-sources.json'),
+          'utf8',
+        ),
+      ),
+    ).toEqual({ schemaVersion: 1, sources: [], mergedSteps: [] });
+    expect(existsSync(join(publishedDir, 'atif-sources.json'))).toBe(true);
     const evidence = readAttemptEvidence({
       resultsRoot,
       expectedIdentity: identity,

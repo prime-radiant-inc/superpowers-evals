@@ -614,14 +614,7 @@ export const EXPOSURE_DERIVATIONS: Record<
   // capture's sessionDurationMs reads).
   kimi: (text) => jsonlTimePointsMs(text, (r) => r['time']),
   opencode: stepTimestampsVia('opencode'),
-  // Raw derivation over pi's wire shape (the pi normalizer builds its steps
-  // without timestamps): ONLY `type: 'message'` records count — the session
-  // header and model_change/thinking_level_change metadata records carry
-  // earlier timestamps that are not generation requests.
-  pi: (text) =>
-    jsonlTimePointsMs(text, (r) =>
-      r['type'] === 'message' ? r['timestamp'] : undefined,
-    ),
+  pi: stepTimestampsVia('pi'),
   serf: stepTimestampsVia('serf'),
 };
 

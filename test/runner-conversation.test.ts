@@ -11,7 +11,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { AtifTrajectory } from '../src/atif/types.ts';
 import { snapshotDir } from '../src/capture/index.ts';
+import type { RunEconomics } from '../src/economics.ts';
 import { getEnv } from '../src/env.ts';
 import { runPreparedConversation } from '../src/runner/conversation.ts';
 
@@ -86,6 +88,88 @@ function setup(mode = 'refusal') {
     },
   };
 }
+for (const mode of [
+  'missing-marker',
+  'operational-exit',
+  'conversion-error',
+  'duplicate-usage',
+  'truncated-usage',
+  'malformed-usage',
+  'zero-response',
+  'empty-assessment-history',
+  'missing-run-end',
+  'pending-logical-request',
+  'missing-known-usage',
+])
+  test(`${mode} remains operational and retains only valid known physical cost`, async () => {
+    const args = setup(mode);
+    // Cost reconciliation is independent of conversation startup latency.
+    args.maxTime = '15s';
+    const verdict = await runPreparedConversation(args);
+    expect(verdict.final).toBe('indeterminate');
+    expect(verdict.error?.stage).toBe('gauntlet');
+    const role = JSON.parse(
+      readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'),
+    ).assessment;
+    expect(role.started_at).not.toBeNull();
+    expect(role.finished_at).not.toBeNull();
+    expect(role.process_exit.code).toBe(
+      mode === 'operational-exit' || mode === 'conversion-error' ? 2 : 0,
+    );
+    const economics = verdict.economics as unknown as RunEconomics;
+    if (
+      [
+        'zero-response',
+        'empty-assessment-history',
+        'missing-known-usage',
+      ].includes(mode)
+    )
+      expect(economics.gauntlet?.roles?.assessment.usage).toBeNull();
+    else {
+      expect(economics.gauntlet?.roles?.assessment.usage?.total_tokens).toBe(
+        27,
+      );
+      expect(
+        economics.gauntlet?.roles?.assessment.usage?.est_cost_usd,
+      ).toBeGreaterThan(0);
+    }
+    if (mode === 'conversion-error')
+      expect(verdict.economics?.['assessment_accounting']).toMatchObject({
+        logicalResponses: 0,
+        physicalAttempts: 1,
+      });
+  }, 30_000);
+for (const [mode, status, final, exit] of [
+  ['unknown-usage', 'pass', 'pass', 0],
+  ['unknown-usage-fail', 'fail', 'fail', 1],
+  ['unknown-usage-investigate', 'investigate', 'indeterminate', 1],
+] as const)
+  test(`settled retry preserves semantic ${status} with partial physical cost`, async () => {
+    const args = setup(mode);
+    args.maxTime = '15s';
+    writeFileSync(join(args.scenarioDir, 'oracle.cjs'), 'process.exit(0)');
+    const verdict = await runPreparedConversation(args);
+    expect(verdict.error).toBeNull();
+    expect(verdict.final).toBe(final);
+    expect(verdict.gauntlet).toMatchObject({
+      status,
+      process_exit: { code: exit, signal: null },
+    });
+    expect(verdict.economics?.['assessment_accounting']).toMatchObject({
+      logicalResponses: 1,
+      physicalAttempts: 2,
+      unknownUsageAttemptIds: ['001'],
+      complete: false,
+      error: null,
+    });
+    const economics = verdict.economics as unknown as RunEconomics;
+    expect(economics.partial).toBe(true);
+    expect(economics.total_est_cost_usd).toBeNull();
+    expect(economics.gauntlet?.roles?.assessment.usage?.total_tokens).toBe(27);
+    expect(
+      economics.gauntlet?.roles?.assessment.usage?.est_cost_usd,
+    ).toBeGreaterThan(0);
+  }, 30_000);
 test('completed refusal retains evidence and failing oracle still reaches isolated assessment', async () => {
   const args = setup();
   const v = await runPreparedConversation(args);
@@ -391,6 +475,20 @@ test('full runner gives Pi the private session root at a deep launch cwd', async
     });
     expect(result.verdict.error).toBeNull();
     expect(result.verdict.conversation?.status).toBe('completed');
+    const trajectory: AtifTrajectory = JSON.parse(
+      readFileSync(join(result.runDir, 'evidence/trajectory.json'), 'utf8'),
+    );
+    const pricedSteps = trajectory.steps.filter((step) => step.metrics);
+    expect(pricedSteps.length).toBeGreaterThan(0);
+    for (const step of pricedSteps) {
+      expect(step.metrics?.cost_usd).toBeUndefined();
+      expect(step.extra?.['cost_normalization']).toMatchObject({
+        policy: 'unconfigured-provider-model-rates',
+        provider: 'quorum',
+        model: 'gpt-5.6-sol',
+        recorded_cost_usd: 0,
+      });
+    }
     expect(
       existsSync(join(result.runDir, 'evidence/native/session.jsonl')),
     ).toBe(true);
@@ -556,6 +654,9 @@ test('Pi cancellation retains native evidence and confirms private runtime clean
     shouldStop: () => existsSync(marker),
   });
   expect(verdict.error?.stage).toBe('stopped');
+  expect(
+    (verdict.economics as unknown as RunEconomics)?.coding_agent,
+  ).not.toBeNull();
   expect(verdict.conversation?.status).toBe('completed');
   expect(existsSync(join(args.runDir, 'evidence/native/native.jsonl'))).toBe(
     true,
@@ -745,3 +846,28 @@ for (const mode of [
       if (mode === 'error') expect(result.faultCount).toBeGreaterThan(0);
     }
   });
+
+test('usage-only conversation stays indeterminate and retains incurred subject cost', async () => {
+  const args = setup('pi-usage-only');
+  const verdict = await runPreparedConversation({
+    ...args,
+    codingAgent: 'pi',
+    normalizer: 'pi',
+    maxTime: '3s',
+  });
+  expect(verdict.final).toBe('indeterminate');
+  expect(verdict.error?.stage).toBe('capture');
+  const usage = JSON.parse(
+    readFileSync(join(args.runDir, 'coding-agent-token-usage.json'), 'utf8'),
+  );
+  expect(usage.total_input).toBe(10);
+  expect(usage.total_output).toBe(5);
+  expect(usage.est_cost_usd).toBe(0.25);
+  const economics = verdict.economics as unknown as RunEconomics;
+  expect(economics.coding_agent?.est_cost_usd).toBe(0.25);
+  expect(
+    readFileSync(join(args.runDir, 'invocations.jsonl'), 'utf8')
+      .trim()
+      .split('\n'),
+  ).toHaveLength(1);
+});

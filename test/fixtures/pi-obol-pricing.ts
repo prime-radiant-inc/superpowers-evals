@@ -39,6 +39,15 @@ function piTrajectory(
       }),
     ].join('\n'),
     '0.80.7',
+    {
+      pi: {
+        placeholderZeroCost: {
+          provider: 'quorum',
+          model,
+          policy: 'unconfigured-provider-model-rates',
+        },
+      },
+    },
   );
 }
 

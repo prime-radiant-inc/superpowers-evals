@@ -44,15 +44,23 @@ quorum_max_time: 10m
 tags: TODO
 ---
 
+## User request
+
 Open with this exact request:
 
 TODO: write the natural request you want evaluated.
 
+## Context to provide when relevant
+
 If asked, answer reasonable questions naturally using only information the
 user would know. Do not disclose the acceptance criteria, suggest an
-implementation, or prescribe skills or tools. End the interaction when the
-Coding-Agent delivers a result or refuses the request, even if the delivery is
-incomplete or incorrect.
+implementation, or prescribe skills or tools.
+
+## End of interaction
+
+End the interaction when the Coding-Agent delivers a result or refuses the
+request, even if the delivery is incomplete or incorrect. State any
+scenario-specific delivery boundary here.
 
 ## Acceptance Criteria
 

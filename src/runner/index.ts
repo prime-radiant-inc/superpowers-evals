@@ -110,6 +110,15 @@ import {
 import { isSerfOpenRouterCampaignCredentialV1 } from '../credentials/serf-openrouter-profile.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import { collectDiagnosisArtifacts } from '../experiments/diagnosis/artifacts.ts';
+import {
+  type DiagnosisArtifacts,
+  FixtureManifestSchema,
+} from '../experiments/diagnosis/contracts.ts';
+import {
+  type AtifNormalizationContext,
+  PI_ZERO_COST_NORMALIZATION_POLICY,
+} from '../normalize/context.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
 import {
   captureOpenRouterGenerations,
@@ -1306,6 +1315,44 @@ export async function runScenario(
       ? join(runDir, 'home')
       : join(a.campaignAttemptDir, 'home');
   mkdirSync(provenanceRunHome, { recursive: true });
+  if (scenario === 'diagnosing-full-session') {
+    const corpusDir = join(a.scenarioDir, 'history', a.codingAgent);
+    try {
+      const manifest = FixtureManifestSchema.parse(
+        JSON.parse(readFileSync(join(corpusDir, 'manifest.json'), 'utf8')),
+      );
+      if (manifest.harness !== a.codingAgent) {
+        throw new Error(
+          `fixture harness ${manifest.harness} does not match coding agent ${a.codingAgent}`,
+        );
+      }
+      collectDiagnosisArtifacts({
+        manifest,
+        corpusDir,
+        home: provenanceRunHome,
+        workdir: join(runDir, 'coding-agent-workdir'),
+        runDir,
+      });
+    } catch (error) {
+      const failed: DiagnosisArtifacts = {
+        schemaVersion: 1,
+        files: [],
+        preservation: [],
+        errors: [
+          `diagnosis artifact collection failed: ${error instanceof Error ? error.message : String(error)}`,
+        ],
+      };
+      try {
+        writeFileSync(
+          join(runDir, 'diagnosis-artifacts.json'),
+          `${JSON.stringify(failed, null, 2)}\n`,
+        );
+      } catch {
+        // The original run verdict remains authoritative even if the run
+        // directory itself cannot accept the offline-assessment sidecar.
+      }
+    }
+  }
   const provenance = collectProvenance({
     repoRoot: repoRoot(),
     agentBinary: agentRunnable ? (runAgentCache.config?.binary ?? null) : null,
@@ -1896,6 +1943,22 @@ async function runInnerBody(
   // strips arbitrary env from new sessions, so the QA agent reads concrete
   // paths from the substituted files rather than from env inheritance.
   const family = cfg.runtime_family ?? cfg.name;
+  const normalizationContext: AtifNormalizationContext | undefined =
+    family === 'pi' &&
+    resolvedCredential?.auth === 'api-key' &&
+    resolvedCredential.api === 'openai-responses' &&
+    resolvedCredential.base_url !== undefined &&
+    resolvedCredential.model === 'gpt-5.6-sol'
+      ? {
+          pi: {
+            placeholderZeroCost: {
+              provider: 'quorum',
+              model: resolvedCredential.model,
+              policy: PI_ZERO_COST_NORMALIZATION_POLICY,
+            },
+          },
+        }
+      : undefined;
   const isRemote = os !== 'linux';
   const launchAgentPath = join(
     runDir,
@@ -2045,6 +2108,7 @@ async function runInnerBody(
   if (conversationNormalizer !== null) {
     return runPreparedConversation({
       runDir,
+      normalizationContext,
       scenarioDir: a.scenarioDir,
       storyPath,
       launcherPath: launchAgentPath,
@@ -2249,6 +2313,7 @@ async function runInnerBody(
       normalizer: cfg.normalizer,
       runDir,
       launchCwd,
+      normalizationContext,
     },
     { attempts: CAPTURE_RETRY_ATTEMPTS, delayMs: CAPTURE_RETRY_DELAY_MS },
   );
@@ -2262,6 +2327,7 @@ async function runInnerBody(
     normalizer: cfg.normalizer,
     runDir,
     launchCwd,
+    normalizationContext,
   });
 
   // Labeled Serf/OpenRouter campaigns require two independent capture proofs:

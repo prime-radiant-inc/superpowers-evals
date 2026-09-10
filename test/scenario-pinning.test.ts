@@ -13,6 +13,11 @@ import { repoRoot } from '../src/paths.ts';
 const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // PR 2258 pilot uses Codex rollout anchors and its xhigh config fragment.
   'brainstorming-todo-shared-intent',
+  // Session-discovery pilot is limited to the three harnesses whose native
+  // retained-history formats were qualified: Claude, Codex, and Pi.
+  'diagnosing-session-discovery',
+  // Full diagnosis uses the same three qualified native-history formats.
+  'diagnosing-full-session',
   'codex-windows-session-start-hook',
   'codex-subagent-wait-mapping',
   'codex-tool-mapping-comprehension',
@@ -22,6 +27,7 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // Conversation assessment remains explicitly pinned: pricing and code review
   // also admit Pi for qualification, while the others stay Claude/Codex-only.
   'conversation-pricing',
+  'conversation-config-repair',
   'conversation-code-review',
   'conversation-design',
   'conversation-debugging',

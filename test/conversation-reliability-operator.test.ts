@@ -18,10 +18,10 @@ import {
   executeStage,
   gitHead,
   loadExecutionInput,
-  runChild,
   type StageDependencies,
   validatePriorSummary,
 } from '../docs/experiments/2026-09-08-conversation-reliability/run.ts';
+import { runChild } from '../src/runner/retained-role.ts';
 
 const roots: string[] = [];
 afterEach(() => {

@@ -1,0 +1,8 @@
+# PR 2236 full-diagnosis control; credential owns model and endpoint.
+# Pi has no arm effort override on this API-key route.
+schema_version: 1
+name: pr2236_full_pi_before
+agent: pi
+os: linux
+credential: pi_gpt56_sol
+superpowers: d7bc5b0197d3f5358d8af03d4474ec3c826465be

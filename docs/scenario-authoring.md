@@ -110,9 +110,10 @@ bun run quorum new <name>
 
 `newScenario` (`src/scaffold.ts`) stamps a structurally valid conversation
 skeleton: a `story.md` with `id`/`title`/`quorum_tier`,
-`quorum_mode: conversation`, `quorum_max_time: 10m`, answer-if-asked guidance,
-a delivery/refusal stop condition, and private evidence-based Acceptance
-Criteria; a `setup.sh` (executable) that calls
+`quorum_mode: conversation`, `quorum_max_time: 10m`, prose sections for the
+user request, context to provide when relevant, and the end of the interaction,
+followed by private evidence-based Acceptance Criteria; a `setup.sh`
+(executable) that calls
 `setup-helpers run create_base_repo`; and a `checks.sh` (non-executable) with a
 `pre()` asserting `git-repo`/`git-branch main` and an empty `post()`.
 
@@ -205,13 +206,22 @@ precedence is directive > draft > tier). It defaults to `full`. Pick:
 
 ### The body scripts the user role
 
-Before `## Acceptance Criteria`, tell the conversation role the natural request
-to send to the Coding-Agent, how to answer reasonable follow-up questions, what
-facts it may reveal, and when to stop. A visible delivery or refusal is a stop
-condition even if the result is wrong. Do not coach the Coding-Agent toward the
-criteria. Quorum projects only this section into the user role and keeps the
-criteria for the later assessor. Legacy metadata-less QA stories still follow
-their existing combined driver/grader instructions.
+Before `## Acceptance Criteria`, use three clear prose sections:
+
+- `## User request` gives the natural request to send to the Coding-Agent.
+- `## Context to provide when relevant` says how to answer reasonable follow-up
+  questions and which facts the user may reveal when the question calls for
+  them. Leave unstated engineering decisions to the Coding-Agent.
+- `## End of interaction` defines the scenario-specific delivery or refusal
+  boundary. A visible delivery or refusal is a stop condition even if the result
+  is wrong.
+
+These headings are authoring conventions, not parsed fields or a disclosure
+state format. Write natural prose rather than a dialogue script. Do not coach
+the Coding-Agent toward the criteria. Quorum projects everything before the
+acceptance-criteria marker into the user role and keeps the criteria for the
+later assessor. Legacy metadata-less QA stories still follow their existing
+combined driver/grader instructions.
 
 ### Acceptance Criteria are graded semantically by an LLM
 

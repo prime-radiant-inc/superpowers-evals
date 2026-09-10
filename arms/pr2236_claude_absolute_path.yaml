@@ -1,0 +1,8 @@
+# Shared discovery with an explicit absolute-path output requirement.
+schema_version: 1
+name: pr2236_claude_absolute_path
+agent: claude
+os: linux
+credential: opus_bedrock
+superpowers: 6ac8f0c0c9e256a619736388fd5c0b85c35c39a1
+effort: high

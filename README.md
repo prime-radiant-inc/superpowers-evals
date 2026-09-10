@@ -119,38 +119,21 @@ independent checks. A delivered answer or refusal completes the conversation,
 even when it is wrong. The later assessment and checks determine the grade, so
 completion and pass/fail are separate facts in `quorum show`.
 
-Linux Claude and Codex are the established conversation runtimes. Their
-committed arms select both harness and subject credential:
-`conversation_claude` uses `opus5_bedrock`, while `conversation_codex` uses
-`openai_responses_56sol`. The example suite selects the separate
-`sonnet5_bedrock` credential for both evaluation roles. Do not add another
-harness based only on an arm declaration; its conversation lifecycle, capture,
-and pricing need their own qualification.
+The `conversation_routine_use` suite compares each pinned Superpowers treatment
+arm with a stock arm that sets `superpowers: none` while retaining the same
+harness, model credential, effort and evaluator configuration. Claude and Codex
+cover design, code review, review feedback and configuration repair. Pi is
+qualified for the code-review scenario only in this release; its result does not
+extend support to the other conversation scenarios. The suite uses the separate
+`sonnet5_bedrock` credential for both evaluation roles.
 
-This recipe authors one scenario, generates its manifest, selects those existing
-arms through a copied suite, and follows the supported appliance lifecycle.
-Edit the TODOs and the copied suite's `name` and `scenarios` entries before
-committing. Registration freezes committed source and suite bytes.
+This ordinary recipe selects the committed 36-attempt suite and follows the
+supported appliance lifecycle. Registration freezes committed source and suite
+bytes and returns the campaign UUID used by every later command.
 
 ```bash
-scenario=conversation-example
-suite="suites/${scenario}.yaml"
-
-bun run quorum new "$scenario"
-"${EDITOR:-vi}" "scenarios/${scenario}/story.md" \
-  "scenarios/${scenario}/setup.sh" "scenarios/${scenario}/checks.sh"
-bun run quorum check "$scenario" --update-manifests
-bun run quorum check "$scenario"
-
-sed -n '1,120p' arms/conversation_claude.yaml arms/conversation_codex.yaml
-cp suites/conversation_code_review.yaml "$suite"
-"${EDITOR:-vi}" "$suite"
-
-git add "scenarios/${scenario}" "$suite"
-git commit -m "Add ${scenario} conversation eval" \
-  -m "Define the user interaction, private evidence criteria, deterministic checks, and bounded Claude/Codex campaign suite."
-
-registration="$(evals-appliance campaign register "$(pwd)/${suite}" --global-cap 2 --json)"
+suite="$(pwd)/suites/conversation_routine_use.yaml"
+registration="$(evals-appliance campaign register "$suite" --global-cap 4 --json)"
 printf '%s\n' "$registration"
 campaign_id="$(printf '%s\n' "$registration" | jq -er '.experiment.campaign_id')"
 
@@ -163,6 +146,11 @@ evals-appliance campaign report "$campaign_id"
 # printed for the run you want to inspect. Never infer a target from an arm name.
 quorum show <exact-authenticated-target-from-campaign-report>
 ```
+
+Normal use needs neither a retained-case operator nor a separate analysis
+script. The authenticated campaign report already renders roles, paired
+quantities, elapsed time, all-attempt spend and exact available drilldown
+targets.
 
 See the [scenario authoring guide](docs/scenario-authoring.md) for criteria and
 check design. Appliance preparation, source synchronization, credential

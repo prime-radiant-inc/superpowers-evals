@@ -20,13 +20,13 @@ import {
   runAssessmentCase,
   verifyAssessmentUsage,
 } from '../docs/experiments/2026-09-08-conversation-grading/run.ts';
-import {
-  createRetainedAssessmentHeartbeatScheduler,
-  retainedAssessmentEnv,
-  runChild,
-} from '../docs/experiments/2026-09-08-conversation-reliability/run.ts';
 import { getEnv } from '../src/env.ts';
-import { estimateUsageSidecar } from '../src/obol/index.ts';
+import type { estimateUsageSidecar } from '../src/obol/index.ts';
+import {
+  createRoleHeartbeatScheduler,
+  retainedRoleEnv,
+  runChild,
+} from '../src/runner/retained-role.ts';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -556,7 +556,7 @@ test('shared retained environment maps only the blessed bearer and supervisor ne
     'AWS_BEARER_TOKEN_BEDROCK=blessed-fixture-bearer\nANTHROPIC_API_KEY=unblessed-key\nANTHROPIC_AUTH_TOKEN=unblessed-token\nOPENAI_API_KEY=unrelated-key\nHTTPS_PROXY=http://fixture-proxy.invalid:8080\n',
     { mode: 0o600 },
   );
-  const env = retainedAssessmentEnv(bundle, '/frozen/pricing');
+  const env = retainedRoleEnv(bundle, '/frozen/pricing');
   expect(env['ANTHROPIC_API_KEY']).toBe('blessed-fixture-bearer');
   expect(env['ANTHROPIC_BASE_URL']).toBe(
     'https://bedrock-mantle.us-east-1.api.aws/anthropic',
@@ -579,12 +579,12 @@ test('shared retained environment refuses missing bearer even with another provi
     'ANTHROPIC_API_KEY=unblessed-key\n',
     { mode: 0o600 },
   );
-  expect(() => retainedAssessmentEnv(bundle, '/frozen/pricing')).toThrow();
+  expect(() => retainedRoleEnv(bundle, '/frozen/pricing')).toThrow();
 });
 test('shared retained heartbeat scheduler reports loss and cancels future beats', async () => {
   let losses = 0,
     beats = 0;
-  const scheduler = createRetainedAssessmentHeartbeatScheduler(() => {
+  const scheduler = createRoleHeartbeatScheduler(() => {
     losses++;
   });
   const cancel = scheduler.every(2, () => {
@@ -611,7 +611,7 @@ test('one-case launch gives the shared environment private HOME and TMPDIR', asy
     'AWS_BEARER_TOKEN_BEDROCK=blessed-fixture-bearer\n',
     { mode: 0o600 },
   );
-  f.deps.graderEnv = () => retainedAssessmentEnv(bundle, '/frozen/pricing');
+  f.deps.graderEnv = () => retainedRoleEnv(bundle, '/frozen/pricing');
   f.deps.child = async (options) => {
     expect(options.env['HOME']).toBe(join(options.cwd, 'home'));
     expect(options.env['TMPDIR']).toBe(join(options.cwd, 'tmp'));
@@ -624,13 +624,30 @@ test('one-case launch gives the shared environment private HOME and TMPDIR', asy
 
 const gauntletRoot = getEnv('GAUNTLET_ROOT');
 test.skipIf(!gauntletRoot)(
-  'actual Gauntlet CLI repairs a typed report error and covers both priced turns',
+  'actual Gauntlet CLI repairs a typed report error and covers every read and report turn',
   async () => {
     const pricingDirectory = join(
       import.meta.dir,
       '../docs/experiments/2026-09-06-pr2258-pricing',
     );
-    expect(getEnv('OBOL_PRICING_DIR')).toBe(pricingDirectory);
+    // This model needs a frozen table that omits other aggregate-test models.
+    // Price in an isolated process instead of requiring a process-wide override.
+    const priceLocally: typeof estimateUsageSidecar = async (path) => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `import { estimateUsageSidecar } from ${JSON.stringify(join(import.meta.dir, '../src/obol/index.ts'))}; process.stdout.write(JSON.stringify(await estimateUsageSidecar(process.argv[1])));`,
+          path,
+        ],
+        {
+          env: { PATH: getEnv('PATH'), OBOL_PRICING_DIR: pricingDirectory },
+          timeout: 10000,
+        },
+      );
+      if (result.status !== 0) throw Error('isolated fixture pricing failed');
+      return JSON.parse(result.stdout.toString());
+    };
     const f = fixture();
     f.manifest.g_root = realpathSync(gauntletRoot!);
     f.manifest.g_sha = git(f.manifest.g_root, 'rev-parse', 'HEAD');
@@ -673,8 +690,10 @@ test.skipIf(!gauntletRoot)(
         }
         const request = (await httpRequest.json()) as Request;
         requests.push(request);
-        if (requests.length > 2) {
-          failures.push('assessment exceeded the two-response repair script');
+        if (requests.length > 3) {
+          failures.push(
+            'assessment exceeded the three-response read/repair script',
+          );
           return Response.json(
             {
               type: 'error',
@@ -696,21 +715,29 @@ test.skipIf(!gauntletRoot)(
             {
               type: 'tool_use',
               id: `repair-tool-${turn}`,
-              name: 'report_result',
-              input: {
-                summary: 'Retained criterion assessed.',
-                reasoning: 'The retained evidence demonstrates the criterion.',
-                criteria:
-                  turn === 1
-                    ? 'not an array'
-                    : [
-                        {
-                          verdict: 'pass',
-                          evidence:
-                            'evidence.txt: Retained conversation evidence.',
-                        },
-                      ],
-              },
+              name: turn === 1 ? 'read_evidence' : 'report_result',
+              input:
+                turn === 1
+                  ? { path: 'evidence.txt' }
+                  : {
+                      summary: 'Retained criterion assessed.',
+                      reasoning:
+                        'The retained evidence demonstrates the criterion.',
+                      criteria:
+                        turn === 2
+                          ? 'not an array'
+                          : [
+                              {
+                                verdict: 'pass',
+                                observation: 'Retained conversation evidence.',
+                                basis:
+                                  'The retained response demonstrates the criterion.',
+                                limitations:
+                                  'Only the retained evidence was available.',
+                                references: ['evidence.txt'],
+                              },
+                            ],
+                    },
             },
           ],
           stop_reason: 'tool_use',
@@ -727,7 +754,7 @@ test.skipIf(!gauntletRoot)(
     f.deps.signal = controller.signal;
     try {
       f.deps.child = runChild;
-      f.deps.priceUsage = estimateUsageSidecar;
+      f.deps.priceUsage = priceLocally;
       f.deps.graderEnv = () => ({
         PATH: getEnv('PATH'),
         ANTHROPIC_API_KEY: 'offline-only',
@@ -736,18 +763,23 @@ test.skipIf(!gauntletRoot)(
       });
       await runAssessmentCase(f.path, 1, f.deps);
       expect(failures).toEqual([]);
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(requests.map((request) => request.model)).toEqual([
         'anthropic.claude-sonnet-5',
         'anthropic.claude-sonnet-5',
+        'anthropic.claude-sonnet-5',
       ]);
-      const repair = requests[1]!.messages
+      const repair = requests[2]!.messages
         .flatMap((message) =>
           Array.isArray(message.content) ? message.content : [],
         )
-        .find((block) => block.type === 'tool_result');
+        .find(
+          (block) =>
+            block.type === 'tool_result' &&
+            block.tool_use_id === 'repair-tool-2',
+        );
       expect(repair).toMatchObject({
-        tool_use_id: 'repair-tool-1',
+        tool_use_id: 'repair-tool-2',
         is_error: true,
       });
       expect(repair?.content).toContain('criteria: expected array, got string');
@@ -762,7 +794,7 @@ test.skipIf(!gauntletRoot)(
             verdict: 'pass',
           },
         ],
-        usage: { turns: 2, inputTokens: 30, outputTokens: 15 },
+        usage: { turns: 3, inputTokens: 60, outputTokens: 30 },
       });
       expect(statSync(join(out, 'result.md')).size).toBeGreaterThan(0);
       const events = readFileSync(join(out, 'run.jsonl'), 'utf8')
@@ -770,41 +802,43 @@ test.skipIf(!gauntletRoot)(
         .split('\n')
         .map((line) => JSON.parse(line));
       expect(
-        events.find((event) => event.type === 'tool_result'),
-      ).toMatchObject({ turn: 1, name: 'report_result', error: true });
+        events.find(
+          (event) =>
+            event.type === 'tool_result' && event.name === 'report_result',
+        ),
+      ).toMatchObject({ turn: 2, name: 'report_result', error: true });
       expect(
         events
           .filter((event) => event.type === 'llm_response')
           .map((event) => event.turn),
-      ).toEqual([1, 2]);
-      expect(verifyAssessmentUsage(out)).toBe(2);
+      ).toEqual([1, 2, 3]);
+      expect(verifyAssessmentUsage(out)).toBe(3);
       const usagePath = join(out, 'usage.jsonl');
       const rows = readFileSync(usagePath, 'utf8').trim().split('\n');
-      expect(rows).toHaveLength(2);
-      const estimate = await estimateUsageSidecar(usagePath);
+      expect(rows).toHaveLength(3);
+      const estimate = await priceLocally(usagePath);
       expect(estimate).toMatchObject({
-        total_input: 30,
-        total_output: 15,
+        total_input: 60,
+        total_output: 30,
         unpriced_models: [],
         pricing_as_of: '2026-09-06',
       });
-      // Frozen rates: 30 input tokens at $2/M plus 15 output tokens at $10/M.
-      expect(estimate?.est_cost_usd).toBeCloseTo(0.00021, 10);
+      // Frozen rates: 60 input tokens at $2/M plus 30 output tokens at $10/M.
+      expect(estimate?.est_cost_usd).toBeCloseTo(0.00042, 10);
       expect(read(f.receipt(1, 'settled'))).toMatchObject({
         outcome: { code: 0, signal: null, timedOut: false, spawnError: false },
-        covered_turns: 2,
+        covered_turns: 3,
         coverage_complete: true,
-        cost_usd: 0.00021,
+        cost_usd: 0.00042,
         operational_error: null,
       });
-      // A real one-row subtotal still cannot establish coverage for this two-turn repair.
+      // A real one-row subtotal still cannot establish coverage for this three-turn read and repair.
       const partial = temporary();
       for (const name of ['result.json', 'run.jsonl'])
         copyFileSync(join(out, name), join(partial, name));
       writeFileSync(join(partial, 'usage.jsonl'), `${rows[0]}\n`);
       expect(
-        (await estimateUsageSidecar(join(partial, 'usage.jsonl')))
-          ?.est_cost_usd,
+        (await priceLocally(join(partial, 'usage.jsonl')))?.est_cost_usd,
       ).toBeCloseTo(0.00007, 10);
       expect(() => verifyAssessmentUsage(partial)).toThrow();
     } finally {

@@ -1,5 +1,12 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { extractManifest, writeManifest } from '../src/check/manifest.ts';
@@ -213,6 +220,7 @@ async function runWithMockGauntlet(
   fixture: string,
   gauntletBin?: string,
   campaignAttemptDir?: string,
+  shouldStop?: () => boolean,
 ): Promise<Awaited<ReturnType<typeof runScenario>>> {
   const outRoot = mkdtempSync(join(tmpdir(), 'out-'));
   const keys = [
@@ -235,6 +243,7 @@ async function runWithMockGauntlet(
       outRoot,
       gauntletBin,
       campaignAttemptDir,
+      shouldStop,
     });
   } finally {
     for (const [k, v] of saved) {
@@ -246,6 +255,155 @@ async function runWithMockGauntlet(
     }
   }
 }
+
+function makeFullDiagnosisScenario(): string {
+  const root = mkdtempSync(join(tmpdir(), 'full-diagnosis-scenario-'));
+  const scenarioDir = join(root, 'diagnosing-full-session');
+  const corpusDir = join(scenarioDir, 'history', 'claude');
+  const nativeDir = join(corpusDir, 'native');
+  mkdirSync(nativeDir, { recursive: true });
+  const history = [
+    JSON.stringify({
+      type: 'user',
+      sessionId: 'historical-fixture',
+      message: { role: 'user', content: 'historical request' },
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      sessionId: 'historical-fixture',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'historical response' }],
+        usage: { input_tokens: 9000, output_tokens: 1000 },
+      },
+    }),
+  ].join('\n');
+  const source = join(nativeDir, 'history.jsonl');
+  writeFileSync(source, history);
+  const manifest = {
+    schemaVersion: 1,
+    harness: 'claude',
+    files: [
+      {
+        path: 'native/history.jsonl',
+        destination: 'session-store',
+        relativePath: 'fixture/history.jsonl',
+        sha256: createHash('sha256').update(history).digest('hex'),
+      },
+    ],
+  };
+  writeFileSync(
+    join(corpusDir, 'manifest.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  writeFileSync(
+    join(scenarioDir, 'story.md'),
+    '---\nquorum_max_time: 1m\n---\nDiagnose the fixture.\n',
+  );
+  writeFileSync(
+    join(scenarioDir, 'setup.sh'),
+    `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$QUORUM_CODING_AGENT_HOME/.claude/projects/fixture"
+cp "$QUORUM_SCENARIO_DIR/history/claude/native/history.jsonl" "$QUORUM_CODING_AGENT_HOME/.claude/projects/fixture/history.jsonl"
+mkdir -p "$QUORUM_CODING_AGENT_HOME/.superpowers/diagnosing-superpowers/case-001"
+printf 'partial case\n' > "$QUORUM_CODING_AGENT_HOME/.superpowers/diagnosing-superpowers/case-001/case.md"
+printf 'partial report\n' > "$QUORUM_WORKDIR/diagnosis-report.md"
+`,
+  );
+  chmodSync(join(scenarioDir, 'setup.sh'), 0o755);
+  writeFileSync(
+    join(scenarioDir, 'checks.sh'),
+    'pre() { :; }\npost() { :; }\n',
+  );
+  return scenarioDir;
+}
+
+test('full-diagnosis finalization retains history and report evidence after a completed drive', async () => {
+  const result = await runWithMockGauntlet(makeFullDiagnosisScenario(), 'pass');
+
+  expect(result.verdict.final).toBe('pass');
+  expect(existsSync(join(result.runDir, 'diagnosis-artifacts.json'))).toBe(
+    true,
+  );
+  expect(
+    existsSync(
+      join(result.runDir, 'diagnosis-history', 'atif-sources', '000001.json'),
+    ),
+  ).toBe(true);
+  expect(
+    existsSync(
+      join(result.runDir, 'diagnosis-artifacts', 'case-001', 'case.md'),
+    ),
+  ).toBe(true);
+}, 30_000);
+
+test('full-diagnosis finalization retains historical ATIF on an early capture failure', async () => {
+  const result = await runWithMockGauntlet(
+    makeFullDiagnosisScenario(),
+    'startup-error',
+  );
+
+  expect(result.verdict.final).toBe('indeterminate');
+  expect(result.verdict.error?.stage).toBe('capture');
+  const index = JSON.parse(
+    readFileSync(
+      join(result.runDir, 'diagnosis-history', 'atif-sources.json'),
+      'utf8',
+    ),
+  ) as { sources: Array<{ id: string }> };
+  expect(index.sources.map((source) => source.id)).toEqual(['history-000001']);
+  expect(
+    existsSync(
+      join(result.runDir, 'coding-agent-workdir', 'diagnosis-report.md'),
+    ),
+  ).toBe(true);
+}, 30_000);
+
+test('full-diagnosis finalization retains setup evidence after a cooperative stop', async () => {
+  let boundaries = 0;
+  const result = await runWithMockGauntlet(
+    makeFullDiagnosisScenario(),
+    'pass',
+    undefined,
+    undefined,
+    () => {
+      boundaries += 1;
+      return boundaries >= 3;
+    },
+  );
+
+  expect(result.verdict.error?.stage).toBe('stopped');
+  expect(
+    readFileSync(
+      join(result.runDir, 'diagnosis-artifacts', 'case-001', 'case.md'),
+      'utf8',
+    ),
+  ).toBe('partial case\n');
+  expect(existsSync(join(result.runDir, 'diagnosis-artifacts.json'))).toBe(
+    true,
+  );
+}, 30_000);
+
+test('full-diagnosis collection errors do not replace the completed run verdict', async () => {
+  const scenarioDir = makeFullDiagnosisScenario();
+  writeFileSync(
+    join(scenarioDir, 'history', 'claude', 'manifest.json'),
+    '{"schemaVersion":1,"harness":"codex","files":[]}\n',
+  );
+
+  const result = await runWithMockGauntlet(scenarioDir, 'pass');
+
+  expect(result.verdict.final).toBe('pass');
+  const artifacts = JSON.parse(
+    readFileSync(join(result.runDir, 'diagnosis-artifacts.json'), 'utf8'),
+  ) as { errors: string[] };
+  expect(artifacts.errors).toEqual([
+    expect.stringContaining(
+      'fixture harness codex does not match coding agent claude',
+    ),
+  ]);
+}, 30_000);
 
 test.each([
   false,
@@ -816,7 +974,13 @@ test('pinned agent setup failure: zero agent invocations post-failure, no operat
 // run-local with no operator bundle.
 test('pinned agent success: agent version recorded with exactly pin + provenance probes (no config reload probe)', async () => {
   const fx = makeFakeBinFixture();
-  const scenarioDir = mkdtempSync(join(tmpdir(), 'scn-pinok-'));
+  const scenarioRoot = mkdtempSync(join(tmpdir(), 'scn-pinok-'));
+  const scenarioDir = join(scenarioRoot, 'diagnosing-full-session');
+  mkdirSync(join(scenarioDir, 'history', 'claude'), { recursive: true });
+  writeFileSync(
+    join(scenarioDir, 'history', 'claude', 'manifest.json'),
+    '{"schemaVersion":1,"harness":"claude","files":[]}\n',
+  );
   writeFileSync(
     join(scenarioDir, 'story.md'),
     '---\nquorum_max_time: 1m\n---\nDo the thing.\n',
@@ -866,8 +1030,9 @@ test('pinned agent success: agent version recorded with exactly pin + provenance
     // (gauntlet_version is not asserted here: the mock-gauntlet shim on PATH
     // legitimately shadows the fake gauntlet for the run itself.)
     // Exactly ONE pin-validation probe (pre-run, the existing config
-    // contract) plus ONE provenance probe. A provenance-time config reload
-    // would surface as a third CLAUDE-INVOCATION.
+    // contract) plus ONE provenance probe. The full-diagnosis collector ran,
+    // so either a provenance-time or collection-time config reload would
+    // surface as a third CLAUDE-INVOCATION.
     const claudeCalls = parseInvocationLog(fx.logPath).filter((s) =>
       s.header.startsWith('FAKECLAUDE'),
     );
@@ -900,7 +1065,7 @@ test('pinned agent success: agent version recorded with exactly pin + provenance
       }
     }
     fx.cleanup();
-    for (const dir of [shimDir, scenarioDir, outRoot, sproot]) {
+    for (const dir of [shimDir, scenarioRoot, outRoot, sproot]) {
       rmSync(dir, { recursive: true, force: true });
     }
   }

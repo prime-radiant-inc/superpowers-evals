@@ -34,11 +34,12 @@ import { getEnv } from '../../../src/env.ts';
 import { estimateUsageSidecar } from '../../../src/obol/index.ts';
 import { RealClock } from '../../../src/scheduler/clock.ts';
 import {
-  createRetainedAssessmentHeartbeatScheduler,
-  gitHead,
-  retainedAssessmentEnv,
+  createRoleHeartbeatScheduler,
+  retainedRoleEnv,
   runChild,
-} from '../2026-09-08-conversation-reliability/run.ts';
+} from '../../../src/runner/retained-role.ts';
+import { gitHead } from '../2026-09-08-conversation-reliability/run.ts';
+import { verifyReturnedTurns } from '../../../src/runner/role-usage.ts';
 
 const MODEL = 'anthropic.claude-sonnet-5';
 const CHILD_MS = 120_000;
@@ -281,71 +282,23 @@ function verifyInputs(m: Manifest): void {
     }
   }
 }
-function jsonLines(path: string): Record<string, unknown>[] {
-  safePath(path);
-  const text = readFileSync(path, 'utf8');
-  if (!text.endsWith('\n')) throw new Error('truncated JSONL');
-  return text
-    .slice(0, -1)
-    .split('\n')
-    .map((line) => z.record(z.unknown()).parse(JSON.parse(line)));
-}
-const tokens = z.number().finite().nonnegative();
-const UsageSchema = z
-  .object({
-    type: z.literal('obol.usage'),
-    v: z.literal('2026-06-08'),
-    provider: z.literal('anthropic'),
-    model: z.literal(MODEL),
-    usage: z
-      .object({
-        input_tokens: tokens,
-        output_tokens: tokens,
-        cache_read_input_tokens: tokens.optional(),
-        cache_creation_input_tokens: tokens.optional(),
-        cache_creation: z.record(tokens).optional(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
-/** Coverage of returned turns only; provider retries and invoice reconciliation are not observable here. */
+/** Assessment adds its result and mandatory run-end obligations to shared coverage. */
 export function verifyAssessmentUsage(out: string): number {
   const result = z
     .object({ usage: z.object({ turns: z.number().int().positive() }) })
     .parse(readJson(join(out, 'result.json')));
-  let responses = 0,
-    pending = false,
-    ended = false;
-  for (const event of jsonLines(join(out, 'run.jsonl'))) {
-    if (event['type'] === 'llm_request') {
-      if (ended || pending || event['turn'] !== responses + 1)
-        throw new Error('nonsequential request');
-      pending = true;
-    } else if (event['type'] === 'llm_response') {
-      if (ended || !pending || event['turn'] !== responses + 1)
-        throw new Error('nonsequential response');
-      responses++;
-      pending = false;
-    } else if (event['type'] === 'run_end') {
-      const end = z
-        .object({ usage: z.object({ turns: z.number().int().positive() }) })
-        .parse(event);
-      if (ended || pending || end.usage.turns !== responses)
-        throw new Error('incomplete or duplicate run end');
-      ended = true;
-    }
-  }
-  if (!ended || pending || responses !== result.usage.turns)
+  for (const name of ['run.jsonl', 'usage.jsonl']) safePath(join(out, name));
+  const coverage = verifyReturnedTurns({
+    model: MODEL,
+    runJsonl: readFileSync(join(out, 'run.jsonl'), 'utf8'),
+    usageJsonl: readFileSync(join(out, 'usage.jsonl'), 'utf8'),
+  });
+  if (
+    coverage.runEndTurns === null ||
+    coverage.returnedTurns !== result.usage.turns
+  )
     throw new Error('incomplete returned-turn coverage');
-  const rows = jsonLines(join(out, 'usage.jsonl'));
-  for (const row of rows) {
-    const parsed = UsageSchema.parse(row);
-    for (const [key, value] of Object.entries(parsed.usage))
-      if (key.endsWith('_tokens')) tokens.parse(value);
-  }
-  if (rows.length !== responses)
-    throw new Error('usage rows do not cover all returned turns');
-  return responses;
+  return coverage.returnedTurns;
 }
 function verifyReport(
   out: string,
@@ -738,11 +691,11 @@ async function main(): Promise<void> {
         return acquireLiveSpendLock({
           clock: new RealClock(),
           identity: realProcessIdentityProbe,
-          scheduler: createRetainedAssessmentHeartbeatScheduler(lost),
+          scheduler: createRoleHeartbeatScheduler(lost),
         });
       },
       graderEnv() {
-        return retainedAssessmentEnv(
+        return retainedRoleEnv(
           loaded.config.credential_bundle.path,
           pricing.directory,
         );
