@@ -155,7 +155,32 @@ export function renderCampaignReport(input: Report): string {
           outcomeRows,
         )),
     '',
+    'Comparison quantities',
+    'Planned counts include every registered sample. Each paired quantity reports its own complete determinate-pair coverage.',
+  );
+  for (const comparison of report.comparisons) {
+    lines.push(
+      `Scenario: ${plain(comparison.scenario)} (${plain(comparison.comparison_id)})`,
+    );
+    if ('baseline' in comparison.roles) {
+      lines.push(
+        `Baseline: ${plain(comparison.roles.baseline)}; treatment: ${plain(comparison.roles.treatment)}`,
+      );
+      for (const [quantity, paired] of Object.entries(comparison.paired)) {
+        const deltaLabel =
+          quantity === 'pass_rate' ? 'rate difference' : 'delta';
+        lines.push(
+          `${plain(quantity)}: pairs ${paired.n}; baseline ${paired.baseline_mean ?? 'unavailable'}; treatment ${paired.treatment_mean ?? 'unavailable'}; ${deltaLabel} ${paired.mean_delta ?? 'unavailable'}`,
+        );
+      }
+    } else {
+      lines.push(`Arm: ${plain(comparison.roles.arm)}`);
+    }
+  }
+  lines.push(
+    '',
     'Prices and coverage',
+    'Spend and coverage include all attempts, including missing or analytically unusable results.',
     ...table(
       ['price', 'known subtotal', 'coverage'],
       [
@@ -176,9 +201,11 @@ export function renderCampaignReport(input: Report): string {
         ],
       ],
     ),
+    `Elapsed: ${report.elapsed.seconds ?? 'unavailable'}${report.elapsed.seconds === null ? '' : ' seconds'}`,
     '',
     'Attempts',
     'Accepted outcomes do not establish conversation completion.',
+    'Analytical usability authenticates evidence but does not independently certify semantic grading.',
     'Use quorum show for completion and role-specific details when a drilldown is available.',
   );
 

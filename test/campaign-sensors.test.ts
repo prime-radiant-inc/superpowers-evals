@@ -1,5 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,8 +26,10 @@ import {
   roleOfEvidenceSource,
   senseEvidence,
   terminalEvidenceTexts,
+  trajectoryExposureFromText,
   trajectoryExposureMs,
 } from '../src/campaign/sensors.ts';
+import { captureToolCalls } from '../src/capture/index.ts';
 
 const fixture = (rel: string): string =>
   fileURLToPath(new URL(`./fixtures/${rel}`, import.meta.url));
@@ -446,13 +455,6 @@ test('per-harness exposure derivations: every live harness parses its real sessi
       expected: Date.parse('2026-06-15T02:52:26Z'),
     },
     {
-      // The exposure start is the first REQUEST (`type: 'message'` record) —
-      // never the session header's or model_change's metadata timestamps.
-      agent: 'pi',
-      path: fixture('pi-session.slice.jsonl'),
-      expected: Date.parse('2026-06-15T21:10:00.000Z'),
-    },
-    {
       agent: 'hermes',
       path: fixture('hermes-real-session.jsonl'),
       expected: 1784842079846,
@@ -463,6 +465,13 @@ test('per-harness exposure derivations: every live harness parses its real sessi
       expected: 1756288805000,
     }, // numeric epoch-ms `time` (capture's kimi convention)
     // Normalizer-backed derivations (step timestamps survive normalization).
+    {
+      // The exposure start is the first REQUEST (`type: 'message'` record) —
+      // never the session header's or model_change's metadata timestamps.
+      agent: 'pi',
+      path: fixture('pi-session.slice.jsonl'),
+      expected: Date.parse('2026-06-15T21:10:00.000Z'),
+    },
     {
       agent: 'claude',
       path: fixture('claude-2.1.177-real.jsonl'),
@@ -517,10 +526,77 @@ test('per-harness exposure derivations: every live harness parses its real sessi
   const torn = join(dir, 'torn.jsonl');
   writeFileSync(torn, '{"type":"user","timestamp":');
   expect(exposureProbeForAgent('claude').observe(torn)).toBeNull();
+  expect(exposureProbeForAgent('pi').observe(torn)).toBeNull();
   // Unknown agents fail loud.
   expect(() => exposureProbeForAgent('not-an-agent')).toThrow(
     /no exposure probe/,
   );
+});
+
+test.each([
+  { timestamps: 'native', expected: Date.parse('2026-06-15T21:10:00.000Z') },
+  { timestamps: 'missing', expected: null },
+  { timestamps: 'invalid', expected: null },
+])('Pi $timestamps timestamps agree through live monitoring, ATIF capture, and campaign audit', ({
+  timestamps,
+  expected,
+}) => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-atif-exposure-'));
+  try {
+    const logDir = join(root, 'sessions');
+    const runDir = join(root, 'run');
+    mkdirSync(logDir);
+    mkdirSync(runDir);
+    // Exercise the real fixture through capture (including cwd filtering,
+    // normalization, merge, and publication), not a hand-written ATIF file.
+    // Leave metadata and nested message timestamps intact to catch accidental
+    // fallback to a different clock when the native record timestamp is absent.
+    const raw = readFileSync(fixture('pi-session.slice.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const entry = JSON.parse(line);
+        if (entry.type === 'message' && timestamps === 'missing') {
+          delete entry.timestamp;
+        } else if (entry.type === 'message' && timestamps === 'invalid') {
+          entry.timestamp = 'not-a-timestamp';
+        }
+        return JSON.stringify(entry);
+      })
+      .join('\n');
+    const log = join(logDir, 'session.jsonl');
+    writeFileSync(log, raw);
+    const observed = exposureProbeForAgent('pi').observe(log);
+    expect(observed).toBe(expected);
+    const capture = captureToolCalls({
+      logDir,
+      logGlob: '**/*.jsonl',
+      snapshot: new Set(),
+      normalizer: 'pi',
+      runDir,
+      launchCwd: '/tmp/project',
+    });
+    expect(capture.rowCount).toBe(3);
+    expect(trajectoryExposureMs(runDir)).toBe(expected);
+    const rederived = trajectoryExposureFromText(
+      readFileSync(capture.path, 'utf8'),
+    );
+    expect(rederived).toBe(expected);
+    expect(
+      auditExposure({
+        decidedTsMs: observed,
+        rederivedTsMs: rederived,
+        includedAt: (tsMs) =>
+          Math.abs(tsMs - Date.parse('2026-06-15T21:10:04.686Z')) <= 60_000,
+      }),
+    ).toEqual({
+      divergent: false,
+      inclusionChanged: false,
+      invalidationReason: null,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('C7 capture re-derivation: trajectoryExposureMs reads the first step timestamp; absence is null', () => {

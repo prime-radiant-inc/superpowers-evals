@@ -110,6 +110,10 @@ import {
 import { isSerfOpenRouterCampaignCredentialV1 } from '../credentials/serf-openrouter-profile.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import {
+  type AtifNormalizationContext,
+  PI_ZERO_COST_NORMALIZATION_POLICY,
+} from '../normalize/context.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
 import {
   captureOpenRouterGenerations,
@@ -1896,6 +1900,22 @@ async function runInnerBody(
   // strips arbitrary env from new sessions, so the QA agent reads concrete
   // paths from the substituted files rather than from env inheritance.
   const family = cfg.runtime_family ?? cfg.name;
+  const normalizationContext: AtifNormalizationContext | undefined =
+    family === 'pi' &&
+    resolvedCredential?.auth === 'api-key' &&
+    resolvedCredential.api === 'openai-responses' &&
+    resolvedCredential.base_url !== undefined &&
+    resolvedCredential.model === 'gpt-5.6-sol'
+      ? {
+          pi: {
+            placeholderZeroCost: {
+              provider: 'quorum',
+              model: resolvedCredential.model,
+              policy: PI_ZERO_COST_NORMALIZATION_POLICY,
+            },
+          },
+        }
+      : undefined;
   const isRemote = os !== 'linux';
   const launchAgentPath = join(
     runDir,
@@ -2045,6 +2065,7 @@ async function runInnerBody(
   if (conversationNormalizer !== null) {
     return runPreparedConversation({
       runDir,
+      normalizationContext,
       scenarioDir: a.scenarioDir,
       storyPath,
       launcherPath: launchAgentPath,
@@ -2249,6 +2270,7 @@ async function runInnerBody(
       normalizer: cfg.normalizer,
       runDir,
       launchCwd,
+      normalizationContext,
     },
     { attempts: CAPTURE_RETRY_ATTEMPTS, delayMs: CAPTURE_RETRY_DELAY_MS },
   );
@@ -2262,6 +2284,7 @@ async function runInnerBody(
     normalizer: cfg.normalizer,
     runDir,
     launchCwd,
+    normalizationContext,
   });
 
   // Labeled Serf/OpenRouter campaigns require two independent capture proofs:

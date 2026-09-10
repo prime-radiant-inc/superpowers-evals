@@ -1,10 +1,14 @@
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   type GauntletRoleRecord,
   GauntletRolesSchema,
 } from '../contracts/conversation.ts';
+import {
+  applyAssessmentStop,
+  readAssessmentCompletion,
+} from './assessment-completion.ts';
 
 export type RoleProcessArgs = {
   role: 'conversation' | 'assessment';
@@ -83,6 +87,15 @@ export async function invokeGauntletRole(
   a: RoleProcessArgs,
 ): Promise<GauntletRoleRecord> {
   if (active !== null) throw new Error('a Gauntlet role is already active');
+  if (
+    a.role === 'assessment' &&
+    a.argv.some(
+      (arg) =>
+        arg === '--hard-deadline-at-ms' ||
+        arg.startsWith('--hard-deadline-at-ms='),
+    )
+  )
+    throw new Error('assessment hard deadline is owned by quorum');
   const path = join(a.runDir, 'gauntlet-roles.json');
   const roles = GauntletRolesSchema.parse(
     JSON.parse(readFileSync(path, 'utf8')),
@@ -98,14 +111,32 @@ export async function invokeGauntletRole(
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let grace: ReturnType<typeof setTimeout> | undefined;
+  let checkParentStop = () => {};
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(a.binary, a.argv, {
-        cwd: a.runDir,
-        env: a.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      // The wall anchor travels to the child; elapsed time never renews the
+      // parent's allowance, even if its event-loop timer is delayed.
+      let startedAtMs = Date.now();
+      let startedAtMono = performance.now();
+      const hardDeadlineAtMs = startedAtMs + a.deadlineMs;
+      const child = spawn(
+        a.binary,
+        a.role === 'assessment'
+          ? [...a.argv, '--hard-deadline-at-ms', String(hardDeadlineAtMs)]
+          : a.argv,
+        {
+          cwd: a.runDir,
+          env: a.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      // Preserve the conversation role's preexisting post-spawn allowance.
+      if (a.role === 'conversation') {
+        startedAtMs = Date.now();
+        startedAtMono = performance.now();
+      }
       active = child;
+      let settled = false;
       const terminate = (
         cause: 'cancelled' | 'timed_out',
         signal: NodeJS.Signals,
@@ -113,21 +144,29 @@ export async function invokeGauntletRole(
         if (record.stop_cause !== null) return;
         record.stop_cause = cause;
         save();
-        child.kill(signal);
+        if (!settled) child.kill(signal);
         terminateRuntime(a.socketPath, groups);
-        grace = setTimeout(() => {
-          if (active === child) child.kill('SIGKILL');
-          terminateRuntime(a.socketPath, groups);
-        }, 200);
+        if (!settled)
+          grace = setTimeout(() => {
+            if (active === child) child.kill('SIGKILL');
+            terminateRuntime(a.socketPath, groups);
+          }, 200);
       };
       stop = (signal) => terminate('cancelled', signal);
+      checkParentStop = () => {
+        if (a.shouldStop()) terminate('cancelled', 'SIGTERM');
+        else if (performance.now() - startedAtMono >= a.deadlineMs)
+          terminate('timed_out', 'SIGTERM');
+      };
       if (child.pid !== undefined) {
-        record.started_at = new Date().toISOString();
+        record.started_at = new Date(startedAtMs).toISOString();
         save();
       }
       deadline = setTimeout(
         () => terminate('timed_out', 'SIGTERM'),
-        a.deadlineMs,
+        a.role === 'assessment'
+          ? Math.max(0, a.deadlineMs - (performance.now() - startedAtMono))
+          : a.deadlineMs,
       );
       observeRuntime(a.socketPath, groups);
       poll = setInterval(() => {
@@ -138,6 +177,7 @@ export async function invokeGauntletRole(
       child.stderr?.resume();
       child.once('error', reject);
       child.once('exit', (code, signal) => {
+        settled = true;
         record.process_exit = { code, signal };
         record.finished_at = new Date().toISOString();
         save();
@@ -162,6 +202,43 @@ export async function invokeGauntletRole(
       throw new Error(
         'conversation role exited without closing its private runtime',
       );
+    }
+    if (a.role === 'assessment') {
+      let failure: unknown;
+      checkParentStop();
+      try {
+        const outDir = join(a.runDir, record.out_dir);
+        const completion = readAssessmentCompletion({
+          outDir,
+          runId: basename(outDir),
+        });
+        // terminal_at is the decision time, not evidence that publication or
+        // this validation finished before the parent's hard stop.
+        checkParentStop();
+        record.stop_cause = applyAssessmentStop(
+          record.stop_cause,
+          completion.status,
+        );
+        save();
+        if (completion.status === 'errored')
+          throw new Error(`assessment errored: ${completion.reason}`);
+        const expectedExit =
+          completion.status === 'completed' &&
+          JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'))
+            .status === 'pass'
+            ? 0
+            : 1;
+        if (
+          record.process_exit?.code !== expectedExit ||
+          record.process_exit.signal !== null
+        )
+          throw new Error('assessment process exit contradicts completion');
+      } catch (error) {
+        failure = error;
+      } finally {
+        checkParentStop();
+      }
+      if (record.stop_cause === null && failure !== undefined) throw failure;
     }
     return record;
   } finally {

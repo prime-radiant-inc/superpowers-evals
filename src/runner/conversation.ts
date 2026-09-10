@@ -41,9 +41,12 @@ import {
   type RunErrorStage,
 } from '../contracts/verdict.ts';
 import { buildRunEconomics } from '../economics.ts';
+import type { AtifNormalizationContext } from '../normalize/context.ts';
+import { estimateUsageSidecar } from '../obol/index.ts';
 import { projectConversationStory } from './conversation-input.ts';
 import { invokeGauntletRole } from './gauntlet-role.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
+import { reconcileAssessmentAccounting } from './role-usage.ts';
 
 export type PreparedConversation = {
   runDir: string;
@@ -56,6 +59,7 @@ export type PreparedConversation = {
   configDir: string;
   codingAgent: string;
   normalizer: 'claude' | 'codex' | 'pi';
+  normalizationContext?: AtifNormalizationContext | undefined;
   logDir: string;
   logGlob: string;
   snapshot: ReturnType<typeof snapshotDir>;
@@ -342,6 +346,16 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
       logGlob: a.logGlob,
       snapshot: a.snapshot,
       normalizer: a.normalizer,
+      normalizationContext: a.normalizationContext,
+      runDir: a.runDir,
+      launchCwd: a.launchCwd,
+    });
+    await captureTokenUsage({
+      logDir: a.logDir,
+      logGlob: a.logGlob,
+      snapshot: a.snapshot,
+      normalizer: a.normalizer,
+      normalizationContext: a.normalizationContext,
       runDir: a.runDir,
       launchCwd: a.launchCwd,
     });
@@ -418,14 +432,6 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
         'capture',
         `native conversation capture unavailable: ${capture.errors.map((e) => e.message).join('; ')}`,
       );
-    await captureTokenUsage({
-      logDir: a.logDir,
-      logGlob: a.logGlob,
-      snapshot: a.snapshot,
-      normalizer: a.normalizer,
-      runDir: a.runDir,
-      launchCwd: a.launchCwd,
-    });
     if (await stopRequested()) return stopped();
     stage = 'checks';
     writePhase(a.runDir, 'checks', a.identity);
@@ -464,28 +470,36 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
     stage = 'gauntlet';
     writePhase(a.runDir, 'agent', a.identity);
     const out = join(a.runDir, roles.assessment.out_dir);
-    roles.assessment = await invokeGauntletRole({
-      role: 'assessment',
-      binary: a.gauntletBin,
-      argv: [
-        'assess',
-        rubric,
-        '--evidence-root',
-        evidenceRoot,
-        '--evidence-index',
-        join(evidenceRoot, 'index.json'),
-        '--out',
-        out,
-        '--model',
-        `agent=${a.graderModel}`,
-        '--max-time',
-        '2m',
-      ],
-      runDir: a.runDir,
-      env: a.envBase,
-      deadlineMs: 120000,
-      shouldStop: a.shouldStop,
-    });
+    let assessmentError: string | null = null;
+    try {
+      roles.assessment = await invokeGauntletRole({
+        role: 'assessment',
+        binary: a.gauntletBin,
+        argv: [
+          'assess',
+          rubric,
+          '--evidence-root',
+          evidenceRoot,
+          '--evidence-index',
+          join(evidenceRoot, 'index.json'),
+          '--out',
+          out,
+          '--model',
+          `agent=${a.graderModel}`,
+          '--max-time',
+          '2m',
+        ],
+        runDir: a.runDir,
+        env: a.envBase,
+        deadlineMs: 120000,
+        shouldStop: a.shouldStop,
+      });
+    } catch (error) {
+      assessmentError = error instanceof Error ? error.message : String(error);
+      roles.assessment = GauntletRolesSchema.parse(
+        JSON.parse(readFileSync(join(a.runDir, 'gauntlet-roles.json'), 'utf8')),
+      ).assessment;
+    }
     const processExit = roles.assessment.process_exit;
     try {
       gauntlet = GauntletLayerSchema.parse({
@@ -504,6 +518,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
     }
     if (roles.assessment.stop_cause === 'cancelled' || (await stopRequested()))
       return stopped();
+    if (assessmentError !== null) return fail('gauntlet', assessmentError);
     const expectedExit = gauntlet.status === 'pass' ? 0 : 1;
     if (
       processExit?.code !== expectedExit ||
@@ -563,14 +578,97 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
 export async function runPreparedConversation(
   a: PreparedConversation,
 ): Promise<FinalVerdict> {
-  const verdict = await runConversation(a);
+  let verdict = await runConversation(a);
   let economics: FinalVerdict['economics'] = null;
+  let projectionDir: string | undefined;
   try {
-    const measured = await buildRunEconomics(a.runDir);
+    const roles = GauntletRolesSchema.parse(
+      JSON.parse(readFileSync(join(a.runDir, 'gauntlet-roles.json'), 'utf8')),
+    );
+    const out = join(a.runDir, roles.assessment.out_dir);
+    const readSidecar = (name: string) => {
+      try {
+        return readFileSync(join(out, name), 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+        throw error;
+      }
+    };
+    const reconciled =
+      roles.assessment.started_at === null
+        ? null
+        : reconcileAssessmentAccounting({
+            runJsonl: readSidecar('run.jsonl'),
+            usageJsonl: readSidecar('usage.jsonl'),
+            attemptsJsonl: readSidecar('assessment-attempts.jsonl'),
+          });
+    if (
+      reconciled !== null &&
+      !reconciled.reportEligible &&
+      verdict.error === null
+    ) {
+      const message = `Assessment accounting incomplete: ${reconciled.error ?? 'missing completed logical history'}`;
+      verdict = {
+        ...verdict,
+        ...compose({
+          gauntlet: verdict.gauntlet,
+          checks: verdict.checks,
+          captureEmpty: false,
+          error: { stage: 'gauntlet', message },
+          expected: a.expectedChecks,
+        }),
+      };
+    }
+    // A disposable filtered view lets the existing obol estimator price valid
+    // known rows even when the raw tail or sibling identities are invalid.
+    // Producer artifacts remain untouched; this is not a second usage ledger.
+    let projectedUsage: string | undefined;
+    if (reconciled !== null) {
+      projectionDir = mkdtempSync(join(a.runDir, '.assessment-pricing-'));
+      projectedUsage = join(projectionDir, 'usage.jsonl');
+      writeFileSync(projectedUsage, reconciled.knownUsageJsonl, {
+        mode: 0o600,
+      });
+    }
+    const measured = await buildRunEconomics(a.runDir, (path) =>
+      estimateUsageSidecar(
+        path === join(out, 'usage.jsonl') && projectedUsage !== undefined
+          ? projectedUsage
+          : path,
+      ),
+    );
     economics =
       measured === null ? null : z.record(z.unknown()).parse(measured);
+    if (economics !== null && reconciled !== null) {
+      economics['assessment_accounting'] = {
+        ...reconciled.accounting,
+        complete: reconciled.complete,
+        error: reconciled.error,
+      };
+      if (!reconciled.complete) {
+        economics['partial'] = true;
+        economics['total_est_cost_usd'] = null;
+      }
+    }
   } catch {
-    /* Cost failure cannot erase the verdict. */
+    // An unreadable accounting source cannot qualify an otherwise completed
+    // assessment. Cost failure also cannot erase a preexisting execution error.
+    if (verdict.error === null) {
+      const message = 'Assessment accounting unavailable';
+      verdict = {
+        ...verdict,
+        ...compose({
+          gauntlet: verdict.gauntlet,
+          checks: verdict.checks,
+          captureEmpty: false,
+          error: { stage: 'gauntlet', message },
+          expected: a.expectedChecks,
+        }),
+      };
+    }
+  } finally {
+    if (projectionDir !== undefined)
+      rmSync(projectionDir, { recursive: true, force: true });
   }
   return { ...verdict, economics };
 }

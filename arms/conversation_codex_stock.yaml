@@ -1,0 +1,6 @@
+schema_version: 1
+name: conversation_codex_stock
+agent: codex
+credential: openai_responses_56sol
+superpowers: none
+effort: high
