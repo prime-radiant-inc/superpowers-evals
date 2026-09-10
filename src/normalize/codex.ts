@@ -357,12 +357,163 @@ function nativeCodexResultError(raw: unknown): boolean | undefined {
   return undefined;
 }
 
+type StaticExecOptionType = 'boolean' | 'number' | 'string' | 'string-array';
+
+const STATIC_EXEC_OPTION_TYPES: Record<string, StaticExecOptionType> = {
+  cmd: 'string',
+  justification: 'string',
+  login: 'boolean',
+  max_output_tokens: 'number',
+  prefix_rule: 'string-array',
+  sandbox_permissions: 'string',
+  shell: 'string',
+  tty: 'boolean',
+  workdir: 'string',
+  yield_time_ms: 'number',
+};
+
+function skipWhitespace(source: string, start: number): number {
+  let index = start;
+  while (/\s/.test(source[index] ?? '')) index += 1;
+  return index;
+}
+
+function staticStringLiteral(
+  source: string,
+  start: number,
+  allowTemplate = true,
+): { end: number; value: string } | undefined {
+  const quote = source[start];
+  if (quote !== '"' && quote !== "'" && (!allowTemplate || quote !== '`'))
+    return undefined;
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const char = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char !== quote) continue;
+    const body = source.slice(start + 1, index);
+    if (quote === '`' && body.includes('${')) return undefined;
+    return { end: index + 1, value: unescapeJsLiteral(body) };
+  }
+  return undefined;
+}
+
+function staticStringArray(source: string, start: number): number | undefined {
+  if (source[start] !== '[') return undefined;
+  let index = skipWhitespace(source, start + 1);
+  if (source[index] === ']') return index + 1;
+  for (;;) {
+    const literal = staticStringLiteral(source, index);
+    if (!literal) return undefined;
+    index = skipWhitespace(source, literal.end);
+    if (source[index] === ']') return index + 1;
+    if (source[index] !== ',') return undefined;
+    index = skipWhitespace(source, index + 1);
+    if (source[index] === ']') return index + 1;
+  }
+}
+
+function staticExecOptionValue(
+  source: string,
+  start: number,
+  type: StaticExecOptionType,
+): { end: number; value?: string } | undefined {
+  if (type === 'string') return staticStringLiteral(source, start);
+  if (type === 'string-array') {
+    const end = staticStringArray(source, start);
+    return end === undefined ? undefined : { end };
+  }
+  if (type === 'boolean') {
+    const match = /^(?:true|false)\b/.exec(source.slice(start));
+    return match ? { end: start + match[0].length } : undefined;
+  }
+  const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(
+    source.slice(start),
+  );
+  return match ? { end: start + match[0].length } : undefined;
+}
+
+/**
+ * Consume one directly emitted exec_command statement whose argument is a
+ * static object literal. Values are checked against the native tool's option
+ * types, while duplicate, unknown, computed and expression-valued fields are
+ * rejected. This is deliberately not a general JavaScript parser.
+ */
+function staticExecCommandStatement(
+  source: string,
+): { command: string; length: number } | undefined {
+  let index = skipWhitespace(source, 0);
+  if (!source.startsWith('text', index)) return undefined;
+  index = skipWhitespace(source, index + 'text'.length);
+  if (source[index] !== '(') return undefined;
+  index = skipWhitespace(source, index + 1);
+  if (!source.startsWith('await', index)) return undefined;
+  const afterAwait = index + 'await'.length;
+  index = skipWhitespace(source, afterAwait);
+  if (index === afterAwait || !source.startsWith('tools.exec_command', index))
+    return undefined;
+  index = skipWhitespace(source, index + 'tools.exec_command'.length);
+  if (source[index] !== '(') return undefined;
+  index = skipWhitespace(source, index + 1);
+  if (source[index] !== '{') return undefined;
+  index = skipWhitespace(source, index + 1);
+
+  const seen = new Set<string>();
+  let command: string | undefined;
+  while (source[index] !== '}') {
+    const quotedKey = staticStringLiteral(source, index, false);
+    const identifierKey = /^[A-Za-z_$][\w$]*/.exec(source.slice(index));
+    const key = quotedKey?.value ?? identifierKey?.[0];
+    if (!key) return undefined;
+    index = quotedKey
+      ? quotedKey.end
+      : index + (identifierKey?.[0].length ?? 0);
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const optionType = STATIC_EXEC_OPTION_TYPES[key];
+    if (!optionType) return undefined;
+    index = skipWhitespace(source, index);
+    if (source[index] !== ':') return undefined;
+    index = skipWhitespace(source, index + 1);
+    const option = staticExecOptionValue(source, index, optionType);
+    if (!option) return undefined;
+    if (
+      key === 'sandbox_permissions' &&
+      option.value !== 'use_default' &&
+      option.value !== 'require_escalated'
+    )
+      return undefined;
+    if (key === 'cmd') command = option.value;
+    index = skipWhitespace(source, option.end);
+    if (source[index] === '}') break;
+    if (source[index] !== ',') return undefined;
+    index = skipWhitespace(source, index + 1);
+    if (source[index] === '}') break;
+  }
+  if (command === undefined || source[index] !== '}') return undefined;
+  index = skipWhitespace(source, index + 1);
+  if (source[index] !== ')') return undefined;
+  index = skipWhitespace(source, index + 1);
+  if (source[index] !== ')') return undefined;
+  index = skipWhitespace(source, index + 1);
+  if (source[index] !== ';') return undefined;
+  return { command, length: index + 1 };
+}
+
 /**
  * Qualify only a fully consumed sequence of directly emitted, awaited shell
- * calls with static command strings. General exec scripts can reorder, skip,
- * transform or fabricate their outputs, so output count/order alone is unsafe.
- * This deliberately narrow grammar establishes the native output-to-call map;
- * all other script shapes retain their output without qualified subcall status.
+ * calls with supported static literal options. General exec scripts can
+ * reorder, skip, transform or fabricate their outputs, so output count/order
+ * alone is unsafe. This deliberately narrow grammar establishes the native
+ * output-to-call map; all other script shapes retain their output without
+ * qualified subcall status.
  */
 function nativeCodexSubcallResults(
   calls: AtifToolCall[],
@@ -378,20 +529,16 @@ function nativeCodexSubcallResults(
   )
     return undefined;
   let script = calls.map((call) => call.extra?.['script']).join('');
-  const emittedCall =
-    /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(\s*\{\s*(?:cmd|"cmd")\s*:\s*("(?:[^"\\]|\\.)*")\s*,?\s*\}\s*\)\s*\)\s*;/;
   const outcomes: NonNullable<NativeToolResultEvidence['subcalls']> = [];
   for (const [index, call] of calls.entries()) {
-    const match = emittedCall.exec(script);
-    if (!match?.[1] || call.function_name !== 'Bash') return undefined;
-    let command: unknown;
-    try {
-      command = JSON.parse(match[1]);
-    } catch {
+    const statement = staticExecCommandStatement(script);
+    if (
+      !statement ||
+      call.function_name !== 'Bash' ||
+      statement.command !== call.arguments['command']
+    )
       return undefined;
-    }
-    if (command !== call.arguments['command']) return undefined;
-    script = script.slice(match[0].length);
+    script = script.slice(statement.length);
     const block = raw[index + 1];
     if (block?.type !== 'input_text') return undefined;
     const output = codexOutputObject(block.text);

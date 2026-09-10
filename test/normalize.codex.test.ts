@@ -1115,9 +1115,9 @@ test('56-exec: a spawn with a quoted message string also canonicalizes to prompt
 for (const failed of [false, true])
   test(`composite outcome mapping preserves physical output, native provenance and once-only usage (inner failure=${failed})`, () => {
     const input = [
-      'text(await tools.exec_command({cmd: "cat /case"}));',
-      'text(await tools.exec_command({cmd: "cat /common"}));',
-      'text(await tools.exec_command({cmd: "cat /dimension"}));',
+      'text(await tools.exec_command({cmd: "cat /case", max_output_tokens: 20000}));',
+      'text(await tools.exec_command({workdir: "/synthetic", cmd: "cat /common", yield_time_ms: 1000}));',
+      'text(await tools.exec_command({cmd: "cat /dimension", shell: "/bin/bash", login: false, tty: false}));',
     ].join('\n');
     const output = [
       {

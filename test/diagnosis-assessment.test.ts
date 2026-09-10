@@ -1017,3 +1017,117 @@ for (const variant of [
       variant === 'success' ? 'pass' : 'incomplete',
     );
   });
+
+for (const variant of [
+  'single-output-limit',
+  'single-static-options',
+  'multi-static-options',
+  'single-failed',
+  'multi-mixed-failure',
+  'multi-missing',
+  'dynamic-option',
+  'expression-option',
+  'duplicate-option',
+  'spread-options',
+  'unknown-option',
+  'wrong-option-type',
+] as const)
+  test(`real Codex opaque reads with execution options: ${variant}`, () => {
+    const f = fixture();
+    const a = f.review.analysts[0]!;
+    const paths = [a.casePath, a.commonPath, a.dimensionPath];
+    const commands = variant.startsWith('multi-')
+      ? paths.map((path) => `cat ${path}`)
+      : [`cat ${paths.join(' ')}`];
+    const extraOptions = {
+      'dynamic-option': 'yield_time_ms: timeout',
+      'expression-option': 'max_output_tokens: (sideEffect(), 20000)',
+      'duplicate-option': 'max_output_tokens: 20000, max_output_tokens: 10',
+      'spread-options': '...options',
+      'unknown-option': 'transform: true',
+      'wrong-option-type': 'max_output_tokens: "20000"',
+    };
+    const options =
+      variant in extraOptions
+        ? extraOptions[variant as keyof typeof extraOptions]
+        : variant === 'single-output-limit'
+          ? 'max_output_tokens: 20000'
+          : 'max_output_tokens: 20000, yield_time_ms: 1000, shell: "/bin/bash", login: false, tty: false, sandbox_permissions: "use_default", justification: "Synthetic static options", prefix_rule: ["cat"]';
+    const input = commands
+      .map(
+        (command) =>
+          // Static options can precede cmd as well as follow it; quoted keys are valid.
+          `text(await tools.exec_command({${variant === 'single-output-limit' ? '' : '"workdir": "/synthetic", '}cmd: ${JSON.stringify(command)}, ${options}}));`,
+      )
+      .join('\n');
+    const outcomes = commands.map((_, i) => ({
+      type: 'input_text',
+      text: JSON.stringify({
+        exit_code:
+          variant === 'single-failed' ||
+          (variant === 'multi-mixed-failure' && i === 1)
+            ? 1
+            : 0,
+        output:
+          variant === 'single-failed' ||
+          (variant === 'multi-mixed-failure' && i === 1)
+            ? 'ENOENT: file not found'
+            : 'Retained exact input contents.',
+        wall_time_seconds: 0.01,
+      }),
+    }));
+    if (variant === 'multi-missing') outcomes.splice(1, 1);
+    const raw = [
+      { type: 'session_meta', payload: { id: 'new-0' } },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'custom_tool_call',
+          name: 'exec',
+          call_id: 'reads',
+          input,
+        },
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'custom_tool_call_output',
+          call_id: 'reads',
+          output: [
+            {
+              type: 'input_text',
+              text: 'Script completed\nWall time 0.1 seconds\nOutput:\n',
+            },
+            ...outcomes,
+          ],
+        },
+      },
+      {
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [
+            { type: 'output_text', text: 'Completed synthetic analysis.' },
+          ],
+        },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join('\n');
+    trajectory(f, 'atif-sources/controller.json', (t) => {
+      t.steps[0]!.tool_calls![0]!.arguments = {};
+    });
+    nativeSource(f, 'atif-sources/analyst-0.json', raw, normalizeCodex);
+    check(
+      f,
+      'analyst:skill-timeline:inputs',
+      [
+        'single-output-limit',
+        'single-static-options',
+        'multi-static-options',
+      ].includes(variant)
+        ? 'pass'
+        : 'incomplete',
+    );
+  });
