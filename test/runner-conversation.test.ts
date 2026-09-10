@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -170,6 +171,35 @@ for (const [mode, status, final, exit] of [
       economics.gauntlet?.roles?.assessment.usage?.est_cost_usd,
     ).toBeGreaterThan(0);
   }, 30_000);
+for (const checkerPresent of [true, false])
+  test(`Python scenario checker ${checkerPresent ? 'evaluates the subject' : 'fails closed when missing'}`, async () => {
+    const args = setup();
+    args.maxTime = '15s';
+    const scenario = resolve(
+      import.meta.dir,
+      '../scenarios/conversation-config-repair',
+    );
+    rmSync(join(args.scenarioDir, 'oracle.cjs'));
+    cpSync(join(scenario, 'fixtures'), args.workdir, { recursive: true });
+    cpSync(join(scenario, 'checks.sh'), args.checksSh);
+    if (checkerPresent)
+      cpSync(join(scenario, 'oracle.py'), join(args.scenarioDir, 'oracle.py'));
+
+    const verdict = await runPreparedConversation(args);
+
+    expect(verdict.conversation?.status).toBe('completed');
+    expect(verdict.final).toBe(checkerPresent ? 'fail' : 'indeterminate');
+    expect(verdict.error?.stage ?? null).toBe(checkerPresent ? null : 'checks');
+    expect(verdict.checks.some((c) => c.phase === 'post' && !c.passed)).toBe(
+      true,
+    );
+    const roles = JSON.parse(
+      readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'),
+    );
+    if (checkerPresent) expect(roles.assessment.started_at).not.toBeNull();
+    else expect(roles.assessment.started_at).toBeNull();
+  }, 30_000);
+
 test('completed refusal retains evidence and failing oracle still reaches isolated assessment', async () => {
   const args = setup();
   const v = await runPreparedConversation(args);
