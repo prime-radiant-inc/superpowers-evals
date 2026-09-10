@@ -53,8 +53,8 @@ test('routine-use suite declares the fixed 36-attempt paired matrix', () => {
   >;
   const { grader, ...suiteFields } = raw;
   expect(GraderSchema.parse(grader)).toEqual({
-    credential: 'sonnet5_bedrock',
-    model: 'anthropic.claude-sonnet-5',
+    credential: 'sonnet5',
+    model: 'claude-sonnet-5',
   });
   const suite = SuiteSchema.parse(suiteFields);
 
