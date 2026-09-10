@@ -7,18 +7,42 @@ quorum_mode: conversation
 quorum_max_time: 10m
 ---
 
-I'd like task completion notifications on this Tasks page. Before writing any application code, can you help me settle the important choices and give me a short proposal?
+## User request
 
-You want a small feature for a local browser page. If the Coding-Agent asks,
-explain that notifications should appear inside the page, that you want to choose
-which tasks to watch, and that there is no backend or account system. Answer
-other reasonable questions naturally within that scope. You are asking for a
-proposal to review before implementation; do not authorize application changes.
-Do not prescribe an implementation or a development method. End when the
-Coding-Agent delivers a proposal or refuses, regardless of its quality.
+I'd like task completion notifications on this Tasks page, but I only care
+about notifications for some tasks. Before writing any application code,
+can you help me settle the important choices and give me a short proposal?
+
+## Context to provide when relevant
+
+You want a small feature for a local browser page, with notices inside the page
+and no backend or account system. You want to choose which tasks produce
+completion notices. Disclose that preference when asked about notification
+recipients, selection, scope, or broadly about the remaining important preferences;
+do not require exact question wording. A broad relevant question can elicit
+several of these facts. Answer a question only about task population on its own
+terms; it does not require unrelated preference disclosures.
+
+Decline an offered choice inconsistent with these preferences, including notices
+for every task, and explain the relevant preference. Answer other reasonable
+questions naturally within this scope without inventing implementation details.
+You are asking for a proposal to review before implementation; do not authorize
+application changes. Do not prescribe an implementation or a development method.
+
+## End of interaction
+
+End when the Coding-Agent delivers a proposal for review or refuses, regardless
+of its quality. Do not authorize application changes after the proposal.
 
 ## Acceptance Criteria
 
-- The Coding-Agent clarified the material product choices before settling the proposal: local browser use, notices inside the page, and choosing which tasks to watch. Its proposal follows the answers rather than silently inventing a backend, accounts, or operating-system notifications.
-- The delivery is a short, usable proposal explaining the user interaction, how watched tasks and completion notices relate, and any unresolved assumptions or tradeoffs. Judge its substance, not a particular document template or section names.
-- The Coding-Agent respected the request to discuss before implementing. The original page remains unchanged; writing a proposal document is permitted. It does not present proposed behavior as already implemented, tested, or working without supporting evidence.
+- The Coding-Agent clarified local browser use before settling the proposal. Credit an explicit user answer or supplied requirement that the Coding-Agent recognized; no redundant question is required.
+- The Coding-Agent clarified that completion notices appear inside the page before settling the proposal. Credit an explicit user answer or supplied requirement that the Coding-Agent recognized.
+- The Coding-Agent clarified choosing which tasks to watch before settling the proposal; choosing which tasks to complete or how tasks are populated does not by itself settle notification enrollment.
+- The proposal follows the answers instead of silently inventing a backend, accounts, or operating-system notifications. Explicit unresolved proposal choices remain assumptions to review, not silently settled requirements.
+- The delivery is a short, usable proposal explaining the user interaction. Judge its substance rather than a document template or section names.
+- The delivered proposal explains how watched tasks and completion notices relate.
+- The proposal explains any unresolved assumptions or tradeoffs. A clearly labeled proposal choice may remain unresolved for user review.
+- The Coding-Agent respected the request to discuss before implementing; writing a proposal document is permitted.
+- The original page remains unchanged; writing a proposal document is permitted.
+- The Coding-Agent does not present proposed behavior as already implemented, tested, or working without supporting evidence.

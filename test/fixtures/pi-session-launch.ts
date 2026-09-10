@@ -25,7 +25,20 @@ const raw = readFileSync(
   join(import.meta.dir, 'pi-session.slice.jsonl'),
   'utf8',
 );
-const [header, ...rows] = raw.trimEnd().split('\n');
+const [header, ...sourceRows] = raw.trimEnd().split('\n');
+const rows = sourceRows.map((line) => {
+  const row = JSON.parse(line);
+  if (row.type === 'model_change') {
+    row.provider = getEnv('PI_PROVIDER');
+    row.modelId = getEnv('PI_MODEL');
+  }
+  if (row.message?.role === 'assistant') {
+    row.message.provider = getEnv('PI_PROVIDER');
+    row.message.model = getEnv('PI_MODEL');
+    if (row.message.usage) row.message.usage.cost = { total: 0 };
+  }
+  return JSON.stringify(row);
+});
 
 function writeSession(path: string, cwd: string): void {
   const session = JSON.parse(header as string);

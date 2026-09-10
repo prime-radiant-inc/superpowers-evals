@@ -295,7 +295,7 @@ test('api-key credential: models.json is mode 0600 and auth.json carries resolve
   }
 });
 
-test('api-key credential: settings.json uses credential.model and quorum provider', () => {
+test('api-key credential: settings pin the model and captured session directory', () => {
   const { home, cleanup } = makeTempHome();
   const sp = makeSuperpowersRoot();
   const credential = makeApiKeyCredential();
@@ -313,6 +313,9 @@ test('api-key credential: settings.json uses credential.model and quorum provide
           defaultProvider: 'quorum',
           defaultModel: 'glm-5.2-fp8',
           defaultThinkingLevel: 'medium',
+          // Pi must not encode a potentially >255-byte campaign cwd into one
+          // filename. Its native sessionDir setting bypasses that default.
+          sessionDir: join(home.configDir, 'sessions'),
         });
       },
     );
@@ -728,6 +731,7 @@ test('oauth credential: seeds host auth.json and uses credential.model', () => {
           defaultProvider: 'openai-codex',
           defaultModel: 'gpt-5.5-override',
           defaultThinkingLevel: 'medium',
+          sessionDir: join(home.configDir, 'sessions'),
         });
 
         // pi.env carries provider/model, NO PI_API_KEY.

@@ -1,0 +1,119 @@
+[
+  {
+    "id": "claude-design",
+    "kind": "retained-live",
+    "mappingId": "design",
+    "sourceIdentity": "conversation-design-claude-opus5_bedrock-linux-20260908T195051Z-874b",
+    "indexedFileCount": 88,
+    "evidenceRoot": "cases/claude-design/evidence",
+    "evidenceIndex": {
+      "path": "cases/claude-design/evidence/index.json",
+      "sha256": "4e6bfaf63195a65b3926418d73e9249487ac59cc46ae00288a50bda4cbfe55c4"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "known-claude-design",
+    "kind": "retained-live",
+    "mappingId": "design",
+    "sourceIdentity": "conversation-design-claude-opus5_bedrock-linux-20260908T055800Z-5f07",
+    "indexedFileCount": 156,
+    "evidenceRoot": "cases/known-claude-design/evidence",
+    "evidenceIndex": {
+      "path": "cases/known-claude-design/evidence/index.json",
+      "sha256": "e7791003dbd84e2150ded5e84d0cc9b5dccd67f3fd4639728d34b68343d25f47"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "known-codex-review",
+    "kind": "retained-live",
+    "mappingId": "code-review",
+    "sourceIdentity": "conversation-code-review-codex-openai_responses_56sol-linux-20260908T060413Z-d5ed",
+    "indexedFileCount": 71,
+    "evidenceRoot": "cases/known-codex-review/evidence",
+    "evidenceIndex": {
+      "path": "cases/known-codex-review/evidence/index.json",
+      "sha256": "9bc831a00629e0bc6029632c78cc1f256b0210deba3cca63f561f6518036fbc0"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "codex-design",
+    "kind": "retained-live",
+    "mappingId": "design",
+    "sourceIdentity": "conversation-design-codex-openai_responses_56sol-linux-20260908T195053Z-0d17",
+    "indexedFileCount": 86,
+    "evidenceRoot": "cases/codex-design/evidence",
+    "evidenceIndex": {
+      "path": "cases/codex-design/evidence/index.json",
+      "sha256": "1ac5b0dc180eb69cec36fa023ef35c6aeca00b896baa3df4632d575661e5dc51"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "known-claude-review",
+    "kind": "retained-live",
+    "mappingId": "code-review",
+    "sourceIdentity": "conversation-code-review-claude-opus5_bedrock-linux-20260908T055758Z-190d",
+    "indexedFileCount": 271,
+    "evidenceRoot": "cases/known-claude-review/evidence",
+    "evidenceIndex": {
+      "path": "cases/known-claude-review/evidence/index.json",
+      "sha256": "07ae7d3340f5943060327150f79811ad52171cca4c3ec0c27c138d2d0f0cbd26"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "claude-debugging-history",
+    "kind": "retained-live",
+    "mappingId": "debugging",
+    "sourceIdentity": "conversation-debugging-claude-opus5_bedrock-linux-20260908T091317Z-b8c5",
+    "indexedFileCount": 71,
+    "evidenceRoot": "cases/claude-debugging-history/evidence",
+    "evidenceIndex": {
+      "path": "cases/claude-debugging-history/evidence/index.json",
+      "sha256": "56bc5df3ed824bdd3914a1a31116bd1e7473b72e9c24567aea48b58cef5e2d70"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "codex-debugging-history",
+    "kind": "retained-live",
+    "mappingId": "debugging",
+    "sourceIdentity": "conversation-debugging-codex-openai_responses_56sol-linux-20260908T091915Z-b0e1",
+    "indexedFileCount": 117,
+    "evidenceRoot": "cases/codex-debugging-history/evidence",
+    "evidenceIndex": {
+      "path": "cases/codex-debugging-history/evidence/index.json",
+      "sha256": "486829b385864f3dd7a0272f1b29a4d66a3c06a411dc888a97d6ca8f92b8d20f"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "control-e",
+    "kind": "constructed",
+    "mappingId": "verification",
+    "sourceIdentity": "retained-release-control-e",
+    "indexedFileCount": 18,
+    "evidenceRoot": "cases/control-e/evidence",
+    "evidenceIndex": {
+      "path": "cases/control-e/evidence/index.json",
+      "sha256": "ca580c06a737347c7807903aae7b2713d05d7c6097be3e601cb21c21a8e6382e"
+    },
+    "authenticationRefs": []
+  },
+  {
+    "id": "control-f",
+    "kind": "constructed",
+    "mappingId": "verification",
+    "sourceIdentity": "retained-release-control-f",
+    "indexedFileCount": 18,
+    "evidenceRoot": "cases/control-f/evidence",
+    "evidenceIndex": {
+      "path": "cases/control-f/evidence/index.json",
+      "sha256": "ca580c06a737347c7807903aae7b2713d05d7c6097be3e601cb21c21a8e6382e"
+    },
+    "authenticationRefs": []
+  }
+]

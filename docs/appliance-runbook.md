@@ -67,22 +67,40 @@ secret parameter names to this public runbook.
 
 ## Finite Campaign Journey
 
-For comparisons, follow [campaign comparisons](campaign-comparisons.md), including
-its checked PR/base, stack, skill/stock and model templates. The supported verbs
-are `campaign register|list|status|run|cancel|costs|report`. Register a V2 suite,
-use the returned `experiment.campaign_id` UUID, run it once, inspect status/costs,
-and publish its report. A UUID is different from its published directory basename.
-Generic job commands refuse campaign invocation receipts as lifecycle authority.
-The job commands in the remaining sections concern ordinary run/run-all jobs.
+For comparisons, follow [campaign comparisons](campaign-comparisons.md). The
+ordinary routine-use release compares pinned Superpowers treatment arms with
+matched stock arms (`superpowers: none`). Claude and Codex cover all four
+released conversation scenarios; Pi is review-only and covers
+`conversation-code-review`. This Pi result does not qualify its other
+conversation scenarios.
+
+The supported verbs are `campaign register|list|status|run|cancel|costs|report`.
+Register the fixed suite with global cap four, retain the returned
+`experiment.campaign_id` UUID, run it once, inspect status and costs, and publish
+its report. A UUID is different from its published directory basename. Generic
+job commands refuse campaign invocation receipts as lifecycle authority. The job
+commands in the remaining sections concern ordinary run/run-all jobs.
 
 ```bash
-evals-appliance campaign register /path/to/suite.yaml --global-cap 4 --json
+suite="$(pwd)/suites/conversation_routine_use.yaml"
+registration="$(evals-appliance campaign register "$suite" --global-cap 4 --json)"
+printf '%s\n' "$registration"
+campaign_id="$(printf '%s\n' "$registration" | jq -er '.experiment.campaign_id')"
+
 evals-appliance campaign list --json
-evals-appliance campaign run <campaign-id> --json
-evals-appliance campaign status <campaign-id> --json
-evals-appliance campaign costs <campaign-id> --json
-evals-appliance campaign report <campaign-id> --json
+evals-appliance campaign run "$campaign_id" --json
+evals-appliance campaign status "$campaign_id" --json
+evals-appliance campaign costs "$campaign_id" --json
+evals-appliance campaign report "$campaign_id"
+
+# Copy an exact authenticated target printed by the report on the machine
+# containing its results root.
+quorum show <exact-authenticated-target-from-campaign-report>
 ```
+
+Normal operation does not require the release's retained-case operator or a
+bespoke analysis script. The report presents the existing comparison quantities
+and exact authenticated drilldown targets.
 
 Prepare the configured Linux runtime and writable absolute results directory.
 Campaigns freeze refs, credential policy and finite attempt/time/reserve limits;

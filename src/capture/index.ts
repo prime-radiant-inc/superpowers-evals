@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -14,6 +16,7 @@ import { normalizeAntigravity } from '../normalize/antigravity.ts';
 import { normalizeClaudeLegacy } from '../normalize/claude.ts';
 import { normalizeCline } from '../normalize/cline.ts';
 import { normalizeCodex } from '../normalize/codex.ts';
+import type { AtifNormalizationContext } from '../normalize/context.ts';
 import { normalizeCopilot } from '../normalize/copilot.ts';
 import { normalizeCursor } from '../normalize/cursor.ts';
 import { normalizeGemini } from '../normalize/gemini.ts';
@@ -32,6 +35,7 @@ import { normalizeSweAgent } from '../normalize/swe-agent.ts';
 import { normalizeTrae } from '../normalize/trae.ts';
 import { estimateTrajectory, kimiToolResultTotalBytes } from '../obol/index.ts';
 import { filterLogsByCwd } from './cwd-filter.ts';
+import type { CapturedSource, SourceIndex } from './source-index.ts';
 
 // Backend (coding-agent name) -> ATIF normalizer; every supported dialect
 // produces an ATIF Trajectory. The acp/cursor/goose/hermes/mimo/mini-swe/
@@ -41,15 +45,18 @@ import { filterLogsByCwd } from './cwd-filter.ts';
 type AtifNormalizer = (
   raw: string,
   version: string,
+  context?: AtifNormalizationContext,
   onMalformedLine?: (line: number, message: string) => void,
 ) => AtifTrajectory;
 
 export const ATIF_NORMALIZERS: Record<string, AtifNormalizer> = {
   acp: normalizeAcp,
   antigravity: normalizeAntigravity,
-  claude: normalizeClaudeLegacy,
+  claude: (raw, version, _context, onMalformedLine) =>
+    normalizeClaudeLegacy(raw, version, onMalformedLine),
   cline: normalizeCline,
-  codex: normalizeCodex,
+  codex: (raw, version, _context, onMalformedLine) =>
+    normalizeCodex(raw, version, onMalformedLine),
   copilot: normalizeCopilot,
   cursor: normalizeCursor,
   gemini: normalizeGemini,
@@ -72,6 +79,8 @@ export const ATIF_NORMALIZERS: Record<string, AtifNormalizer> = {
 const ATIF_AGENT_VERSION = 'unknown';
 
 export const ATIF_TRAJECTORY_FILENAME = 'trajectory.json';
+export const ATIF_SOURCES_DIRNAME = 'atif-sources';
+export const ATIF_SOURCE_INDEX_FILENAME = 'atif-sources.json';
 
 /** Map each matched log to its (relative path -> absolute path). Empty when the
  *  log dir does not exist. */
@@ -121,6 +130,9 @@ export interface CaptureArgs {
   // filtered to those whose recorded cwd matches this before normalizing.
   // Other dialects ignore it.
   readonly launchCwd: string;
+  // Facts resolved by the runner's provisioning route. Historical capture and
+  // callers without qualified runtime evidence omit this.
+  readonly normalizationContext?: AtifNormalizationContext | undefined;
 }
 
 // New session logs since the snapshot, narrowed to this run via cwd filtering.
@@ -130,8 +142,9 @@ function capturedLogs(args: CaptureArgs): string[] {
 }
 
 export interface CaptureResult {
-  // Path to the emitted ATIF trajectory.json. The file is absent when no
-  // meaningful message or tool evidence was captured.
+  // Path to the emitted ATIF trajectory.json. The file may be absent on a
+  // zero-source/all-failed capture. A tool-less usage trajectory is retained,
+  // though availability stays unavailable until message or tool evidence arrives.
   readonly path: string;
   readonly sourceLogs: readonly string[];
   readonly rowCount: number;
@@ -161,6 +174,18 @@ interface OrderedStep {
   readonly fileIndex: number;
   readonly inFileIndex: number;
   readonly step: AtifStep;
+  readonly sourceId: string;
+  readonly sourceStepId: number;
+}
+
+interface TrajectorySource {
+  readonly id: string;
+  readonly trajectory: AtifTrajectory;
+}
+
+interface MergedTrajectory {
+  readonly trajectory: AtifTrajectory;
+  readonly mergedSteps: SourceIndex['mergedSteps'];
 }
 
 /**
@@ -187,12 +212,14 @@ interface OrderedStep {
  * Returns null when no file yielded a trajectory with steps. The envelope
  * (schema_version, agent) is taken from the first file that has steps.
  */
-function mergeTrajectories(perFile: AtifTrajectory[]): AtifTrajectory | null {
+function mergeTrajectories(
+  perFile: TrajectorySource[],
+): MergedTrajectory | null {
   let envelope: AtifTrajectory | undefined;
   const ordered: OrderedStep[] = [];
 
-  for (let fileIndex = 0; fileIndex < perFile.length; fileIndex++) {
-    const traj = perFile[fileIndex] as AtifTrajectory;
+  for (const [fileIndex, source] of perFile.entries()) {
+    const traj = source.trajectory;
     const steps = traj.steps;
     if (!Array.isArray(steps) || steps.length === 0) {
       continue;
@@ -227,6 +254,8 @@ function mergeTrajectories(perFile: AtifTrajectory[]): AtifTrajectory | null {
         fileIndex,
         inFileIndex,
         step,
+        sourceId: source.id,
+        sourceStepId: step.step_id,
       });
     }
   }
@@ -248,64 +277,22 @@ function mergeTrajectories(perFile: AtifTrajectory[]): AtifTrajectory | null {
     return a.inFileIndex - b.inFileIndex;
   });
 
-  const mergedSteps = ordered.map((item, i) => ({
+  const mergedAtifSteps = ordered.map((item, i) => ({
     ...item.step,
     step_id: i + 1,
   }));
+  const mergedSteps = ordered.map((item, i) => ({
+    mergedStepId: i + 1,
+    sourceId: item.sourceId,
+    sourceStepId: item.sourceStepId,
+  }));
 
-  return { ...envelope, steps: mergedSteps };
-}
-
-/**
- * Normalize one source log to an ATIF trajectory in-process. Read and
- * normalization failures are returned alongside any tolerant normalizer's
- * successfully recovered trajectory.
- */
-function emitTrajectory(
-  sourceLog: string,
-  normalize: AtifNormalizer,
-): { trajectory: AtifTrajectory | null; errors: CaptureError[] } {
-  let raw: string;
-  try {
-    raw = readFileSync(sourceLog, 'utf8');
-  } catch (error) {
-    return {
-      trajectory: null,
-      errors: [
-        {
-          sourceLog,
-          stage: 'read',
-          message: error instanceof Error ? error.message : String(error),
-        },
-      ],
-    };
-  }
-  const errors: CaptureError[] = [];
-  try {
-    const trajectory = normalize(raw, ATIF_AGENT_VERSION, (line, message) => {
-      errors.push({
-        sourceLog,
-        stage: 'normalize',
-        message: `line ${line}: ${message}`,
-      });
-    });
-    return { trajectory, errors };
-  } catch (error) {
-    errors.push({
-      sourceLog,
-      stage: 'normalize',
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return { trajectory: null, errors };
-  }
-}
-
-function hasMeaningfulEvidence(trajectory: AtifTrajectory): boolean {
-  return trajectory.steps.some(
-    (step) =>
-      (typeof step.message === 'string' && step.message.trim() !== '') ||
-      (Array.isArray(step.tool_calls) && step.tool_calls.length > 0),
-  );
+  const { subagent_trajectories: _subagents, ...envelopeWithoutSubagents } =
+    envelope;
+  return {
+    trajectory: { ...envelopeWithoutSubagents, steps: mergedAtifSteps },
+    mergedSteps,
+  };
 }
 
 /**
@@ -314,10 +301,10 @@ function hasMeaningfulEvidence(trajectory: AtifTrajectory): boolean {
  *
  * A run can produce more than one session log; capture normalizes EVERY new log
  * and merges their steps into a single trajectory ordered by step timestamp (see
- * mergeTrajectories). rowCount remains the number of tool calls in the merged
- * trajectory. A message-only trajectory is retained as available evidence.
- * When there is no meaningful message or tool evidence, any stale
- * trajectory.json is removed so downstream loaders fail closed.
+ * mergeTrajectories). rowCount is the number of tool calls in the merged
+ * trajectory. When there is no source log, all emissions fail, or the merge has
+ * no tool calls, rowCount is 0. Message-only evidence is available; usage-only
+ * evidence is retained for accounting but triggers the unavailable-capture retry.
  */
 export function captureToolCalls(args: CaptureArgs): CaptureResult {
   const { normalizer, runDir } = args;
@@ -327,36 +314,129 @@ export function captureToolCalls(args: CaptureArgs): CaptureResult {
   }
   const newLogs = capturedLogs(args);
   const outPath = join(runDir, ATIF_TRAJECTORY_FILENAME);
+  const sourceDir = join(runDir, ATIF_SOURCES_DIRNAME);
+  const sourceIndexPath = join(runDir, ATIF_SOURCE_INDEX_FILENAME);
 
-  const perFile: AtifTrajectory[] = [];
+  rmSync(sourceDir, { recursive: true, force: true });
+  rmSync(sourceIndexPath, { force: true });
+
+  if (newLogs.length === 0) {
+    rmSync(outPath, { force: true });
+    return {
+      path: outPath,
+      sourceLogs: newLogs,
+      rowCount: 0,
+      availability: 'unavailable',
+      errors: [],
+      attempts: 1,
+    };
+  }
+
+  mkdirSync(sourceDir, { recursive: true });
+  const perFile: TrajectorySource[] = [];
+  const sources: CapturedSource[] = [];
   const errors: CaptureError[] = [];
-  for (const log of newLogs) {
-    const emitted = emitTrajectory(log, normalize);
-    errors.push(...emitted.errors);
-    if (emitted.trajectory !== null) {
-      perFile.push(emitted.trajectory);
+  for (const [index, log] of newLogs.entries()) {
+    const id = `source-${String(index + 1).padStart(6, '0')}`;
+    const sourceFilename = `${String(index + 1).padStart(6, '0')}.json`;
+    const trajectoryPath = join(ATIF_SOURCES_DIRNAME, sourceFilename);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(log);
+    } catch (error) {
+      errors.push({
+        sourceLog: log,
+        stage: 'read',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      sources.push({
+        id,
+        nativePath: log,
+        sha256: '',
+        trajectoryPath: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const normalizationErrors: string[] = [];
+    try {
+      const trajectory = normalize(
+        bytes.toString('utf8'),
+        ATIF_AGENT_VERSION,
+        args.normalizationContext,
+        (line, detail) => {
+          const message = `line ${line}: ${detail}`;
+          normalizationErrors.push(message);
+          errors.push({ sourceLog: log, stage: 'normalize', message });
+        },
+      );
+      writeFileSync(
+        join(runDir, trajectoryPath),
+        `${JSON.stringify(trajectory, null, 2)}\n`,
+      );
+      sources.push({
+        id,
+        nativePath: log,
+        sha256,
+        trajectoryPath,
+        error:
+          normalizationErrors.length > 0
+            ? normalizationErrors.join('; ')
+            : null,
+      });
+      perFile.push({ id, trajectory });
+    } catch (error) {
+      errors.push({
+        sourceLog: log,
+        stage: 'normalize',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      // A write can fail after creating the file. Keep the index's null path
+      // truthful by removing any partial per-source artifact.
+      rmSync(join(runDir, trajectoryPath), { force: true });
+      sources.push({
+        id,
+        nativePath: log,
+        sha256,
+        trajectoryPath: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
   const merged = mergeTrajectories(perFile);
-  const rowCount = merged === null ? 0 : flattenToolCalls(merged).length;
-  const meaningful = merged !== null && hasMeaningfulEvidence(merged);
-  if (merged !== null && meaningful) {
-    writeFileSync(outPath, `${JSON.stringify(merged, null, 2)}\n`);
+  const rowCount =
+    merged === null ? 0 : flattenToolCalls(merged.trajectory).length;
+  const meaningful = merged?.trajectory.steps.some(
+    (step) =>
+      (typeof step.message === 'string' && step.message.trim() !== '') ||
+      (Array.isArray(step.tool_calls) && step.tool_calls.length > 0),
+  );
+  const hasUsage =
+    merged?.trajectory.final_metrics !== undefined ||
+    merged?.trajectory.steps.some((step) => step.metrics !== undefined);
+  // Usage remains priceable even when the capture cannot support a verdict.
+  if (merged !== null && (meaningful || hasUsage)) {
+    writeFileSync(outPath, `${JSON.stringify(merged.trajectory, null, 2)}\n`);
   } else {
-    // Unavailable evidence must not leave a stale trajectory behind: a later
-    // retry pass (or a downstream loader) must see "nothing captured".
+    // With no successful trajectory, a later retry/downstream loader must see
+    // nothing captured rather than stale output from a prior pass.
     rmSync(outPath, { force: true });
   }
-
-  const availability: CaptureAvailability =
-    errors.length > 0 ? 'errored' : meaningful ? 'available' : 'unavailable';
+  const sourceIndex: SourceIndex = {
+    schemaVersion: 1,
+    sources,
+    mergedSteps: merged?.mergedSteps ?? [],
+  };
+  writeFileSync(sourceIndexPath, `${JSON.stringify(sourceIndex, null, 2)}\n`);
 
   return {
     path: outPath,
     sourceLogs: newLogs,
     rowCount,
-    availability,
+    availability:
+      errors.length > 0 ? 'errored' : meaningful ? 'available' : 'unavailable',
     errors,
     attempts: 1,
   };

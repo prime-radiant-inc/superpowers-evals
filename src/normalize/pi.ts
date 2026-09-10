@@ -1,4 +1,12 @@
 import {
+  type NativeChildDispatch,
+  type NativeChildEvidence,
+  type NativeToolResultEvidence,
+  nativeRecordBytes,
+  nativeTextBytes,
+  withNativeEvidence,
+} from '../atif/provenance.ts';
+import {
   ATIF_SCHEMA_VERSION,
   type AtifAgent,
   type AtifMetrics,
@@ -9,6 +17,7 @@ import {
 } from '../atif/types.ts';
 import { validateTrajectory } from '../atif/validate.ts';
 import { canonicalizeAgentPrompt } from './agent-prompt.ts';
+import type { AtifNormalizationContext } from './context.ts';
 
 // Reverse mapping: Pi tool names → canonical names.
 const PI_TOOL_MAP: Record<string, string> = {
@@ -63,11 +72,6 @@ function numberOrUndefined(value: unknown): number | undefined {
     : undefined;
 }
 
-function nativeTimestamp(value: unknown): string | undefined {
-  if (typeof value !== 'string' || value === '') return undefined;
-  return Number.isFinite(Date.parse(value)) ? value : undefined;
-}
-
 /** json.dumps-style stringify for a non-string; passthrough for a string. */
 function stringify(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -83,20 +87,24 @@ function stringify(value: unknown): string {
  *   input→prompt_tokens, output→completion_tokens, cacheRead→cached_tokens,
  *   cost.total→cost_usd except for quorum's placeholder; cacheWrite→extra.cache_write.
  * Buckets stay DISJOINT (input excludes cacheRead, verified against the log:
- * input+output+cacheRead == totalTokens). A native non-quorum cost rides per-step
- * `metrics.cost_usd`; quorum's placeholder is omitted so obol prices the retained
- * buckets. Cache-write rides `step.extra.cache_write` — the location obol's atif
- * dialect reads (it ignores metrics.extra.cache_write + final_metrics).
+ * input+output+cacheRead == totalTokens). cost rides per-step `metrics.cost_usd`
+ * and cache-write rides `step.extra.cache_write` — the two locations obol's atif
+ * dialect actually reads (it ignores metrics.extra.cache_write + final_metrics).
+ * A runner-qualified Pi placeholder zero is retained in step.extra while its
+ * cost_usd is omitted so obol prices the canonical token buckets.
  * Returns undefined when the message carries no usage fields at all.
  */
 function piMessageUsage(
   usage: PiUsage | undefined,
   provider: string | undefined,
+  model: string | undefined,
+  context: AtifNormalizationContext | undefined,
 ): {
   metrics?: AtifMetrics | undefined;
   extra?: Record<string, unknown> | undefined;
 } {
   const metrics: AtifMetrics = {};
+  const extra: Record<string, unknown> = {};
   if (usage && typeof usage === 'object') {
     const prompt = numberOrUndefined(usage.input);
     const completion = numberOrUndefined(usage.output);
@@ -105,10 +113,25 @@ function piMessageUsage(
     if (prompt !== undefined) metrics.prompt_tokens = prompt;
     if (completion !== undefined) metrics.completion_tokens = completion;
     if (cached !== undefined) metrics.cached_tokens = cached;
-    if (cost !== undefined && provider !== 'quorum') metrics.cost_usd = cost;
+    const zeroPolicy = context?.pi?.placeholderZeroCost;
+    const isQualifiedPlaceholderZero =
+      zeroPolicy !== undefined &&
+      cost === 0 &&
+      provider === zeroPolicy.provider &&
+      model === zeroPolicy.model;
+    if (cost !== undefined && !isQualifiedPlaceholderZero)
+      metrics.cost_usd = cost;
+
+    if (isQualifiedPlaceholderZero) {
+      extra['cost_normalization'] = {
+        policy: zeroPolicy.policy,
+        recorded_cost_usd: cost,
+        provider,
+        model,
+      };
+    }
   }
 
-  const extra: Record<string, unknown> = {};
   if (provider) extra['provider'] = provider;
   const cacheWrite = numberOrUndefined(usage?.cacheWrite);
   if (cacheWrite !== undefined && cacheWrite !== 0)
@@ -157,6 +180,44 @@ function formatToolResult(
   return text || undefined;
 }
 
+/** Pinned pi-subagents parallel results preserve tasks order. Count expansion
+ * is deliberately unavailable until its ordering has been qualified. */
+function parallelDispatches(
+  tasks: unknown,
+  results: unknown,
+): NativeChildDispatch[] | undefined {
+  if (
+    !Array.isArray(tasks) ||
+    !Array.isArray(results) ||
+    tasks.length === 0 ||
+    tasks.length !== results.length
+  )
+    return undefined;
+  const dispatches: NativeChildDispatch[] = [];
+  const paths = new Set<string>();
+  for (const [index, task] of tasks.entries()) {
+    const result = results[index];
+    if (
+      !task ||
+      typeof task !== 'object' ||
+      ('count' in task && task.count !== 1) ||
+      !result ||
+      typeof result !== 'object' ||
+      typeof result.sessionFile !== 'string' ||
+      !result.sessionFile ||
+      paths.has(result.sessionFile)
+    )
+      return undefined;
+    paths.add(result.sessionFile);
+    dispatches.push({
+      index,
+      ...(typeof task.task === 'string' ? { prompt: task.task } : {}),
+      child: { relationship: 'spawned', path: result.sessionFile },
+    });
+  }
+  return dispatches;
+}
+
 /**
  * Convert a Pi JSONL session log into a full-fidelity ATIF v1.7 trajectory.
  *
@@ -164,6 +225,9 @@ function formatToolResult(
  * `id` → `session_id`) and a `type:"model_change"` entry (`modelId`/`provider`,
  * tracked forward as the active model). The rest are `type:"message"` entries
  * with `message.role` of `assistant`, `user`, or `toolResult`.
+ * Each user/assistant entry's native record timestamp is preserved on every
+ * step it produces. Metadata timestamps never become conversation timestamps;
+ * linked tool results do not replace the owning call's timestamp.
  *
  * Assistant content blocks: `text` (→ step.message), `thinking` (→
  * step.reasoning_content), and `toolCall` (`{type,id,name,arguments}` →
@@ -179,18 +243,28 @@ function formatToolResult(
  * ATIF's same-step observation invariant.
  *
  * Token/cost conventions: input→prompt, output→completion, cacheRead→cached,
- * non-quorum cost.total→cost_usd, cacheWrite→step.extra.cache_write,
- * provider→step.extra.provider. Quorum's placeholder cost is omitted so obol
- * prices the retained buckets. Per-step only; no final_metrics token totals
+ * cost.total→cost_usd, cacheWrite→step.extra.cache_write,
+ * provider→step.extra.provider. Only a runner-qualified placeholder zero is
+ * omitted so obol prices the retained buckets. Per-step only; no final_metrics token totals
  * (single-source invariant).
  */
-export function normalizePi(raw: string, version: string): AtifTrajectory {
-  const entries: PiEntry[] = [];
-  for (const line of raw.split('\n')) {
+export function normalizePi(
+  raw: string,
+  version: string,
+  context?: AtifNormalizationContext,
+): AtifTrajectory {
+  const entries: Array<{ entry: PiEntry; line: number; recordBytes: number }> =
+    [];
+  for (const [index, line] of raw.split('\n').entries()) {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line) as PiEntry;
-      if (parsed && typeof parsed === 'object') entries.push(parsed);
+      if (parsed && typeof parsed === 'object')
+        entries.push({
+          entry: parsed,
+          line: index + 1,
+          recordBytes: nativeRecordBytes(line),
+        });
     } catch {
       // Tolerate blank / unparseable lines — skip them.
     }
@@ -207,7 +281,7 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
   // usage-bearing step has a model_name for obol to price against.
   let activeModel: string | undefined;
 
-  for (const entry of entries) {
+  for (const { entry, line, recordBytes } of entries) {
     const type = entry['type'];
 
     if (type === 'session') {
@@ -226,13 +300,11 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
     const message = entry['message'];
     if (!message || typeof message !== 'object') continue;
     const role = message['role'];
-    const timestamp = nativeTimestamp(entry['timestamp']);
-    const applySource = (step: AtifStep): void => {
-      if (timestamp) step.timestamp = timestamp;
-      if (sessionId) {
-        step.extra = { ...step.extra, source_session_id: sessionId };
-      }
-    };
+    const timestamp =
+      typeof entry.timestamp === 'string' &&
+      Number.isFinite(Date.parse(entry.timestamp))
+        ? entry.timestamp
+        : undefined;
 
     if (role === 'user') {
       const texts: string[] = [];
@@ -255,8 +327,12 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
           step_id: stepId++,
           source: 'user',
           message: textMessage,
+          extra: withNativeEvidence(undefined, {
+            lines: [line],
+            origin: 'unknown',
+          }),
         };
-        applySource(step);
+        if (timestamp) step.timestamp = timestamp;
         steps.push(step);
       }
       continue;
@@ -274,6 +350,93 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
       );
       const result: AtifObservationResult = { source_call_id: callId };
       if (formatted !== undefined) result.content = formatted;
+      const contentBytes = nativeTextBytes(message['content']);
+      result.extra = withNativeEvidence(undefined, {
+        lines: [line],
+        origin: 'unknown',
+        ...(timestamp ? { timestamp } : {}),
+        ...(contentBytes !== undefined ? { contentBytes } : {}),
+        recordBytes,
+      });
+      if (typeof message.isError === 'boolean')
+        result.extra = {
+          ...result.extra,
+          quorum_result: {
+            isError: message.isError,
+          } satisfies NativeToolResultEvidence,
+        };
+      const details =
+        message['details'] && typeof message['details'] === 'object'
+          ? (message['details'] as Record<string, unknown>)
+          : undefined;
+      const ownerCall = owner.tool_calls?.find(
+        (candidate) => candidate.tool_call_id === callId,
+      );
+      const isParallel = details?.['mode'] === 'parallel';
+      if (isParallel && ownerCall?.function_name === 'Agent') {
+        const dispatches = parallelDispatches(
+          ownerCall.arguments['tasks'],
+          details?.['results'],
+        );
+        if (dispatches) {
+          result.extra = { ...result.extra, quorum_dispatches: dispatches };
+          ownerCall.extra = {
+            ...ownerCall.extra,
+            quorum_dispatches: dispatches,
+          };
+        }
+      }
+      const childId = isParallel ? undefined : details?.['runId'];
+      const results = details?.['results'];
+      const singleResult =
+        details?.['mode'] === 'single' &&
+        Array.isArray(results) &&
+        results.length === 1 &&
+        results[0] &&
+        typeof results[0] === 'object'
+          ? (results[0] as Record<string, unknown>)
+          : undefined;
+      const progressSummary = singleResult?.['progressSummary'];
+      const durationMs =
+        progressSummary && typeof progressSummary === 'object'
+          ? (progressSummary as Record<string, unknown>)['durationMs']
+          : undefined;
+      if (
+        typeof durationMs === 'number' &&
+        Number.isFinite(durationMs) &&
+        durationMs >= 0
+      )
+        result.extra = {
+          ...result.extra,
+          quorum_result: {
+            ...(result.extra?.['quorum_result'] as
+              | NativeToolResultEvidence
+              | undefined),
+            durationMs,
+          } satisfies NativeToolResultEvidence,
+        };
+      const childPath = isParallel
+        ? undefined
+        : (details?.['sessionFile'] ?? singleResult?.['sessionFile']);
+      if (
+        (typeof childId === 'string' && childId) ||
+        (typeof childPath === 'string' && childPath)
+      ) {
+        const child: NativeChildEvidence = {
+          relationship: 'spawned',
+          ...(typeof childId === 'string' && childId ? { id: childId } : {}),
+          ...(typeof childPath === 'string' && childPath
+            ? { path: childPath }
+            : {}),
+        };
+        result.extra = { ...result.extra, quorum_child: child };
+        const ownerCall = owner.tool_calls?.find(
+          (candidate) => candidate.tool_call_id === callId,
+        );
+        if (ownerCall?.function_name === 'Agent') {
+          ownerCall.extra = { ...ownerCall.extra, quorum_child: child };
+        }
+      }
       owner.observation ??= { results: [] };
       owner.observation.results.push(result);
       continue;
@@ -287,10 +450,22 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
       typeof message.model === 'string' && message.model
         ? message.model
         : activeModel;
-    const { metrics, extra } = piMessageUsage(message.usage, message.provider);
+    const provider = message.provider;
+    const { metrics, extra } = piMessageUsage(
+      message.usage,
+      provider,
+      model,
+      context,
+    );
     const applyUsage = (step: AtifStep): void => {
       if (model) step.model_name = model;
-      if (metrics) step.metrics = metrics;
+      if (metrics) {
+        metrics.extra = withNativeEvidence(metrics.extra, {
+          lines: [line],
+          ...(timestamp ? { timestamp } : {}),
+        });
+        step.metrics = metrics;
+      }
       if (extra) step.extra = { ...step.extra, ...extra };
     };
 
@@ -343,14 +518,24 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
         tool_call_id: callId,
         function_name: canonical,
         arguments: args,
+        extra: withNativeEvidence(undefined, { lines: [line] }),
       });
+      if (tc.function_name === 'Agent') {
+        tc.extra = {
+          ...tc.extra,
+          quorum_child: {
+            relationship: 'spawned',
+          } satisfies NativeChildEvidence,
+        };
+      }
 
       const step: AtifStep = {
         step_id: stepId++,
         source: 'agent',
         tool_calls: [tc],
+        extra: withNativeEvidence(undefined, { lines: [line] }),
       };
-      applySource(step);
+      if (timestamp) step.timestamp = timestamp;
 
       // Attach this message's text/reasoning to its FIRST tool step.
       if (!contentAttached) {
@@ -375,8 +560,12 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
       !contentAttached &&
       (messageText || reasoningText || metrics || extra)
     ) {
-      const step: AtifStep = { step_id: stepId++, source: 'agent' };
-      applySource(step);
+      const step: AtifStep = {
+        step_id: stepId++,
+        source: 'agent',
+        extra: withNativeEvidence(undefined, { lines: [line] }),
+      };
+      if (timestamp) step.timestamp = timestamp;
       if (messageText) step.message = messageText;
       if (reasoningText) step.reasoning_content = reasoningText;
       applyUsage(step);
@@ -395,6 +584,12 @@ export function normalizePi(raw: string, version: string): AtifTrajectory {
     steps,
   };
   if (sessionId) traj.session_id = sessionId;
+
+  if (sessionId) {
+    for (const step of traj.steps) {
+      step.extra = { ...step.extra, source_session_id: sessionId };
+    }
+  }
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

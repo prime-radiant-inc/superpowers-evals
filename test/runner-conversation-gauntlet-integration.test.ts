@@ -1,6 +1,7 @@
 // Cross-repository wire qualification: actual Gauntlet CLI processes and tmux,
 // with a localhost-only Anthropic transport supplying finite scripted replies.
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
+import * as fs from 'node:fs';
 import {
   chmodSync,
   existsSync,
@@ -17,6 +18,11 @@ import { GauntletRolesSchema } from '../src/contracts/conversation.ts';
 import type { RunEconomics } from '../src/economics.ts';
 import { getEnv } from '../src/env.ts';
 import { runPreparedConversation } from '../src/runner/conversation.ts';
+import { verifyAssessmentAccounting } from '../src/runner/role-usage.ts';
+import {
+  AssessmentFixtureEvidence,
+  DeferredResponses,
+} from './assessment-wire-fixture.ts';
 
 const gauntletRoot = getEnv('GAUNTLET_ROOT');
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -145,7 +151,7 @@ for (const interruption of ['cancelled', 'timed_out'] as const)
           expectedChecks: null,
           gauntletBin: gauntlet,
           graderModel: 'claude-sonnet-4-6',
-          maxTime: interruption === 'cancelled' ? '5s' : '1s',
+          maxTime: '5s',
           envBase: {
             HOME: home,
             PATH: getEnv('PATH'),
@@ -305,14 +311,24 @@ for (const outcome of [
                   criteria: [
                     {
                       verdict: status === 'investigate' ? 'unclear' : status,
-                      evidence: `output/pricing.js: ${assessedOutput}`,
+                      observation: assessedOutput,
+                      basis:
+                        'The exported return value directly determines the pricing criterion.',
+                      limitations:
+                        'Only the retained pricing implementation was inspected.',
+                      references: ['output/pricing.js'],
                     },
                     ...(unclear
                       ? [
                           {
                             verdict: 'unclear',
-                            evidence:
-                              'output/pricing.js: verification evidence is incomplete',
+                            observation:
+                              'The retained pricing implementation does not record delivery verification.',
+                            basis:
+                              'The available file is insufficient to establish delivery.',
+                            limitations:
+                              'No separate retained delivery record was available.',
+                            references: ['output/pricing.js'],
                           },
                         ]
                       : []),
@@ -489,6 +505,30 @@ await new Promise(() => {});
           ).not.toBe('');
         }
         const economics = verdict.economics as unknown as RunEconomics;
+        expect(
+          verifyAssessmentAccounting({
+            runJsonl: readFileSync(
+              join(runDir, roles.assessment.out_dir, 'run.jsonl'),
+              'utf8',
+            ),
+            usageJsonl: readFileSync(
+              join(runDir, roles.assessment.out_dir, 'usage.jsonl'),
+              'utf8',
+            ),
+            attemptsJsonl: readFileSync(
+              join(
+                runDir,
+                roles.assessment.out_dir,
+                'assessment-attempts.jsonl',
+              ),
+              'utf8',
+            ),
+          }),
+        ).toEqual({
+          logicalResponses: 2,
+          physicalAttempts: 2,
+          unknownUsageAttemptIds: [],
+        });
         expect(economics.partial).toBe(false);
         expect(economics.gauntlet?.tokens.total).toBe(
           (conversationTurns + assessmentTurns) * 20,
@@ -550,4 +590,330 @@ await new Promise(() => {});
       }
     },
     30_000,
+  );
+
+// Lifecycle faults use the ordinary local conversation fixture for setup and
+// the actual paired assessment CLI/SDK for the boundary under test.
+for (const mode of [
+  'reserve',
+  'late',
+  'timeout',
+  'cancel',
+  'forced-kill',
+  'writer-failure',
+  'double-fault',
+  'conversion-error',
+  'parent-cancel',
+  'parent-deadline',
+  'retry',
+] as const)
+  test.skipIf(!gauntletRoot)(
+    `actual assessment lifecycle and physical costs: ${mode}`,
+    async () => {
+      const runDir = mkdtempSync(join(tmpdir(), 'assessment-wire-'));
+      const evidence = new AssessmentFixtureEvidence(runDir, mode);
+      const deferred = new DeferredResponses();
+      const workdir = join(runDir, 'work');
+      const scenarioDir = join(runDir, 'scenario');
+      const logs = join(runDir, 'home/logs');
+      for (const dir of [workdir, scenarioDir, logs])
+        mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(workdir, 'pricing.js'),
+        'module.exports = () => 42;\n',
+      );
+      writeFileSync(
+        join(scenarioDir, 'story.md'),
+        '---\nid: demo\ntitle: Offline lifecycle fixture\nstatus: ready\nquorum_mode: conversation\nquorum_max_time: 10m\n---\nFix pricing.\n\n## Acceptance Criteria\n- Fix pricing\n',
+      );
+      writeFileSync(join(scenarioDir, 'oracle.cjs'), 'process.exit(0);\n');
+      writeFileSync(
+        join(scenarioDir, 'checks.sh'),
+        'pre() { :; }\npost() { :; }\n',
+      );
+      writeFileSync(join(runDir, 'fixture-mode'), 'refusal');
+      const preload = join(runDir, 'preload.ts');
+      writeFileSync(
+        preload,
+        `
+import { spyOn } from 'bun:test';
+import * as fs from 'node:fs';
+import * as writer from ${JSON.stringify(join(gauntletRoot!, 'src/evidence/writer.ts'))};
+const mode = ${JSON.stringify(mode)};
+const argv = process.argv;
+const hard = Number(argv[argv.indexOf('--hard-deadline-at-ms')+1]);
+const anchor = hard - 120000;
+let time = 0;
+if (['reserve','late','parent-cancel','parent-deadline','writer-failure','double-fault'].includes(mode)) {
+  spyOn(Date,'now').mockImplementation(()=>anchor);
+  spyOn(performance,'now').mockImplementation(()=>time);
+  const fetch = globalThis.fetch;
+  globalThis.fetch = async (...args) => {
+    const response = await fetch(...args);
+    if (response.headers.has('x-report')) time = mode === 'late' ? 115000 : 114999;
+    return response;
+  };
+}
+if (mode === 'forced-kill') {
+  const on = process.on.bind(process);
+  process.on = (signal, listener) => on(signal, signal === 'SIGTERM' ? ()=>{} : listener);
+}
+const write = writer.writeResultFiles;
+spyOn(writer,'writeResultFiles').mockImplementation((dir,result,writeFile)=>{
+  time = 117000;
+  if (mode === 'parent-cancel') fs.writeFileSync(${JSON.stringify(join(runDir, 'cancel'))}, 'decision');
+  return write(dir,result,(path,text)=>{
+    if (mode === 'writer-failure' && path.endsWith('result.md')) throw new Error('local storage fixture failure');
+    writeFile(path,text);
+  });
+});
+if (mode === 'double-fault') {
+  const out = argv[argv.indexOf('--out')+1];
+  const sync = fs.fsyncSync;
+  spyOn(fs,'fsyncSync').mockImplementation(fd=>{
+    if (fs.fstatSync(fd).isDirectory() && fs.existsSync(out+'/assessment-completion.json')) throw new Error('local marker sync failure');
+    return sync(fd);
+  });
+  const unlink = fs.unlinkSync;
+  spyOn(fs,'unlinkSync').mockImplementation(path=>{
+    if (String(path).endsWith('assessment-completion.json')) throw new Error('local marker rollback failure');
+    return unlink(path);
+  });
+}
+`,
+      );
+      const gauntlet = join(runDir, 'gauntlet');
+      // Only the cooperative-timeout fixture shortens the standalone allowance;
+      // the inherited parent flag still comes verbatim from quorum.
+      // exec keeps the assessment PID owned directly by quorum, including SIGKILL.
+      writeFileSync(
+        gauntlet,
+        `#!/bin/sh\nif [ "$1" = assess ]; then\n${mode === 'timeout' ? `  exec ${shellQuote(process.execPath)} --preload ${shellQuote(preload)} ${shellQuote(join(gauntletRoot!, 'src/index.ts'))} "$@" --max-time 5500ms\n` : `  exec ${shellQuote(process.execPath)} --preload ${shellQuote(preload)} ${shellQuote(join(gauntletRoot!, 'src/index.ts'))} "$@"\n`}fi\nexec ${shellQuote(process.execPath)} ${shellQuote(resolve(import.meta.dir, 'fixtures/conversation-role.ts'))} "$@"\n`,
+      );
+      chmodSync(gauntlet, 0o755);
+      let requests = 0;
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        async fetch(http) {
+          const request = (await http.json()) as Request;
+          const index = requests++;
+          evidence.phase('assessment-request-received');
+          if (['timeout', 'cancel', 'forced-kill'].includes(mode))
+            return deferred.response();
+          if (mode === 'retry' && index === 0)
+            return Response.json(
+              {
+                type: 'error',
+                error: { type: 'rate_limit_error', message: 'fixture retry' },
+              },
+              { status: 429, headers: { 'retry-after-ms': '1' } },
+            );
+          const report = index >= (mode === 'retry' ? 2 : 1);
+          await Bun.sleep(20);
+          return Response.json(
+            {
+              id: `msg-${index}`,
+              type: 'message',
+              role: 'assistant',
+              model: request.model,
+              content:
+                mode === 'conversion-error'
+                  ? null
+                  : [
+                      {
+                        type: 'tool_use',
+                        id: `tool-${index}`,
+                        name: report ? 'report_result' : 'read_evidence',
+                        input: report
+                          ? {
+                              summary: 'Inspected output',
+                              reasoning: 'Read retained output',
+                              criteria: [
+                                {
+                                  verdict:
+                                    mode === 'double-fault' ? 'fail' : 'pass',
+                                  observation: 'The file exports 42.',
+                                  basis:
+                                    'Direct observation of implementation.',
+                                  limitations: 'One file.',
+                                  references: ['output/pricing.js'],
+                                },
+                              ],
+                            }
+                          : { path: 'output/pricing.js' },
+                      },
+                    ],
+              stop_reason: 'tool_use',
+              stop_sequence: null,
+              usage: {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_creation_input_tokens: 2,
+                cache_read_input_tokens: 3,
+              },
+            },
+            { headers: report ? { 'x-report': '1' } : {} },
+          );
+        },
+      });
+      const read = fs.readFileSync;
+      const now = performance.now.bind(performance);
+      let offset = 0;
+      const clock =
+        mode === 'parent-deadline'
+          ? spyOn(performance, 'now').mockImplementation(() => now() + offset)
+          : null;
+      const markerRead =
+        mode === 'parent-deadline'
+          ? spyOn(fs, 'readFileSync').mockImplementation(((
+              ...args: Parameters<typeof fs.readFileSync>
+            ) => {
+              const result = read(...args);
+              if (String(args[0]).endsWith('assessment-completion.json'))
+                offset = 120001;
+              return result;
+            }) as typeof fs.readFileSync)
+          : null;
+      let passed = false;
+      try {
+        evidence.phase('whole-run-start');
+        const verdict = await runPreparedConversation({
+          runDir,
+          scenarioDir,
+          storyPath: join(scenarioDir, 'story.md'),
+          launcherPath: gauntlet,
+          workdir,
+          launchCwd: workdir,
+          runHomeDir: join(runDir, 'home'),
+          configDir: join(runDir, 'home'),
+          codingAgent: 'claude',
+          normalizer: 'claude',
+          logDir: logs,
+          logGlob: '*.jsonl',
+          snapshot: snapshotDir(logs, '*.jsonl'),
+          checksSh: join(scenarioDir, 'checks.sh'),
+          checksRepoRoot: resolve(import.meta.dir, '..'),
+          preRecords: [],
+          expectedChecks: null,
+          gauntletBin: gauntlet,
+          graderModel: 'claude-sonnet-4-6',
+          maxTime: '5s',
+          envBase: {
+            HOME: runDir,
+            PATH: getEnv('PATH'),
+            ANTHROPIC_API_KEY: 'offline-only',
+            ANTHROPIC_BASE_URL: String(server.url),
+          },
+          shouldStop: () =>
+            (['cancel', 'forced-kill'].includes(mode) && requests > 0) ||
+            (mode === 'parent-cancel' && existsSync(join(runDir, 'cancel'))),
+          identity: {
+            scenario: 'demo',
+            agent: 'claude',
+            credential: 'offline',
+            os: 'linux',
+          },
+        });
+        evidence.phase('whole-run-return');
+        const role = JSON.parse(
+          read(join(runDir, 'gauntlet-roles.json'), 'utf8'),
+        ).assessment;
+        expect(role.started_at).not.toBeNull();
+        expect(role.finished_at).not.toBeNull();
+        expect(role.process_exit).not.toBeNull();
+        const out = join(runDir, role.out_dir);
+        const marker = existsSync(join(out, 'assessment-completion.json'))
+          ? JSON.parse(read(join(out, 'assessment-completion.json'), 'utf8'))
+          : null;
+        const economics = verdict.economics as unknown as RunEconomics;
+        if (mode === 'reserve' || mode === 'retry') {
+          expect(verdict.error).toBeNull();
+          expect(verdict.final).toBe('pass');
+          expect(marker.status).toBe('completed');
+          if (mode === 'reserve')
+            expect(
+              Date.parse(marker.terminal_at) - Date.parse(role.started_at),
+            ).toBe(114999);
+        } else {
+          expect(verdict.final).toBe('indeterminate');
+          expect(verdict.error).not.toBeNull();
+        }
+        if (['timeout', 'cancel', 'forced-kill'].includes(mode)) {
+          expect(requests).toBe(1);
+          expect(role.stop_cause).toBe(
+            mode === 'timeout' ? 'timed_out' : 'cancelled',
+          );
+          expect(economics.gauntlet?.roles?.assessment.usage).toBeNull();
+          expect(verdict.economics?.['assessment_accounting']).toMatchObject({
+            logicalResponses: 0,
+            physicalAttempts: 1,
+            unknownUsageAttemptIds: ['001'],
+            complete: false,
+          });
+          if (mode === 'forced-kill') {
+            expect(role.process_exit.signal).toBe('SIGKILL');
+            expect(marker).toBeNull();
+          } else {
+            expect(marker.status).toBe(
+              mode === 'timeout' ? 'timed_out' : 'cancelled',
+            );
+            expect(role.process_exit.code).toBe(1);
+          }
+        } else {
+          expect(
+            economics.gauntlet?.roles?.assessment.usage?.total_tokens,
+          ).toBe(mode === 'conversion-error' ? 20 : 40);
+          expect(
+            economics.gauntlet?.roles?.assessment.usage?.est_cost_usd,
+          ).toBeGreaterThan(0);
+        }
+        if (mode === 'double-fault') {
+          expect(marker.status).toBe('completed');
+          expect(role.process_exit.code).toBe(2);
+        }
+        if (mode === 'writer-failure' || mode === 'conversion-error') {
+          expect(marker.status).toBe('errored');
+          expect(role.process_exit.code).toBe(2);
+        }
+        if (mode === 'late') {
+          expect(marker.status).toBe('timed_out');
+          expect(role.stop_cause).toBe('timed_out');
+        }
+        if (mode === 'parent-cancel' || mode === 'parent-deadline') {
+          expect(marker.status).toBe('completed');
+          expect(role.stop_cause).toBe(
+            mode === 'parent-cancel' ? 'cancelled' : 'timed_out',
+          );
+        }
+        if (mode === 'retry') {
+          expect(verdict.gauntlet?.status).toBe('pass');
+          expect(role.process_exit.code).toBe(0);
+          expect(economics.partial).toBe(true);
+          expect(economics.total_est_cost_usd).toBeNull();
+          expect(verdict.economics?.['assessment_accounting']).toMatchObject({
+            logicalResponses: 2,
+            physicalAttempts: 3,
+            unknownUsageAttemptIds: ['001'],
+            complete: false,
+            error: null,
+          });
+        }
+        evidence.phase('assertions-completed');
+        passed = true;
+      } finally {
+        evidence.phase('cleanup-start');
+        let cleanupCompleted = false;
+        try {
+          // Keep hung responses pending through every lifecycle assertion.
+          await deferred.stop(server);
+          cleanupCompleted = true;
+        } finally {
+          markerRead?.mockRestore();
+          clock?.mockRestore();
+          evidence.finish(passed, cleanupCompleted);
+        }
+      }
+    },
+    15_000,
   );

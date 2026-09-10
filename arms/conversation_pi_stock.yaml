@@ -1,0 +1,5 @@
+schema_version: 1
+name: conversation_pi_stock
+agent: pi
+credential: pi_gpt56_sol
+superpowers: none
