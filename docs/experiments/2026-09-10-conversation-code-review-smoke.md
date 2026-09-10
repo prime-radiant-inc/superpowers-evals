@@ -166,3 +166,36 @@ with each submission's exposed evidence paths reconstructed from its event
 stream: 22 of 23 now parse as valid reports; 1 remains rejected (`criteria:
 expected array, got undefined`, the summary-only submission). The submissions
 stay private; the check is reproducible from the retained run streams.
+
+### Follow-up: live re-run after the repair
+
+The same suite ran again as campaign `a51bf1a8-a489-44a9-ba39-ff9bd246fe09`
+on gauntlet `db6c8e0f` (prime-radiant-inc/gauntlet#19, the criteria repair),
+evals `041e1b27`, superpowers `b36e0829`, sealed complete with termination
+verified. Elapsed 542 seconds; known cost $7.25 (subject $3.71, grader
+$3.54), 12 of 12 attempts observed.
+
+| Measure | Baseline `688fccf6` | Re-run `a51bf1a8` |
+|---|---:|---:|
+| Report submissions for 12 assessments | 31 | 12 |
+| Accepted on the first submission | 6 | 12 |
+| Never accepted inside the deadline (indeterminate) | 4 | 0 |
+| Completion reason `criteria recovered from reasoning markup` | n/a | 6 |
+| Longest assessment wall time | 115 s (deadline) | 52 s |
+| Attempts composing `pass` | 8 | 12 |
+
+The model's behavior is unchanged: 6 of 12 first submissions still carried the
+criteria as markup inside `reasoning` (3 `<criteria>`, 3
+`<parameter name="criteria">`). The repair accepted all six on the spot, each
+with one `assessment_report_repaired` event naming the wrapper, and the
+completion reason makes the repair rate a first-class number. Every accepted
+report has six criteria rows with substantive evidence; every verdict is pass,
+as in the baseline read.
+
+One cosmetic leftover: two recovered reports keep a trailing `</report_result>`
+tag in the cleaned reasoning, a wrapper-closing tag outside the strip list.
+No effect on verdicts or counts.
+
+Stage two, the full 36-attempt routine-use suite, is now unblocked by the
+judge stop rule.
+
