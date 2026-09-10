@@ -278,7 +278,6 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
     const rubric = join(input, 'rubric.md');
     writeFileSync(brief, projected.brief, { mode: 0o600 });
     writeFileSync(rubric, projected.rubric, { mode: 0o600 });
-    accessSync(join(a.scenarioDir, 'oracle.cjs'), constants.R_OK);
     for (const r of Object.values(roles))
       mkdirSync(join(a.runDir, r.out_dir), { recursive: true });
     if (await stopRequested()) return stopped();
