@@ -179,8 +179,12 @@ modified.
 The first Claude code-review and configuration-repair pairs completed. The stock
 design completed with a passing assessment; the treatment design delivered a
 proposal but had no accepted assessment. All five accepted assessments submitted
-one native report each, with zero XML repairs or report rejections. The Python
-configuration oracle ran successfully in both arms, verifying PRI-3120 live.
+one native report each, with zero XML repairs or report rejections. One accepted
+code-review report still contains XML-like `</summary>` / `<parameter>` markup
+inside its summary string; its native criteria and reasoning fields are present.
+Strict schema preserved the required argument structure, not prose cleanliness.
+The Python configuration oracle ran successfully in both arms, verifying
+PRI-3120 live.
 
 | Scenario, first Claude replicate | Stock machine result | Treatment machine result |
 | --- | --- | --- |
