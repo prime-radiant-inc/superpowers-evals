@@ -191,6 +191,13 @@ export function readAttemptEvidence(args: {
         (Array.isArray(unpriced) && unpriced.length === 0));
     e[`${role}_tokens`] = nonnegative(object(block['tokens'])['total']);
   }
+  // A priced subtotal does not cover requests whose usage never returned.
+  const assessmentAccounting = economics['assessment_accounting'];
+  if (
+    assessmentAccounting !== undefined &&
+    object(assessmentAccounting)['complete'] !== true
+  )
+    e.grader_cost_complete = false;
   const usageRaw = json('coding-agent-token-usage.json');
   const sanitizedUsage = {
     ...usageRaw,
