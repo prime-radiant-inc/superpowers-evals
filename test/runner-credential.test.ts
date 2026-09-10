@@ -827,7 +827,7 @@ function makePiCaptureScenario(root: string): string {
   return scenario;
 }
 
-function makePiCaptureGauntlet(root: string): string {
+function makePiCaptureGauntlet(root: string, model: string): string {
   const script = join(root, 'gauntlet-pi-capture.ts');
   writeFileSync(
     script,
@@ -858,7 +858,7 @@ function log(id: string, input: number, output: number, cacheRead: number) {
     JSON.stringify({
       type: 'message',
       message: {
-        role: 'assistant', provider: 'quorum', model: 'gpt-5.6-sol',
+        role: 'assistant', provider: 'quorum', model: '${model}',
         usage: { input, output, cacheRead, cacheWrite: 0, cost: { total: 0 } },
         content: [{ type: 'toolCall', id: 'call-' + id, name: 'read', arguments: {} }],
       },
@@ -873,93 +873,109 @@ writeFileSync(join(sessions, 'children', 'child.jsonl'), log('child', 200, 20, 4
   return script;
 }
 
-test('runner threads Pi custom-route zero normalization through root and child capture exactly once', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'runner-pi-zero-cost-'));
-  const binDir = join(root, 'bin');
-  const credentialsPath = join(root, 'credentials.yaml');
-  const previousPath = Bun.env['PATH'];
-  const previousRoot = Bun.env['SUPERPOWERS_ROOT'];
-  const previousKey = Bun.env['PI_CAPTURE_KEY'];
-  mkdirSync(binDir);
-  const pi = join(binDir, 'pi');
-  writeFileSync(pi, '#!/bin/sh\nexit 0\n');
-  chmodSync(pi, 0o755);
-  writeFileSync(
-    credentialsPath,
-    [
-      'subject:',
-      '  model: gpt-5.6-sol',
-      '  harnesses: [pi]',
-      '  api: openai-responses',
-      '  base_url: https://api.openai.com/v1',
-      '  auth: api-key',
-      '  api_key_env: PI_CAPTURE_KEY',
-      '',
-    ].join('\n'),
-  );
-  Bun.env['PATH'] = `${binDir}:${previousPath ?? ''}`;
-  Bun.env['SUPERPOWERS_ROOT'] = makePiCaptureSuperpowersRoot(root);
-  Bun.env['PI_CAPTURE_KEY'] = 'test-key';
-
-  try {
-    const { runDir } = await runScenario({
-      scenarioDir: makePiCaptureScenario(root),
-      codingAgent: 'pi',
-      codingAgentsDir: REAL_CODING_AGENTS,
-      outRoot: join(root, 'results'),
-      credential: 'subject',
+// Every api-key Pi credential is served through the custom provider that
+// provisioning registers, and pi records a placeholder zero for all of them.
+// The policy must therefore follow the provisioning route, not one model name.
+for (const route of [
+  {
+    name: 'openai-responses sol',
+    model: 'gpt-5.6-sol',
+    api: 'openai-responses',
+    baseUrl: 'https://api.openai.com/v1',
+    expectedCost: 0.00243,
+  },
+  {
+    name: 'openai-chat custom endpoint',
+    model: 'custom-chat-model',
+    api: 'openai-chat',
+    baseUrl: 'https://example.com/v1',
+    expectedCost: undefined,
+  },
+] as const)
+  test(`runner threads Pi custom-route zero normalization through root and child capture exactly once (${route.name})`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'runner-pi-zero-cost-'));
+    const binDir = join(root, 'bin');
+    const credentialsPath = join(root, 'credentials.yaml');
+    const previousPath = Bun.env['PATH'];
+    const previousRoot = Bun.env['SUPERPOWERS_ROOT'];
+    const previousKey = Bun.env['PI_CAPTURE_KEY'];
+    mkdirSync(binDir);
+    const pi = join(binDir, 'pi');
+    writeFileSync(pi, '#!/bin/sh\nexit 0\n');
+    chmodSync(pi, 0o755);
+    writeFileSync(
       credentialsPath,
-      gauntletBin: makePiCaptureGauntlet(root),
-    });
-    const trajectory = JSON.parse(
-      readFileSync(join(runDir, 'trajectory.json'), 'utf8'),
-    ) as AtifTrajectory;
-    const usage = JSON.parse(
-      readFileSync(join(runDir, 'coding-agent-token-usage.json'), 'utf8'),
-    ) as {
-      total_input: number;
-      total_output: number;
-      total_cache_read: number;
-      total_tokens: number;
-      est_cost_usd: number | null;
-    };
+      [
+        'subject:',
+        `  model: ${route.model}`,
+        '  harnesses: [pi]',
+        `  api: ${route.api}`,
+        `  base_url: ${route.baseUrl}`,
+        '  auth: api-key',
+        '  api_key_env: PI_CAPTURE_KEY',
+        '',
+      ].join('\n'),
+    );
+    Bun.env['PATH'] = `${binDir}:${previousPath ?? ''}`;
+    Bun.env['SUPERPOWERS_ROOT'] = makePiCaptureSuperpowersRoot(root);
+    Bun.env['PI_CAPTURE_KEY'] = 'test-key';
 
-    expect(trajectory.steps).toHaveLength(2);
-    expect(
-      trajectory.steps.every((step) => step.metrics?.cost_usd === undefined),
-    ).toBe(true);
-    expect(
-      trajectory.steps.map((step) => step.extra?.['cost_normalization']),
-    ).toEqual([
-      {
+    try {
+      const { runDir } = await runScenario({
+        scenarioDir: makePiCaptureScenario(root),
+        codingAgent: 'pi',
+        codingAgentsDir: REAL_CODING_AGENTS,
+        outRoot: join(root, 'results'),
+        credential: 'subject',
+        credentialsPath,
+        gauntletBin: makePiCaptureGauntlet(root, route.model),
+      });
+      const trajectory = JSON.parse(
+        readFileSync(join(runDir, 'trajectory.json'), 'utf8'),
+      ) as AtifTrajectory;
+      const usage = JSON.parse(
+        readFileSync(join(runDir, 'coding-agent-token-usage.json'), 'utf8'),
+      ) as {
+        total_input: number;
+        total_output: number;
+        total_cache_read: number;
+        total_tokens: number;
+        est_cost_usd: number | null;
+      };
+
+      expect(trajectory.steps).toHaveLength(2);
+      expect(
+        trajectory.steps.every((step) => step.metrics?.cost_usd === undefined),
+      ).toBe(true);
+      const normalization = {
         policy: 'unconfigured-provider-model-rates',
         recorded_cost_usd: 0,
         provider: 'quorum',
-        model: 'gpt-5.6-sol',
-      },
-      {
-        policy: 'unconfigured-provider-model-rates',
-        recorded_cost_usd: 0,
-        provider: 'quorum',
-        model: 'gpt-5.6-sol',
-      },
-    ]);
-    expect(usage).toMatchObject({
-      total_input: 300,
-      total_output: 30,
-      total_cache_read: 60,
-      total_tokens: 390,
-    });
-    expect(usage.est_cost_usd).toBeCloseTo(0.00243, 10);
-  } finally {
-    if (previousPath === undefined) delete Bun.env['PATH'];
-    else Bun.env['PATH'] = previousPath;
-    if (previousRoot === undefined) delete Bun.env['SUPERPOWERS_ROOT'];
-    else Bun.env['SUPERPOWERS_ROOT'] = previousRoot;
-    if (previousKey === undefined) delete Bun.env['PI_CAPTURE_KEY'];
-    else Bun.env['PI_CAPTURE_KEY'] = previousKey;
-  }
-}, 10_000);
+        model: route.model,
+      };
+      expect(
+        trajectory.steps.map((step) => step.extra?.['cost_normalization']),
+      ).toEqual([normalization, normalization]);
+      expect(usage).toMatchObject({
+        total_input: 300,
+        total_output: 30,
+        total_cache_read: 60,
+        total_tokens: 390,
+      });
+      // A placeholder zero must never become the priced total: either obol
+      // has rates for the model or the cost is honestly unknown.
+      expect(usage.est_cost_usd).not.toBe(0);
+      if (route.expectedCost !== undefined)
+        expect(usage.est_cost_usd).toBeCloseTo(route.expectedCost, 10);
+    } finally {
+      if (previousPath === undefined) delete Bun.env['PATH'];
+      else Bun.env['PATH'] = previousPath;
+      if (previousRoot === undefined) delete Bun.env['SUPERPOWERS_ROOT'];
+      else Bun.env['SUPERPOWERS_ROOT'] = previousRoot;
+      if (previousKey === undefined) delete Bun.env['PI_CAPTURE_KEY'];
+      else Bun.env['PI_CAPTURE_KEY'] = previousKey;
+    }
+  }, 10_000);
 
 // --- $COPILOT_MODEL_SH sourced from credential ---
 
