@@ -156,3 +156,13 @@ indeterminate. Nothing here separates treatment from stock.
    this same suite only if the source fix does not reach first-submission
    validity above 90 percent on the retained submissions.
 3. Stage two (the full 36-attempt routine-use suite) only after 1.
+
+### Follow-up: offline repair check
+
+Gauntlet's criteria repair
+(`docs/superpowers/specs/2026-09-10-assessment-report-criteria-repair-design.md`
+in the gauntlet repo) was run against this campaign's 23 rejected submissions
+with each submission's exposed evidence paths reconstructed from its event
+stream: 22 of 23 now parse as valid reports; 1 remains rejected (`criteria:
+expected array, got undefined`, the summary-only submission). The submissions
+stay private; the check is reproducible from the retained run streams.
