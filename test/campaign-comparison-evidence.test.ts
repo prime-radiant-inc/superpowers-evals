@@ -143,6 +143,45 @@ test('invalid optional role price and run duration leave independently valid gra
   expect(e.wall_seconds).toBeNull();
   expect(e.observed_outcome).toBe('pass');
 });
+test.each([
+  false,
+  true,
+])('assessment request accounting complete=%s survives publication into campaign costs', (complete) => {
+  const p = publication({
+    economics: {
+      coding_agent: {
+        est_cost_usd: 2,
+        has_unpriced_model: false,
+        tokens: { total: 42 },
+      },
+      gauntlet: {
+        est_cost_usd: 0.2,
+        has_unpriced_model: false,
+        tokens: { total: 20 },
+        obol: { unpriced_models: [] },
+      },
+      assessment_accounting: {
+        logicalResponses: 4,
+        physicalAttempts: complete ? 4 : 5,
+        unknownUsageAttemptIds: complete ? [] : ['005'],
+        complete,
+        error: null,
+      },
+      partial: !complete,
+      total_est_cost_usd: complete ? 2.2 : null,
+    },
+  });
+  const e = readAttemptEvidence(p);
+  expect(e.publication_valid).toBe(true);
+  expect(e.observed_outcome).toBe('pass');
+  expect(e.subject_cost_usd).toBe(2);
+  expect(e.subject_cost_complete).toBe(true);
+  expect(e.grader_cost_usd).toBe(0.2);
+  expect(e.grader_cost_complete).toBe(complete);
+  expect(e.missingness.some((item) => item.field === 'grader_cost_usd')).toBe(
+    !complete,
+  );
+});
 test('corrupt shared verdict bytes lose every verdict value; independent frozen usage survives', () => {
   const p = publication(
     {},
