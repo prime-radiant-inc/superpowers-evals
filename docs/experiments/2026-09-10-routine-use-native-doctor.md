@@ -168,4 +168,91 @@ The prior campaign's outcomes are not pooled into this comparison. Its semantic
 audit disagreements remain open observations; the checker fix does not alter
 grading. Private receipts: `~/.local/share/superpowers-evals/routine-use-bcc17c8e/`.
 
-Started through the installed helper over Tailscale SSH. Results pending.
+Started through the installed helper over Tailscale SSH at 22:00:15Z. The
+restart also hit a stop rule: the first treatment design assessment timed out,
+and its fifth physical request had no returned usage. Cancellation completed
+through the helper after its live-spend lease expired; ownership files were not
+modified.
+
+### What completed before cancellation
+
+The first Claude code-review and configuration-repair pairs completed. The stock
+design completed with a passing assessment; the treatment design delivered a
+proposal but had no accepted assessment. All five accepted assessments submitted
+one native report each, with zero XML repairs or report rejections. The Python
+configuration oracle ran successfully in both arms, verifying PRI-3120 live.
+
+| Scenario, first Claude replicate | Stock machine result | Treatment machine result |
+| --- | --- | --- |
+| Code review | pass | pass |
+| Configuration repair | pass | pass |
+| Design | pass | indeterminate: assessment deadline |
+
+The assessor for treatment design read evidence in four returned requests over
+19 seconds. Request `005` then remained pending for 96 seconds until the work
+deadline aborted it. There was no returned report to parse or reject. The
+attempt journal records `usage: not_returned`, `usage_unavailable: aborted`, and
+the verdict records `unknownUsageAttemptIds: ["005"]`, incomplete assessment
+accounting and a null total cost. Known sibling costs remain priced.
+
+The trace establishes deadline cancellation of an outstanding non-streaming
+Anthropic request. It does not establish whether the provider spent that time
+thinking, generating, queueing, or waiting on transport. No response body was
+returned, so a report-format explanation is unsupported. Strict output did not
+eliminate latency or guarantee completion inside the fixed assessment bound.
+
+### Semantic audit of the retained deliveries
+
+The operator checked all 30 criterion verdicts in the five accepted reports:
+28 agreements and two disagreements. Both disagreements are code-review
+grounding passes. Configuration repair contributes eight agreements, and stock
+design contributes ten. These are operator judgments against retained native
+history and files, not an independent human panel or a general accuracy estimate.
+
+- Stock code review incorrectly states that its tautology query with an arbitrary
+  password returns arbitrary-user rows. The shown function still applies a
+  password-equality guard. SQL injection remains a valid finding; the particular
+  claimed return-value mechanism is not established.
+- Treatment code review asserts that passwords are stored in plaintext. The
+  fixture shows an identity hash and comparison, but no stored rows or password
+  writing code. That storage claim exceeds the supplied evidence.
+- Both configuration repairs reproduce before editing, remove the falsy-value
+  fallback, preserve precedence, then verify zero, false and overrides. The
+  final reports match the native execution and independent checker.
+- Stock design explicitly settles local browser use, in-page delivery and
+  per-task enrollment, explains the resulting interaction and tradeoffs, and
+  leaves the original HTML unchanged.
+
+The ungraded treatment design is audited separately: nine supported criteria,
+one unmet clarification. Its conversation explicitly settles in-page delivery
+and per-task enrollment, but never explicitly settles local-browser-only use;
+the task-population scope answer does not supply that missing fact. This
+operator audit does not convert the published indeterminate into a machine grade.
+
+Private per-criterion decisions and native path/line evidence are retained in
+`semantic-audit.json`. Missing reports remain missing, and the prior canceled
+campaign is not pooled into these counts. The three doctor cases remain unrun
+because this comparison did not clear the recorded stop rules.
+
+
+### Final restart receipt
+
+The report is `cancelled`, `complete: false`, with `termination_verified: true`.
+Eight attempts were prepared: six finished before cancellation and the review
+feedback pair was interrupted; 28 planned slots were never admitted. Seven run
+directories published, including one interrupted treatment review-feedback
+attempt; neither interrupted attempt supplies an accepted behavioral result.
+Elapsed campaign window: 1,034.869 seconds, 22:00:14.694Z to 22:17:29.563Z.
+
+Known cost subtotal is **$9.000169**: subject $3.269081 and both Gauntlet roles
+$5.731088. Accounting is incomplete, including the aborted assessment request;
+this subtotal is not a final invoice. The aggregate report's per-arm observed
+coverage is not proof that every physical request returned usage: the treatment
+design verdict explicitly marks its request accounting incomplete. Read both.
+
+The helper's final health check passed with run and sync locks absent. No further
+experiment was launched, no deadline or prompt was changed, and no native-session
+fixture was published. The run never reached Codex or Pi, so it cannot supply the
+approved three-harness doctor sample. The open next decision concerns completing
+assessment within its finite budget and handling unknown usage on timeout; it
+is not evidence that another XML repair is needed.
