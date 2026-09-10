@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ProvisionError } from '../src/agents/index.ts';
-import { PiAgent } from '../src/agents/pi.ts';
+import { PiAgent, piCustomProviderContext } from '../src/agents/pi.ts';
 import type { AgentConfig } from '../src/contracts/agent-config.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import { makeTempHome } from './provision-helpers.ts';
@@ -905,4 +905,27 @@ test('superpowers undefined spec keeps the legacy missing-root ProvisionError', 
   } finally {
     cleanup();
   }
+});
+
+// Pi records a placeholder zero cost for every model served through the custom
+// provider that api-key provisioning registers, whatever the endpoint. Capture
+// needs that provider/model pair to reprice from token buckets; an OAuth login
+// uses pi's own provider rates and gets no policy.
+test('piCustomProviderContext names the quorum provider for every api-key route and nothing for oauth', () => {
+  expect(piCustomProviderContext(makeApiKeyCredential())).toEqual({
+    pi: {
+      placeholderZeroCost: {
+        provider: 'quorum',
+        model: 'glm-5.2-fp8',
+        policy: 'unconfigured-provider-model-rates',
+      },
+    },
+  });
+  expect(
+    piCustomProviderContext(
+      makeApiKeyCredential({ model: 'gpt-5.6-sol', api: 'openai-responses' }),
+    )?.pi?.placeholderZeroCost?.model,
+  ).toBe('gpt-5.6-sol');
+  expect(piCustomProviderContext(makeOauthCredential())).toBeUndefined();
+  expect(piCustomProviderContext(undefined)).toBeUndefined();
 });

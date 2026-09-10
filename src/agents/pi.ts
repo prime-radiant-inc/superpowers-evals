@@ -13,6 +13,10 @@ import type { Credential } from '../contracts/credential.ts';
 import type { ApiKeyResolution } from '../credentials/resolve.ts';
 import { resolveApiKey } from '../credentials/resolve.ts';
 import { envSnapshot, getEnv } from '../env.ts';
+import {
+  type AtifNormalizationContext,
+  PI_ZERO_COST_NORMALIZATION_POLICY,
+} from '../normalize/context.ts';
 import type { CommandRunner } from './command-runner.ts';
 import { type CodingAgent, ProvisionError, type RunHome } from './index.ts';
 import { writePrivateFileNoFollow } from './private-file.ts';
@@ -26,6 +30,31 @@ const CREDENTIAL_API_TO_PI_API: Readonly<Record<string, string>> = {
   'openai-chat': 'openai-completions',
   'openai-responses': 'openai-responses',
 };
+
+// The fixed provider name api-key provisioning registers in models.json (not
+// the credential name) so pi's internal routing always points at the same slot.
+const PI_CUSTOM_PROVIDER = 'quorum';
+
+/** The normalization context capture needs for an api-key Pi credential.
+ * Pi has no native rates for a model served through the custom provider, so
+ * it records a placeholder zero cost on every message; naming the exact
+ * provider/model pair lets the normalizer omit that zero and let obol price
+ * the token buckets. An OAuth login runs on pi's own providers and gets no
+ * policy. */
+export function piCustomProviderContext(
+  credential: Credential | undefined,
+): AtifNormalizationContext | undefined {
+  if (credential?.auth !== 'api-key') return undefined;
+  return {
+    pi: {
+      placeholderZeroCost: {
+        provider: PI_CUSTOM_PROVIDER,
+        model: credential.model,
+        policy: PI_ZERO_COST_NORMALIZATION_POLICY,
+      },
+    },
+  };
+}
 
 // Characters shlex.quote treats as safe (its unsafe-char regex is
 // [^\w@%+=:,./-]). A value built only from these is emitted bare; anything else
@@ -257,7 +286,7 @@ function writePiModelsJson(
 
   const body = {
     providers: {
-      quorum: {
+      [PI_CUSTOM_PROVIDER]: {
         baseUrl,
         api: piApi,
         apiKey,

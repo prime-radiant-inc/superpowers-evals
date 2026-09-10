@@ -50,6 +50,7 @@ import {
   OpenCodeCaptureError,
   snapshotOpencodeSessions,
 } from '../agents/opencode-capture.ts';
+import { piCustomProviderContext } from '../agents/pi.ts';
 import { writePrivateFileNoFollow } from '../agents/private-file.ts';
 import { SERF_API_ENV_FILE_NAME } from '../agents/serf.ts';
 import {
@@ -110,10 +111,6 @@ import {
 import { isSerfOpenRouterCampaignCredentialV1 } from '../credentials/serf-openrouter-profile.ts';
 import { buildRunEconomics } from '../economics.ts';
 import { envSnapshot, getEnv } from '../env.ts';
-import {
-  type AtifNormalizationContext,
-  PI_ZERO_COST_NORMALIZATION_POLICY,
-} from '../normalize/context.ts';
 import { kimiLogsHaveSuperpowersSessionStart } from '../normalize/kimi.ts';
 import {
   captureOpenRouterGenerations,
@@ -1900,22 +1897,8 @@ async function runInnerBody(
   // strips arbitrary env from new sessions, so the QA agent reads concrete
   // paths from the substituted files rather than from env inheritance.
   const family = cfg.runtime_family ?? cfg.name;
-  const normalizationContext: AtifNormalizationContext | undefined =
-    family === 'pi' &&
-    resolvedCredential?.auth === 'api-key' &&
-    resolvedCredential.api === 'openai-responses' &&
-    resolvedCredential.base_url !== undefined &&
-    resolvedCredential.model === 'gpt-5.6-sol'
-      ? {
-          pi: {
-            placeholderZeroCost: {
-              provider: 'quorum',
-              model: resolvedCredential.model,
-              policy: PI_ZERO_COST_NORMALIZATION_POLICY,
-            },
-          },
-        }
-      : undefined;
+  const normalizationContext =
+    family === 'pi' ? piCustomProviderContext(resolvedCredential) : undefined;
   const isRemote = os !== 'linux';
   const launchAgentPath = join(
     runDir,
