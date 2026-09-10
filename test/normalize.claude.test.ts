@@ -19,7 +19,7 @@ test('maps tool_use blocks to ATIF tool_calls', () => {
   const traj = normalizeClaudeLegacy(raw, '2.1.175');
   const calls = traj.steps.flatMap((s) => s.tool_calls ?? []);
   expect(calls.map((c) => c.function_name)).toEqual(['Write', 'Bash']);
-  expect(calls[0]).toMatchObject({
+  expect(calls[0]).toEqual({
     tool_call_id: 'toolu_01',
     function_name: 'Write',
     arguments: { file_path: 'hello.txt', content: 'hi' },
@@ -41,7 +41,7 @@ test('attaches tool_result to the issuing step as an observation', () => {
   const writeStep = traj.steps.find((s) =>
     s.tool_calls?.some((c) => c.tool_call_id === 'toolu_01'),
   )!;
-  expect(writeStep.observation?.results).toMatchObject([
+  expect(writeStep.observation?.results).toEqual([
     { source_call_id: 'toolu_01', content: 'File created' },
   ]);
 });
@@ -175,7 +175,7 @@ test('mixed user turn: attaches tool_result observation AND emits user step', ()
   const agentStep = traj.steps.find((s) => s.source === 'agent');
   expect(agentStep).toBeDefined();
   expect(agentStep!.observation?.results).toBeDefined();
-  expect(agentStep!.observation!.results).toMatchObject([
+  expect(agentStep!.observation!.results).toEqual([
     { source_call_id: 'toolu_01', content: 'file.txt' },
   ]);
 
@@ -219,7 +219,7 @@ test('real 2.1.177 fixture with tool_use: noise rows ignored, tool_call and obse
 
   // Agent step has an observation for toolu_01
   expect(agentStep.observation?.results).toBeDefined();
-  expect(agentStep.observation!.results).toMatchObject([
+  expect(agentStep.observation!.results).toEqual([
     { source_call_id: 'toolu_01', content: 'File created' },
   ]);
 
@@ -240,7 +240,7 @@ test('flat top-level tool_use entry becomes an agent step with one tool_call', (
   expect(step.source).toBe('agent');
   expect(step.tool_calls).toBeDefined();
   expect(step.tool_calls!.length).toBe(1);
-  expect(step.tool_calls![0]).toMatchObject({
+  expect(step.tool_calls![0]).toEqual({
     tool_call_id: 'x',
     function_name: 'Bash',
     arguments: { command: 'ls' },
@@ -281,7 +281,7 @@ test('assistant step carries ATIF metrics + model from message.usage', () => {
   const traj = normalizeClaudeLegacy(usageLine, '2.1.177');
   const step = traj.steps.find((s) => s.source === 'agent')!;
   expect(step.model_name).toBe('claude-opus-4-8');
-  expect(step.metrics).toMatchObject({
+  expect(step.metrics).toEqual({
     prompt_tokens: 16153,
     completion_tokens: 12,
     cached_tokens: 13804,
@@ -329,10 +329,7 @@ test('partial usage maps present fields and omits absent ones', () => {
   const traj = normalizeClaudeLegacy(line, '2.1.177');
   const step = traj.steps.find((s) => s.source === 'agent')!;
   expect(step.model_name).toBe('claude-sonnet-4-6');
-  expect(step.metrics).toMatchObject({
-    prompt_tokens: 100,
-    completion_tokens: 5,
-  });
+  expect(step.metrics).toEqual({ prompt_tokens: 100, completion_tokens: 5 });
   expect(step.extra?.['cache_write']).toBeUndefined();
 });
 

@@ -1,13 +1,4 @@
 import {
-  type NativeBoundary,
-  type NativeChildEvidence,
-  type NativeCommunication,
-  type NativeToolResultEvidence,
-  nativeRecordBytes,
-  nativeTextBytes,
-  withNativeEvidence,
-} from '../atif/provenance.ts';
-import {
   ATIF_SCHEMA_VERSION,
   type AtifFinalMetrics,
   type AtifMetrics,
@@ -300,290 +291,6 @@ function parseOutputBlob(raw: unknown): string | undefined {
     return JSON.stringify(raw);
   }
   return String(raw);
-}
-
-function codexOutputObject(raw: unknown): Record<string, unknown> | undefined {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw))
-    return raw as Record<string, unknown>;
-  if (typeof raw !== 'string') return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Supported native output envelopes only; never infer failure from file text. */
-function nativeCodexResultError(raw: unknown): boolean | undefined {
-  const object = codexOutputObject(raw);
-  if (object && 'output' in object) {
-    const metadata = object['metadata'];
-    const exitCode =
-      metadata && typeof metadata === 'object'
-        ? (metadata as Record<string, unknown>)['exit_code']
-        : object['exit_code'];
-    if (typeof exitCode === 'number' && Number.isInteger(exitCode))
-      return exitCode !== 0;
-  }
-  // Codex functions.exec wraps returned exec_command objects in input_text
-  // blocks after its own execution header. Only those structured return values
-  // carry shell status; arbitrary content/error-looking text is not an exit code.
-  if (Array.isArray(raw)) {
-    const header = raw[0];
-    if (
-      !header ||
-      typeof header !== 'object' ||
-      header.type !== 'input_text' ||
-      typeof header.text !== 'string' ||
-      !/^Script completed\r?\nWall time [^\n]+\r?\nOutput:\r?\n$/.test(
-        header.text,
-      )
-    )
-      return undefined;
-    const statuses = raw
-      .slice(1)
-      .map((block) =>
-        block && typeof block === 'object' && block.type === 'input_text'
-          ? nativeCodexResultError(block.text)
-          : undefined,
-      );
-    if (statuses.some((status) => status === true)) return true;
-    if (statuses.length && statuses.every((status) => status === false))
-      return false;
-  }
-  return undefined;
-}
-
-type StaticExecOptionType = 'boolean' | 'number' | 'string' | 'string-array';
-
-const STATIC_EXEC_OPTION_TYPES: Record<string, StaticExecOptionType> = {
-  cmd: 'string',
-  justification: 'string',
-  login: 'boolean',
-  max_output_tokens: 'number',
-  prefix_rule: 'string-array',
-  sandbox_permissions: 'string',
-  shell: 'string',
-  tty: 'boolean',
-  workdir: 'string',
-  yield_time_ms: 'number',
-};
-
-function skipWhitespace(source: string, start: number): number {
-  let index = start;
-  while (/\s/.test(source[index] ?? '')) index += 1;
-  return index;
-}
-
-function staticStringLiteral(
-  source: string,
-  start: number,
-  allowTemplate = true,
-): { end: number; value: string } | undefined {
-  const quote = source[start];
-  if (quote !== '"' && quote !== "'" && (!allowTemplate || quote !== '`'))
-    return undefined;
-  let escaped = false;
-  for (let index = start + 1; index < source.length; index += 1) {
-    const char = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (char !== quote) continue;
-    const body = source.slice(start + 1, index);
-    if (quote === '`' && body.includes('${')) return undefined;
-    return { end: index + 1, value: unescapeJsLiteral(body) };
-  }
-  return undefined;
-}
-
-function staticStringArray(source: string, start: number): number | undefined {
-  if (source[start] !== '[') return undefined;
-  let index = skipWhitespace(source, start + 1);
-  if (source[index] === ']') return index + 1;
-  for (;;) {
-    const literal = staticStringLiteral(source, index);
-    if (!literal) return undefined;
-    index = skipWhitespace(source, literal.end);
-    if (source[index] === ']') return index + 1;
-    if (source[index] !== ',') return undefined;
-    index = skipWhitespace(source, index + 1);
-    if (source[index] === ']') return index + 1;
-  }
-}
-
-function staticExecOptionValue(
-  source: string,
-  start: number,
-  type: StaticExecOptionType,
-): { end: number; value?: string } | undefined {
-  if (type === 'string') return staticStringLiteral(source, start);
-  if (type === 'string-array') {
-    const end = staticStringArray(source, start);
-    return end === undefined ? undefined : { end };
-  }
-  if (type === 'boolean') {
-    const match = /^(?:true|false)\b/.exec(source.slice(start));
-    return match ? { end: start + match[0].length } : undefined;
-  }
-  const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(
-    source.slice(start),
-  );
-  return match ? { end: start + match[0].length } : undefined;
-}
-
-/**
- * Consume one directly emitted exec_command statement whose argument is a
- * static object literal. Values are checked against the native tool's option
- * types, while duplicate, unknown, computed and expression-valued fields are
- * rejected. This is deliberately not a general JavaScript parser.
- */
-function staticExecCommandStatement(
-  source: string,
-): { command: string; length: number } | undefined {
-  let index = skipWhitespace(source, 0);
-  if (!source.startsWith('text', index)) return undefined;
-  index = skipWhitespace(source, index + 'text'.length);
-  if (source[index] !== '(') return undefined;
-  index = skipWhitespace(source, index + 1);
-  if (!source.startsWith('await', index)) return undefined;
-  const afterAwait = index + 'await'.length;
-  index = skipWhitespace(source, afterAwait);
-  if (index === afterAwait || !source.startsWith('tools.exec_command', index))
-    return undefined;
-  index = skipWhitespace(source, index + 'tools.exec_command'.length);
-  if (source[index] !== '(') return undefined;
-  index = skipWhitespace(source, index + 1);
-  if (source[index] !== '{') return undefined;
-  index = skipWhitespace(source, index + 1);
-
-  const seen = new Set<string>();
-  let command: string | undefined;
-  while (source[index] !== '}') {
-    const quotedKey = staticStringLiteral(source, index, false);
-    const identifierKey = /^[A-Za-z_$][\w$]*/.exec(source.slice(index));
-    const key = quotedKey?.value ?? identifierKey?.[0];
-    if (!key) return undefined;
-    index = quotedKey
-      ? quotedKey.end
-      : index + (identifierKey?.[0].length ?? 0);
-    if (seen.has(key)) return undefined;
-    seen.add(key);
-    const optionType = STATIC_EXEC_OPTION_TYPES[key];
-    if (!optionType) return undefined;
-    index = skipWhitespace(source, index);
-    if (source[index] !== ':') return undefined;
-    index = skipWhitespace(source, index + 1);
-    const option = staticExecOptionValue(source, index, optionType);
-    if (!option) return undefined;
-    if (
-      key === 'sandbox_permissions' &&
-      option.value !== 'use_default' &&
-      option.value !== 'require_escalated'
-    )
-      return undefined;
-    if (key === 'cmd') command = option.value;
-    index = skipWhitespace(source, option.end);
-    if (source[index] === '}') break;
-    if (source[index] !== ',') return undefined;
-    index = skipWhitespace(source, index + 1);
-    if (source[index] === '}') break;
-  }
-  if (command === undefined || source[index] !== '}') return undefined;
-  index = skipWhitespace(source, index + 1);
-  if (source[index] !== ')') return undefined;
-  index = skipWhitespace(source, index + 1);
-  if (source[index] !== ')') return undefined;
-  index = skipWhitespace(source, index + 1);
-  if (source[index] !== ';') return undefined;
-  return { command, length: index + 1 };
-}
-
-/**
- * Qualify only a fully consumed sequence of directly emitted, awaited shell
- * calls with supported static literal options. General exec scripts can
- * reorder, skip, transform or fabricate their outputs, so output count/order
- * alone is unsafe. This deliberately narrow grammar establishes the native
- * output-to-call map; all other script shapes retain their output without
- * qualified subcall status.
- */
-function nativeCodexSubcallResults(
-  calls: AtifToolCall[],
-  callId: string,
-  raw: unknown,
-): NativeToolResultEvidence['subcalls'] {
-  if (
-    !calls.length ||
-    calls.some((call) => call.extra?.['composite_call_id'] !== callId) ||
-    !Array.isArray(raw) ||
-    raw.length !== calls.length + 1 ||
-    nativeCodexResultError(raw) === undefined
-  )
-    return undefined;
-  let script = calls.map((call) => call.extra?.['script']).join('');
-  const outcomes: NonNullable<NativeToolResultEvidence['subcalls']> = [];
-  for (const [index, call] of calls.entries()) {
-    const statement = staticExecCommandStatement(script);
-    if (
-      !statement ||
-      call.function_name !== 'Bash' ||
-      statement.command !== call.arguments['command']
-    )
-      return undefined;
-    script = script.slice(statement.length);
-    const block = raw[index + 1];
-    if (block?.type !== 'input_text') return undefined;
-    const output = codexOutputObject(block.text);
-    const isError = nativeCodexResultError(output);
-    if (isError === undefined || typeof output?.['output'] !== 'string')
-      return undefined;
-    outcomes.push({
-      toolCallId: call.tool_call_id,
-      isError,
-      contentBytes: Buffer.byteLength(output['output'], 'utf8'),
-    });
-  }
-  return script.trim() ? undefined : outcomes;
-}
-
-function nativeTextBytesFromCodexOutput(raw: unknown): number | undefined {
-  const parsed = codexOutputObject(raw);
-  return nativeTextBytes(parsed?.['output'] ?? raw);
-}
-
-function childIdentityFromCodexOutput(
-  raw: unknown,
-): Pick<NativeChildEvidence, 'id' | 'name'> | undefined {
-  const parsed = codexOutputObject(raw);
-  const id = parsed?.['agent_id'] ?? parsed?.['agentId'];
-  const name = parsed?.['task_name'];
-  const identity: Pick<NativeChildEvidence, 'id' | 'name'> = {};
-  if (typeof id === 'string' && id) identity.id = id;
-  if (typeof name === 'string' && name) identity.name = name;
-  return Object.keys(identity).length > 0 ? identity : undefined;
-}
-
-function agentRelationship(
-  call: AtifToolCall,
-): NativeChildEvidence['relationship'] {
-  const args = call.arguments;
-  if (args['fork_turns'] === 'none') return 'spawned';
-  if (args['fork_turns'] !== undefined) return 'fork';
-  const script = call.extra?.['script'];
-  if (typeof script === 'string') {
-    const forkTurns = plainStringProp(script, 'fork_turns');
-    if (forkTurns === 'none') return 'spawned';
-    if (forkTurns !== null) return 'fork';
-  }
-  return 'unknown';
 }
 
 // codex ≥0.144 driving the gpt-5.6 family routes ALL tool use through a single
@@ -893,11 +600,7 @@ export function normalizeCodex(
   // Per-turn usage deltas (each token_count's last_token_usage), in order. These
   // sum to the cumulative but carry real per-request sizes, so obol tiers each
   // turn correctly (see the attachment step below).
-  const turnUsages: Array<{
-    usage: CodexTokenUsage;
-    line: number;
-    timestamp?: string;
-  }> = [];
+  const turnUsages: CodexTokenUsage[] = [];
   let previousUsageEvent:
     | { total: CodexTokenUsage; last: CodexTokenUsage }
     | undefined;
@@ -906,35 +609,27 @@ export function normalizeCodex(
   let sessionId: string | undefined;
   let agentVersion = version;
   let agentExtra: Record<string, unknown> | undefined;
-  let userOrigin: 'parent' | 'unknown' = 'unknown';
-  let sessionUsageEvidence: { line: number; timestamp?: string } | undefined;
-  const boundaries: NativeBoundary[] = [];
-  const communications: NativeCommunication[] = [];
 
   // Pending reasoning to carry forward onto the next tool-call or message step.
   let pendingReasoning: string | undefined;
-  let pendingReasoningLines: number[] = [];
 
   // Map from call_id → step index in `steps`, for attaching outputs to calls.
   // Once an output is attached, the call_id is marked completed.
   const pendingCallStepIndex = new Map<string, number>();
   const completedCallIds = new Set<string>();
 
-  for (const [lineIndex, line] of raw.split('\n').entries()) {
+  for (const [index, line] of raw.split('\n').entries()) {
     if (!line.trim()) continue;
     let entry: Record<string, unknown>;
     try {
       entry = JSON.parse(line) as Record<string, unknown>;
     } catch (error) {
       onMalformedLine?.(
-        lineIndex + 1,
+        index + 1,
         error instanceof Error ? error.message : String(error),
       );
       continue;
     }
-    const sourceLine = lineIndex + 1;
-    const entryTimestamp =
-      typeof entry['timestamp'] === 'string' ? entry['timestamp'] : undefined;
 
     // session_meta: extract session_id, agent version, and extra fields.
     if (entry['type'] === 'session_meta') {
@@ -953,28 +648,10 @@ export function normalizeCodex(
           'cwd',
           'git',
           'instructions',
-          'parent_thread_id',
-          'thread_source',
-          'agent_nickname',
-          'agent_path',
-          'source',
         ] as const) {
           const value = payload[key];
           if (value !== undefined) extra[key] = value;
         }
-        const parentSessionId = payload['session_id'];
-        if (
-          typeof parentSessionId === 'string' &&
-          parentSessionId &&
-          parentSessionId !== payload['id']
-        )
-          extra['parent_session_id'] = parentSessionId;
-        if (
-          (typeof payload['parent_thread_id'] === 'string' &&
-            payload['parent_thread_id']) ||
-          payload['thread_source'] === 'subagent'
-        )
-          userOrigin = 'parent';
         if (Object.keys(extra).length > 0) agentExtra = extra;
       }
       continue;
@@ -983,38 +660,6 @@ export function normalizeCodex(
     // token_count events ride on `event_msg` rows, not `response_item`.
     if (entry['type'] === 'event_msg') {
       const payload = entry['payload'];
-      const payloadType =
-        payload && typeof payload === 'object'
-          ? (payload as { type?: unknown }).type
-          : undefined;
-      if (payloadType === 'task_started' || payloadType === 'task_complete') {
-        const durationMs = (payload as Record<string, unknown>)['duration_ms'];
-        boundaries.push({
-          kind: 'task',
-          phase: payloadType === 'task_started' ? 'start' : 'complete',
-          ...(payloadType === 'task_complete' &&
-          typeof durationMs === 'number' &&
-          Number.isFinite(durationMs) &&
-          durationMs >= 0
-            ? { durationMs }
-            : {}),
-          evidence: {
-            lines: [sourceLine],
-            ...(entryTimestamp ? { timestamp: entryTimestamp } : {}),
-          },
-        });
-      } else if (
-        typeof payloadType === 'string' &&
-        payloadType.toLowerCase().includes('compact')
-      ) {
-        boundaries.push({
-          kind: 'compaction',
-          evidence: {
-            lines: [sourceLine],
-            ...(entryTimestamp ? { timestamp: entryTimestamp } : {}),
-          },
-        });
-      }
       if (
         payload &&
         typeof payload === 'object' &&
@@ -1036,19 +681,8 @@ export function normalizeCodex(
             previousUsageEvent !== undefined &&
             sameTokenUsage(total, previousUsageEvent.total) &&
             sameTokenUsage(last, previousUsageEvent.last);
-          if (total) {
-            sessionUsage = total;
-            sessionUsageEvidence = {
-              line: sourceLine,
-              ...(entryTimestamp ? { timestamp: entryTimestamp } : {}),
-            };
-          }
-          if (last && !repeated)
-            turnUsages.push({
-              usage: last,
-              line: sourceLine,
-              ...(entryTimestamp ? { timestamp: entryTimestamp } : {}),
-            });
+          if (total) sessionUsage = total;
+          if (last && !repeated) turnUsages.push(last);
           previousUsageEvent = total && last ? { total, last } : undefined;
         }
       }
@@ -1057,22 +691,13 @@ export function normalizeCodex(
 
     // Model is recorded on turn_context (and the session_meta source); take the
     // first one we see.
-    if (entry['type'] === 'turn_context') {
+    if (entry['type'] === 'turn_context' && modelName === undefined) {
       const payload = entry['payload'];
       const model =
         payload && typeof payload === 'object'
           ? (payload as { model?: unknown }).model
           : undefined;
-      if (modelName === undefined && typeof model === 'string' && model)
-        modelName = model;
-      boundaries.push({
-        kind: 'turn',
-        phase: 'start',
-        evidence: {
-          lines: [sourceLine],
-          ...(entryTimestamp ? { timestamp: entryTimestamp } : {}),
-        },
-      });
+      if (typeof model === 'string' && model) modelName = model;
       continue;
     }
 
@@ -1080,32 +705,8 @@ export function normalizeCodex(
 
     // Codex uses "payload" (real runs) or "item" (test fixtures using item key).
     const payload = (entry['payload'] ?? entry['item'] ?? {}) as CodexPayload;
-    const timestamp = entryTimestamp;
-
-    if (payload.type === 'agent_message') {
-      const native = payload as unknown as Record<string, unknown>;
-      const content = Array.isArray(native['content']) ? native['content'] : [];
-      const contentKinds = content.flatMap((block) => {
-        if (!block || typeof block !== 'object') return [];
-        const type = (block as Record<string, unknown>)['type'];
-        return typeof type === 'string' ? [type] : [];
-      });
-      const id = native['id'];
-      const author = native['author'];
-      const recipient = native['recipient'];
-      communications.push({
-        ...(typeof id === 'string' && id ? { id } : {}),
-        ...(typeof author === 'string' && author ? { author } : {}),
-        ...(typeof recipient === 'string' && recipient ? { recipient } : {}),
-        contentKinds,
-        opaqueContent: contentKinds.includes('encrypted_content'),
-        evidence: {
-          lines: [sourceLine],
-          ...(timestamp ? { timestamp } : {}),
-        },
-      });
-      continue;
-    }
+    const timestamp =
+      typeof entry['timestamp'] === 'string' ? entry['timestamp'] : undefined;
 
     // ── reasoning event: store pending_reasoning, do NOT emit a step ──────────
     if (payload.type === 'reasoning') {
@@ -1116,10 +717,8 @@ export function normalizeCodex(
           .filter((item): item is string => typeof item === 'string')
           .join('\n');
         if (!pendingReasoning) pendingReasoning = undefined;
-        pendingReasoningLines = pendingReasoning ? [sourceLine] : [];
       } else {
         pendingReasoning = undefined;
-        pendingReasoningLines = [];
       }
       continue;
     }
@@ -1135,25 +734,14 @@ export function normalizeCodex(
       if (role === 'assistant') source = 'agent';
       else if (role === 'user') source = 'user';
       else source = 'system';
-      const consumesReasoning = source === 'agent' && pendingReasoning;
 
-      const step: AtifStep = {
-        step_id: stepId++,
-        source,
-        extra: withNativeEvidence(undefined, {
-          lines: consumesReasoning
-            ? [...pendingReasoningLines, sourceLine]
-            : [sourceLine],
-          ...(source === 'user' ? { origin: userOrigin } : {}),
-        }),
-      };
+      const step: AtifStep = { step_id: stepId++, source };
       if (timestamp) step.timestamp = timestamp;
       if (text) step.message = text;
       // Carry reasoning onto assistant message steps
-      if (consumesReasoning) {
-        step.reasoning_content = consumesReasoning;
+      if (source === 'agent' && pendingReasoning) {
+        step.reasoning_content = pendingReasoning;
         pendingReasoning = undefined;
-        pendingReasoningLines = [];
       }
       steps.push(step);
       continue;
@@ -1169,27 +757,14 @@ export function normalizeCodex(
         | CodexFunctionCallOutputPayload
         | CodexToolSearchOutputPayload;
       const callId = p.call_id;
-      const nativeOutput = p.type === 'tool_search_output' ? p.tools : p.output;
-      const outputText = parseOutputBlob(nativeOutput);
+      const outputText = parseOutputBlob(
+        p.type === 'tool_search_output' ? p.tools : p.output,
+      );
 
       // Build the observation result; only set optional fields when they have a value
       // (exactOptionalPropertyTypes forbids assigning undefined to optional string props).
-      const contentBytes = nativeTextBytesFromCodexOutput(nativeOutput);
-      const obsResult: AtifObservation['results'][number] = {
-        extra: withNativeEvidence(undefined, {
-          lines: [sourceLine],
-          origin: 'unknown',
-          ...(timestamp ? { timestamp } : {}),
-          ...(contentBytes !== undefined ? { contentBytes } : {}),
-          recordBytes: nativeRecordBytes(line),
-        }),
-      };
-      const isError = nativeCodexResultError(nativeOutput);
-      if (isError !== undefined)
-        obsResult.extra = {
-          ...obsResult.extra,
-          quorum_result: { isError } satisfies NativeToolResultEvidence,
-        };
+      const obsResult: { source_call_id?: string; content?: string | null } =
+        {};
       if (callId) obsResult.source_call_id = callId;
       if (outputText !== undefined) obsResult.content = outputText;
 
@@ -1199,39 +774,8 @@ export function normalizeCodex(
           // Attach to the existing call step
           const owner = steps[ownerIdx];
           if (!owner) continue;
-          const subcalls = nativeCodexSubcallResults(
-            owner.tool_calls ?? [],
-            callId,
-            nativeOutput,
-          );
-          if (subcalls)
-            obsResult.extra = {
-              ...obsResult.extra,
-              quorum_result: {
-                ...(isError !== undefined ? { isError } : {}),
-                subcalls,
-              } satisfies NativeToolResultEvidence,
-            };
           owner.observation ??= { results: [] };
           owner.observation.results.push(obsResult);
-          const childIdentity = childIdentityFromCodexOutput(nativeOutput);
-          const ownerCall = owner.tool_calls?.find(
-            (candidate) => candidate.tool_call_id === callId,
-          );
-          const child = ownerCall?.extra?.['quorum_child'];
-          if (
-            childIdentity &&
-            ownerCall?.function_name === 'Agent' &&
-            child &&
-            typeof child === 'object'
-          ) {
-            const identified = {
-              ...(child as NativeChildEvidence),
-              ...childIdentity,
-            };
-            ownerCall.extra = { ...ownerCall.extra, quorum_child: identified };
-            obsResult.extra = { ...obsResult.extra, quorum_child: identified };
-          }
           completedCallIds.add(callId);
           pendingCallStepIndex.delete(callId);
           continue;
@@ -1244,9 +788,7 @@ export function normalizeCodex(
       // Orphan output (no matching pending call): emit its own step.
       // Drop source_call_id since there's no matching tool_call in this step
       // (ATIF validator requires source_call_id to match a tool_call_id).
-      const orphanResult: AtifObservation['results'][number] = {
-        ...(obsResult.extra ? { extra: obsResult.extra } : {}),
-      };
+      const orphanResult: { content?: string | null } = {};
       if (outputText !== undefined) orphanResult.content = outputText;
       const orphanObservation: AtifObservation = {
         results: [orphanResult],
@@ -1255,7 +797,6 @@ export function normalizeCodex(
         step_id: stepId++,
         source: 'agent',
         observation: orphanObservation,
-        extra: withNativeEvidence(undefined, { lines: [sourceLine] }),
       };
       if (timestamp) step.timestamp = timestamp;
       steps.push(step);
@@ -1278,28 +819,13 @@ export function normalizeCodex(
       step_id: stepId++,
       source: 'agent',
       tool_calls: tcs,
-      extra: withNativeEvidence(undefined, {
-        lines: [...pendingReasoningLines, sourceLine],
-      }),
     };
-    for (const tc of tcs) {
-      tc.extra = withNativeEvidence(tc.extra, { lines: [sourceLine] });
-      if (tc.function_name === 'Agent') {
-        tc.extra = {
-          ...tc.extra,
-          quorum_child: {
-            relationship: agentRelationship(tc),
-          } satisfies NativeChildEvidence,
-        };
-      }
-    }
     if (timestamp) step.timestamp = timestamp;
 
     // Attach pending reasoning and clear it
     if (pendingReasoning) {
       step.reasoning_content = pendingReasoning;
       pendingReasoning = undefined;
-      pendingReasoningLines = [];
     }
 
     // Register this step for output pairing (only for calls with a real call_id)
@@ -1328,26 +854,18 @@ export function normalizeCodex(
   // become synthetic usage-only steps so no turn's tokens are dropped.
   if (modelName && turnUsages.length > 0) {
     const agentSteps = steps.filter((s) => s.source === 'agent');
-    for (const [i, locatedUsage] of turnUsages.entries()) {
-      const usage = locatedUsage.usage;
-      const metrics = stepMetricsFromUsage(usage);
-      metrics.extra = withNativeEvidence(metrics.extra, {
-        lines: [locatedUsage.line],
-        ...(locatedUsage.timestamp
-          ? { timestamp: locatedUsage.timestamp }
-          : {}),
-      });
+    for (let i = 0; i < turnUsages.length; i++) {
+      const usage = turnUsages[i] as CodexTokenUsage;
       const target = agentSteps[i];
       if (target) {
         target.model_name = modelName;
-        target.metrics = metrics;
+        target.metrics = stepMetricsFromUsage(usage);
       } else {
         steps.push({
           step_id: 0,
           source: 'agent',
           model_name: modelName,
-          metrics,
-          extra: withNativeEvidence(undefined, { lines: [locatedUsage.line] }),
+          metrics: stepMetricsFromUsage(usage),
         });
       }
     }
@@ -1368,21 +886,7 @@ export function normalizeCodex(
   if (sessionId) traj.session_id = sessionId;
   if (modelName) traj.agent.model_name = modelName;
   if (agentExtra) traj.agent.extra = agentExtra;
-  if (sessionUsage) {
-    traj.final_metrics = finalMetricsFromUsage(sessionUsage);
-    if (sessionUsageEvidence) {
-      traj.final_metrics.extra = withNativeEvidence(traj.final_metrics.extra, {
-        lines: [sessionUsageEvidence.line],
-        ...(sessionUsageEvidence.timestamp
-          ? { timestamp: sessionUsageEvidence.timestamp }
-          : {}),
-      });
-    }
-  }
-  if (boundaries.length > 0)
-    traj.extra = { ...traj.extra, quorum_boundaries: boundaries };
-  if (communications.length > 0)
-    traj.extra = { ...traj.extra, quorum_communications: communications };
+  if (sessionUsage) traj.final_metrics = finalMetricsFromUsage(sessionUsage);
 
   const result = validateTrajectory(traj);
   if (!result.ok) {

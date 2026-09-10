@@ -461,11 +461,11 @@ test('repeated cumulative usage is billed once while an equal-size next request 
   ].join('\n');
   const trajectory = normalizeCodex(raw, 'test');
   const metrics = trajectory.steps.flatMap((step) => step.metrics ?? []);
-  expect(metrics).toMatchObject([
+  expect(metrics).toEqual([
     { prompt_tokens: 40, cached_tokens: 60, completion_tokens: 20 },
     { prompt_tokens: 40, cached_tokens: 60, completion_tokens: 20 },
   ]);
-  expect(trajectory.final_metrics).toMatchObject({
+  expect(trajectory.final_metrics).toEqual({
     total_prompt_tokens: 80,
     total_completion_tokens: 40,
     extra: { total_cached_tokens: 120 },
@@ -509,7 +509,7 @@ test('changed last usage with the same cumulative counter is retained for accoun
     ].join('\n'),
     'test',
   );
-  expect(trajectory.steps.flatMap((step) => step.metrics ?? [])).toMatchObject([
+  expect(trajectory.steps.flatMap((step) => step.metrics ?? [])).toEqual([
     { prompt_tokens: 40, cached_tokens: 60, completion_tokens: 20 },
     { prompt_tokens: 80, cached_tokens: 120, completion_tokens: 40 },
   ]);
@@ -1111,79 +1111,3 @@ test('56-exec: a spawn with a quoted message string also canonicalizes to prompt
   ).find((c) => c.tool === 'Agent')!;
   expect(call.args['prompt']).toBe('Do the thing');
 });
-
-for (const failed of [false, true])
-  test(`composite outcome mapping preserves physical output, native provenance and once-only usage (inner failure=${failed})`, () => {
-    const input = [
-      'text(await tools.exec_command({cmd: "cat /case", max_output_tokens: 20000}));',
-      'text(await tools.exec_command({workdir: "/synthetic", cmd: "cat /common", yield_time_ms: 1000}));',
-      'text(await tools.exec_command({cmd: "cat /dimension", shell: "/bin/bash", login: false, tty: false}));',
-    ].join('\n');
-    const output = [
-      {
-        type: 'input_text',
-        text: 'Script completed\nWall time 0.1 seconds\nOutput:\n',
-      },
-      ...['case', failed ? 'ENOENT' : 'common', 'dimension'].map((text, i) => ({
-        type: 'input_text',
-        text: JSON.stringify({
-          exit_code: failed && i === 1 ? 1 : 0,
-          output: text,
-        }),
-      })),
-    ];
-    const raw = [
-      execScriptLine(input, 'reads'),
-      JSON.stringify({
-        type: 'response_item',
-        timestamp: '2026-01-02T00:00:03Z',
-        payload: { type: 'custom_tool_call_output', call_id: 'reads', output },
-      }),
-      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.6' } }),
-      JSON.stringify({
-        type: 'event_msg',
-        payload: {
-          type: 'token_count',
-          info: {
-            total_token_usage: { input_tokens: 10, output_tokens: 2 },
-            last_token_usage: { input_tokens: 10, output_tokens: 2 },
-          },
-        },
-      }),
-    ].join('\n');
-    const t = normalizeCodex(raw, 'synthetic');
-    expect(validateTrajectory(t).ok).toBe(true);
-    expect(t.steps).toHaveLength(1);
-    const step = t.steps[0]!;
-    expect(step.tool_calls?.map((call) => call.tool_call_id)).toEqual([
-      'reads',
-      'reads#1',
-      'reads#2',
-    ]);
-    expect(
-      step.tool_calls?.map((call) => call.extra?.['script']).join(''),
-    ).toBe(input);
-    expect(
-      step.tool_calls?.map((call) => call.extra?.['quorum_source']),
-    ).toEqual([{ lines: [1] }, { lines: [1] }, { lines: [1] }]);
-    expect(step.observation?.results).toHaveLength(1);
-    const result = step.observation!.results[0]!;
-    expect(result.source_call_id).toBe('reads');
-    expect(result.content).toBe(JSON.stringify(output));
-    expect(result.extra?.['quorum_source']).toMatchObject({
-      lines: [2],
-      timestamp: '2026-01-02T00:00:03Z',
-    });
-    expect(result.extra?.['quorum_result']).toEqual({
-      isError: failed,
-      subcalls: [
-        { toolCallId: 'reads', isError: false, contentBytes: 4 },
-        { toolCallId: 'reads#1', isError: failed, contentBytes: 6 },
-        { toolCallId: 'reads#2', isError: false, contentBytes: 9 },
-      ],
-    });
-    expect(step.metrics?.prompt_tokens).toBe(10);
-    expect(step.metrics?.completion_tokens).toBe(2);
-    expect(t.final_metrics?.total_prompt_tokens).toBe(10);
-    expect(t.final_metrics?.total_completion_tokens).toBe(2);
-  });

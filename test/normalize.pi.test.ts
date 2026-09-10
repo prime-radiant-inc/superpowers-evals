@@ -393,13 +393,13 @@ test('toolCall step carries model_name, provider, and full usage metrics', () =>
     (s) => s.tool_calls?.[0]?.function_name === 'Read',
   )!;
   expect(readStep.model_name).toBe('gpt-5.5');
-  expect(readStep.metrics).toMatchObject({
+  expect(readStep.metrics).toEqual({
     prompt_tokens: 9958,
     completion_tokens: 137,
     cached_tokens: 0,
     cost_usd: 0.0539,
   });
-  expect(readStep.extra).toMatchObject({ provider: 'openai-codex' });
+  expect(readStep.extra).toEqual({ provider: 'openai-codex' });
 });
 
 test('cacheRead → cached_tokens, cacheWrite → extra.cache_write, cost.total → cost_usd', () => {
@@ -407,13 +407,13 @@ test('cacheRead → cached_tokens, cacheWrite → extra.cache_write, cost.total 
   const bashStep = traj.steps.find(
     (s) => s.tool_calls?.[0]?.function_name === 'Bash',
   )!;
-  expect(bashStep.metrics).toMatchObject({
+  expect(bashStep.metrics).toEqual({
     prompt_tokens: 461,
     completion_tokens: 21,
     cached_tokens: 10752,
     cost_usd: 0.008311,
   });
-  expect(bashStep.extra).toMatchObject({
+  expect(bashStep.extra).toEqual({
     provider: 'openai-codex',
     cache_write: 8,
   });
@@ -435,7 +435,7 @@ test('text-only assistant message with usage still records a metrics step', () =
   expect(validateTrajectory(traj).ok).toBe(true);
   const metricSteps = traj.steps.filter((s) => s.metrics);
   expect(metricSteps.length).toBe(1);
-  expect(metricSteps[0]!.metrics).toMatchObject({
+  expect(metricSteps[0]!.metrics).toEqual({
     prompt_tokens: 100,
     completion_tokens: 21,
     cached_tokens: 0,
@@ -475,7 +475,7 @@ test('multi-toolCall message attaches usage to first step only (no double-count)
   const traj = normalizePi(lines, '0.3.0');
   const agentSteps = traj.steps.filter((s) => s.source === 'agent');
   expect(agentSteps.length).toBe(2);
-  expect(agentSteps[0]!.metrics).toMatchObject({
+  expect(agentSteps[0]!.metrics).toEqual({
     prompt_tokens: 50,
     completion_tokens: 10,
     cached_tokens: 0,
@@ -719,13 +719,13 @@ test('disjoint buckets preserved and per-step cost is present', () => {
   const readStep = traj.steps.find(
     (s) => s.tool_calls?.[0]?.function_name === 'Read',
   )!;
-  expect(readStep.metrics).toMatchObject({
+  expect(readStep.metrics).toEqual({
     prompt_tokens: 5149,
     completion_tokens: 103,
     cached_tokens: 9728,
     cost_usd: 0.033699,
   });
-  expect(readStep.extra).toMatchObject({
+  expect(readStep.extra).toEqual({
     source_session_id: '019ecd1e-996e-70ba-8042-aeaa4c391744',
     provider: 'openai-codex',
   });
@@ -736,13 +736,13 @@ test('cache_write rides on step.extra.cache_write (not metrics.extra)', () => {
   const agentStep = traj.steps.find(
     (s) => s.tool_calls?.[0]?.function_name === 'Agent',
   )!;
-  expect(agentStep.extra).toMatchObject({
+  expect(agentStep.extra).toEqual({
     source_session_id: '019ecd1e-996e-70ba-8042-aeaa4c391744',
     provider: 'openai-codex',
     cache_write: 8,
   });
   // cache_write must NOT be under metrics.extra (obol ignores that location)
-  expect(agentStep.metrics!.extra?.['cache_write']).toBeUndefined();
+  expect(agentStep.metrics!.extra).toBeUndefined();
 });
 
 test('text-only final assistant message with usage records a metrics step with cost', () => {
@@ -751,7 +751,7 @@ test('text-only final assistant message with usage records a metrics step with c
     (s) => s.message === 'All tasks complete. The work is merged.',
   )!;
   expect(finalStep.source).toBe('agent');
-  expect(finalStep.metrics).toMatchObject({
+  expect(finalStep.metrics).toEqual({
     prompt_tokens: 200,
     completion_tokens: 40,
     cached_tokens: 12000,
