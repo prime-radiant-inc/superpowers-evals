@@ -177,3 +177,8 @@ recorded at equal billing to wins**. Before proposing an optimization or
 behavioral change, check the log: it exists so disproofs don't get
 re-purchased. Specs in the parent repo cite these entries rather than being
 their only copy.
+
+Experiment directories hold records, configs, and fixture data only — never
+runtime code. Operator paths live in `src/` and `scripts/` and run through the
+check suite and the appliance; `test/docs-no-runtime-code.test.ts` fails on any
+TypeScript under `docs/`.
