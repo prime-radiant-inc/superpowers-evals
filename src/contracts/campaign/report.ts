@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  ConversationRecordSchema,
+  GauntletRolesSchema,
+} from '../conversation.ts';
 import { TokenUsageSchema } from '../economics.ts';
 import { FiniteNumberSchema } from '../finite.ts';
 import {
@@ -8,6 +12,7 @@ import {
 } from '../verdict.ts';
 import { ArtifactRefSchema } from './execution.ts';
 import { Sha256Schema } from './experiment.ts';
+import { QualificationCoverageSchema } from './measurement.ts';
 
 const Count = z.number().int().nonnegative();
 const Quantity = FiniteNumberSchema.nonnegative().nullable();
@@ -18,6 +23,10 @@ export const AttemptEvidenceSchema = z
     observed_outcome: Outcome,
     gauntlet: GauntletLayerSchema.nullable(),
     checks: z.array(CheckRecordSchema).nullable(),
+    check_execution_complete: z.boolean(),
+    conversation: ConversationRecordSchema.nullable(),
+    roles: GauntletRolesSchema.nullable(),
+    assessment_report: ArtifactRefSchema.nullable(),
     wall_seconds: Quantity,
     subject_cost_usd: Quantity,
     subject_cost_complete: z.boolean(),
@@ -90,14 +99,49 @@ export const ComparisonRolesSchema = z.union([
     .strict(),
   z.object({ arm: z.string().min(1) }).strict(),
 ]);
+export const ObligationCountSchema = z
+  .object({
+    id: z.string(),
+    label: z.string().optional(),
+    qualification: z
+      .enum(['qualified', 'unverified', 'not_calibrated'])
+      .optional(),
+    planned: Count,
+    pass: Count,
+    fail: Count,
+    unclear: Count,
+    unavailable: Count,
+    evidence: z.array(ArtifactRefSchema),
+  })
+  .strict()
+  .refine(
+    (c) => c.pass + c.fail + c.unclear + c.unavailable === c.planned,
+    'obligation counts preserve planned denominator',
+  );
+const MeasurementsSchema = z
+  .object({
+    detail_available: z.boolean(),
+    interaction: ObligationCountSchema,
+    checks: z.array(ObligationCountSchema),
+    criteria: z.array(ObligationCountSchema),
+  })
+  .strict();
 export const ComparisonReportSchema = z
   .object({
     schema_version: z.literal('quorum.comparison-report/v1'),
-    fold_version: z.literal(1),
+    fold_version: z.literal(2),
     campaign_id: z.string().min(1),
     input_digest: Sha256Schema,
     status: z.enum(['active', 'completed', 'cancelled', 'interrupted']),
     behavior_available: z.boolean(),
+    source_refs: z
+      .object({
+        evals: z.string().regex(/^[a-f0-9]{40}$/),
+        gauntlet: z.string().regex(/^[a-f0-9]{40}$/),
+      })
+      .strict()
+      .nullable(),
+    qualification: QualificationCoverageSchema.nullable(),
     complete: z.boolean(),
     termination_verified: z.boolean(),
     comparisons: z.array(
@@ -110,7 +154,13 @@ export const ComparisonReportSchema = z
             z
               .object({
                 arm: z.string(),
+                label: z.string(),
+                source_sha: z
+                  .string()
+                  .regex(/^[a-f0-9]{40}$/)
+                  .nullable(),
                 denominator: Count,
+                measurements: MeasurementsSchema,
                 pass: Count,
                 fail: Count,
                 indeterminate: Count,
@@ -150,11 +200,42 @@ export const ComparisonReportSchema = z
                     (a.pass_rate.n ? a.pass / a.pass_rate.n : null) &&
                   Object.entries(a.available).every(
                     ([key, n]) =>
-                      n <= a.pass_rate.n &&
+                      n <= a.denominator &&
                       (n === 0) ===
                         (a.means[key as keyof typeof a.means] === null),
                   ),
                 'outcome counts must preserve planned denominator',
+              ),
+          ),
+          paired_criteria: z.array(
+            z
+              .object({
+                id: z.string(),
+                planned: Count,
+                quantity: PairedQuantitySchema,
+                qualification: z.enum([
+                  'qualified',
+                  'unverified',
+                  'not_calibrated',
+                ]),
+              })
+              .strict()
+              .refine(
+                (q) => q.quantity.n <= q.planned,
+                'paired criterion denominator exceeds planned work',
+              ),
+          ),
+          paired_checks: z.array(
+            z
+              .object({
+                id: z.string(),
+                planned: Count,
+                quantity: PairedQuantitySchema,
+              })
+              .strict()
+              .refine(
+                (q) => q.quantity.n <= q.planned,
+                'paired check denominator exceeds planned work',
               ),
           ),
           paired: z
@@ -179,8 +260,35 @@ export const ComparisonReportSchema = z
             c.arms.length === named.length &&
             new Set(c.arms.map((a) => a.arm)).size === named.length &&
             c.arms.every((a) => named.includes(a.arm)) &&
+            Object.entries(c.paired).every(
+              ([key, q]) =>
+                q.n <=
+                Math.min(
+                  ...c.arms.map((a) =>
+                    key === 'pass_rate'
+                      ? a.pass_rate.n
+                      : a.available[key as keyof typeof a.available],
+                  ),
+                ),
+            ) &&
+            [...c.paired_criteria, ...c.paired_checks].every(
+              (q) =>
+                q.planned ===
+                Math.min(
+                  ...c.arms.map(
+                    (a) =>
+                      [
+                        ...a.measurements.criteria,
+                        ...a.measurements.checks,
+                      ].find((o) => o.id === q.id)?.planned ?? 0,
+                  ),
+                ),
+            ) &&
             (!('arm' in c.roles) ||
-              Object.values(c.paired).every((q) => q.n === 0))
+              (Object.values(c.paired).every((q) => q.n === 0) &&
+                [...c.paired_criteria, ...c.paired_checks].every(
+                  (q) => q.quantity.n === 0,
+                )))
           );
         }, 'comparison roles must identify the exact arm inventory; single arms have no pairs'),
     ),
@@ -249,13 +357,19 @@ export const ComparisonReportSchema = z
       });
     if (
       !r.behavior_available &&
-      (r.comparisons.length ||
+      (r.source_refs !== null ||
+        r.qualification !== null ||
+        r.comparisons.length ||
         r.attempts.some(
           (a) =>
             a.accepted_outcome !== null ||
             a.evidence.observed_outcome !== null ||
             a.evidence.gauntlet !== null ||
-            a.evidence.checks !== null,
+            a.evidence.checks !== null ||
+            a.evidence.check_execution_complete ||
+            a.evidence.conversation !== null ||
+            a.evidence.roles !== null ||
+            a.evidence.assessment_report !== null,
         ))
     )
       ctx.addIssue({

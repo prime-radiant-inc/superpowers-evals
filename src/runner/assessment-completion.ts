@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
 
-const CompletionSchema = z.object({
+export const AssessmentCompletionSchema = z.object({
   schema_version: z.literal(1),
   run_id: z.string().regex(/^[a-zA-Z0-9-]+_\d{8}T\d{6}Z_[a-z0-9]{4}$/),
   status: z.enum(['completed', 'timed_out', 'cancelled', 'errored']),
@@ -24,8 +24,8 @@ const CompletionSchema = z.object({
 export function readAssessmentCompletion(input: {
   outDir: string;
   runId: string;
-}): z.infer<typeof CompletionSchema> {
-  const completion = CompletionSchema.parse(
+}): z.infer<typeof AssessmentCompletionSchema> {
+  const completion = AssessmentCompletionSchema.parse(
     JSON.parse(
       readFileSync(join(input.outDir, 'assessment-completion.json'), 'utf8'),
     ),

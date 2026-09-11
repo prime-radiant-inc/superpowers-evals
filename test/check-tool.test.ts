@@ -519,6 +519,7 @@ test('E2E: file-exists shim emits a byte-shaped record and exits 0', () => {
     args: ['present.txt'],
     negated: false,
     passed: true,
+    checker_status: 'completed',
     detail: null,
   });
 });
@@ -545,6 +546,7 @@ test('E2E: not file-exists (miss) inverts to pass, single negated record', () =>
     args: ['nope.txt'],
     negated: true,
     passed: true,
+    checker_status: 'completed',
     detail: null,
   });
 });
@@ -557,6 +559,7 @@ test('E2E: not on a typo tool preserves exit 127 with a fail record under not', 
     check: 'not',
     negated: false,
     passed: false,
+    checker_status: 'errored',
   });
 });
 

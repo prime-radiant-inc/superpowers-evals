@@ -72,12 +72,12 @@ test('paired comparison readout exposes roles, independent quantity coverage, an
 
   expect(comparison.roles).toEqual({ baseline: 'b', treatment: 't1' });
   expect(comparison.paired.wall_seconds).toEqual({
-    n: 2,
-    baseline_mean: 55,
-    treatment_mean: 30,
-    mean_delta: -25,
+    n: 3,
+    baseline_mean: 53.3333333333333,
+    treatment_mean: 40,
+    mean_delta: -13.3333333333333,
   });
-  expect(comparison.paired.subject_cost_usd.n).toBe(1);
+  expect(comparison.paired.subject_cost_usd.n).toBe(2);
   expect(value.report.elapsed.seconds).toBe(24);
   expect(value.report.attempts).toHaveLength(12);
   expect(
@@ -93,9 +93,9 @@ test('paired comparison readout exposes roles, independent quantity coverage, an
   const rendered = renderCampaignReport(value);
   expect(rendered).toContain('Baseline: b; treatment: t1');
   expect(rendered).toContain(
-    'wall_seconds: pairs 2; baseline 55; treatment 30; delta -25',
+    'wall_seconds: pairs 3; baseline 53.3333333333333; treatment 40; delta -13.3333333333333',
   );
-  expect(rendered).toContain('subject_cost_usd: pairs 1');
+  expect(rendered).toContain('subject_cost_usd: pairs 2');
   expect(rendered).toContain(
     'pass_rate: pairs 2; baseline 0.5; treatment 1; rate difference 0.5',
   );

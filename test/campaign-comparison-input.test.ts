@@ -4,6 +4,7 @@ import {
   parsePairing,
   type ResolvedComparisonInput,
 } from '../src/campaign/comparison-input.ts';
+import { resolveMeasurementRequirements } from '../src/campaign/measurement-requirements.ts';
 import type { Suite } from '../src/contracts/campaign/suite.ts';
 
 const suite: Suite = {
@@ -145,7 +146,12 @@ test.each([
     ].slice(0, pairCount),
   };
   const compiled = materializeComparison(SuiteSchema.parse(rawSuite), resolved);
-  const intake = readIntakeFromEvalsTree(root);
+  const intake = readIntakeFromEvalsTree(
+    root,
+    compiled.suite.measurement_requirements
+      ? [compiled.suite.measurement_requirements.path]
+      : [],
+  );
   const stats = FAKE_PROBE.sample(0);
   const prepared = prepareRegistration({
     ...compiled,
@@ -181,6 +187,14 @@ test.each([
     registeredAt: '2026-09-10T00:00:00Z',
     registeredBy: 'test',
   });
+  const requirements = resolveMeasurementRequirements({
+    files: intake.files,
+    scenarios: prepared.cells.map((c) => c.scenario),
+    ...(compiled.suite.measurement_requirements
+      ? { reference: compiled.suite.measurement_requirements }
+      : {}),
+  });
+  expect(Object.keys(requirements)).toHaveLength(name === 'focused' ? 7 : 22);
   expect(prepared.planned_slots).toHaveLength(slots);
   expect(prepared.reserve_slots).toHaveLength(0);
   for (const cell of prepared.cells)

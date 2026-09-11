@@ -13,6 +13,10 @@ import {
   type AttemptEvidence,
   AttemptEvidenceSchema,
 } from '../contracts/campaign/report.ts';
+import {
+  ConversationRecordSchema,
+  GauntletRolesSchema,
+} from '../contracts/conversation.ts';
 import { TokenUsageSchema } from '../contracts/economics.ts';
 import {
   CheckRecordSchema,
@@ -20,6 +24,7 @@ import {
   GauntletLayerSchema,
   GauntletProcessExitSchema,
 } from '../contracts/verdict.ts';
+import { AssessmentCompletionSchema } from '../runner/assessment-completion.ts';
 import { parseAttemptManifest } from '../runner/manifest.ts';
 import {
   readPublishedArtifact,
@@ -44,6 +49,10 @@ export function missingAttemptEvidence(
     observed_outcome: null,
     gauntlet: null,
     checks: null,
+    check_execution_complete: false,
+    conversation: null,
+    roles: null,
+    assessment_report: null,
     wall_seconds: null,
     subject_cost_usd: null,
     subject_cost_complete: false,
@@ -103,7 +112,7 @@ export function readAttemptEvidence(args: {
       })),
       manifestRef,
     ];
-    e.artifacts = refs;
+
     for (const ref of refs) {
       if (!expected.some((bound) => bound.path === ref.path))
         fail(ref.path, 'unlisted artifact reference supplies no evidence');
@@ -121,6 +130,7 @@ export function readAttemptEvidence(args: {
       }
       try {
         bodies.set(ref.path, readPublishedArtifactBytes(args.resultsRoot, ref));
+        e.artifacts.push(ref);
       } catch {
         fail(ref.path, 'artifact authentication failed');
       }
@@ -143,6 +153,12 @@ export function readAttemptEvidence(args: {
       return {};
     }
   };
+  const conversation = ConversationRecordSchema.safeParse(
+    json('conversation.json'),
+  );
+  e.conversation = conversation.success ? conversation.data : null;
+  const roles = GauntletRolesSchema.safeParse(json('gauntlet-roles.json'));
+  e.roles = roles.success ? roles.data : null;
   const v = json('verdict.json');
   if (Object.keys(v).length) {
     const identity = CampaignIdentitySchema.safeParse(v['campaign']);
@@ -166,6 +182,69 @@ export function readAttemptEvidence(args: {
     fail('gauntlet.process_exit', 'invalid settled process facts');
   const checks = z.array(CheckRecordSchema).safeParse(v['checks']);
   e.checks = checks.success ? checks.data : null;
+  e.check_execution_complete = v['error'] === null;
+  const checkBytes = bodies.get(`${runId}/evidence/checks.json`);
+  if (checkBytes) {
+    try {
+      e.checks = z
+        .array(CheckRecordSchema)
+        .parse(JSON.parse(checkBytes.toString('utf8')));
+    } catch {
+      fail('checks', 'malformed authenticated check artifact');
+    }
+  }
+  if (object(v['error'])['stage'] === 'capture')
+    fail(
+      'normalized_trace',
+      'capture reported unavailable or defective normalization',
+    );
+  if (e.roles) {
+    const out = e.roles.assessment.out_dir;
+    const completion = json(`${out}/assessment-completion.json`);
+    const resultBytes = bodies.get(`${runId}/${out}/result.json`);
+    const accepted =
+      resultBytes &&
+      AssessmentCompletionSchema.safeParse(completion).success &&
+      e.roles.assessment.stop_cause === null &&
+      completion['schema_version'] === 1 &&
+      completion['status'] === 'completed' &&
+      completion['run_id'] === out.split('/').at(-1) &&
+      completion['accepted_report_sha256'] ===
+        Bun.SHA256.hash(resultBytes, 'hex');
+    if (accepted) {
+      const result = json(`${out}/result.json`);
+      const layer = GauntletLayerSchema.safeParse({
+        ...result,
+        run_id: result['runId'],
+      });
+      const rows = layer.success ? layer.data.criteria : undefined;
+      const expectedStatus = rows?.some((r) => r.verdict === 'fail')
+        ? 'fail'
+        : rows?.every((r) => r.verdict === 'pass')
+          ? 'pass'
+          : 'investigate';
+      if (
+        layer.success &&
+        result['runId'] === completion['run_id'] &&
+        result['scenario'] === String(completion['run_id']).split('_')[0] &&
+        layer.data.status === expectedStatus &&
+        rows?.length &&
+        rows.every(
+          (r) =>
+            ['pass', 'fail', 'unclear'].includes(r.verdict) &&
+            r.criterion.trim().length &&
+            r.evidence.trim().length,
+        )
+      ) {
+        e.gauntlet = layer.data;
+        e.assessment_report =
+          e.artifacts.find((r) => r.path === `${runId}/${out}/result.json`) ??
+          null;
+      }
+    }
+    if (!e.assessment_report)
+      fail('assessment', 'completed accepted assessment report unavailable');
+  }
   const versions = FinalVerdictSchema.shape.provenance.safeParse(
     v['provenance'],
   );
@@ -196,8 +275,10 @@ export function readAttemptEvidence(args: {
   if (
     assessmentAccounting !== undefined &&
     object(assessmentAccounting)['complete'] !== true
-  )
+  ) {
     e.grader_cost_complete = false;
+    fail('grader_tokens', 'known subtotal only; request usage incomplete');
+  }
   const usageRaw = json('coding-agent-token-usage.json');
   const sanitizedUsage = {
     ...usageRaw,
@@ -330,4 +411,143 @@ export function readBlockValidity(args: {
       ],
     };
   }
+}
+
+export type ObligationObservation = {
+  id: string;
+  verdict: 'pass' | 'fail' | 'unclear' | null;
+  evidence: ArtifactRef[];
+};
+/** Each obligation consumes only its declared sources; accepted prose is never reconstructed from partial output. */
+export function measureAttempt(
+  e: AttemptEvidence | undefined,
+  requirements:
+    | import('../contracts/campaign/measurement.ts').ScenarioMeasurement
+    | undefined,
+): {
+  interaction: ObligationObservation;
+  checks: ObligationObservation[];
+  criteria: ObligationObservation[];
+} {
+  if (e && !e.publication_valid) e = undefined;
+  const refs = e?.artifacts ?? [];
+  const supporting = (suffix: string) =>
+    refs.filter((r) => r.path.endsWith(`/${suffix}`));
+  const checksEvidence = supporting('evidence/checks.json').length
+    ? supporting('evidence/checks.json')
+    : supporting('verdict.json');
+  const visible =
+    e?.conversation?.status === 'completed' && e.conversation.evidence
+      ? supporting(e.conversation.evidence.path)
+      : [];
+  const interaction: ObligationObservation = {
+    id: 'interaction',
+    verdict: visible.length ? 'pass' : null,
+    evidence: visible.length
+      ? [...supporting('conversation.json'), ...visible]
+      : [],
+  };
+  const artifactClass = (
+    kind: import('../contracts/campaign/measurement.ts').ScenarioMeasurement['criteria'][number]['required_artifact_classes'][number],
+  ): ArtifactRef[] => {
+    const matches = (path: string) =>
+      kind === 'normalized_trace'
+        ? path.endsWith('/trajectory.json')
+        : kind === 'native_session'
+          ? path.includes('/evidence/native/')
+          : kind === 'output'
+            ? path.includes('/evidence/output/') ||
+              path.includes('/coding-agent-workdir/')
+            : false;
+    if (kind === 'visible_delivery') return visible;
+    if (kind === 'check_dispositions') return e?.checks ? checksEvidence : [];
+    if (e?.missingness.some((m) => m.field === kind || matches(m.field)))
+      return [];
+    return refs.filter((r) => matches(r.path));
+  };
+  const remainingChecks = new Set(e?.checks ?? []);
+  const checks = [...(requirements?.checks ?? [])]
+    .sort((a, b) => Number(a.args === null) - Number(b.args === null))
+    .flatMap((c) => {
+      const matching = [...remainingChecks].filter(
+        (r) =>
+          r.phase === c.phase &&
+          r.check === c.check &&
+          r.negated === c.negated &&
+          (c.args === null ||
+            jcsCanonicalize(r.args) === jcsCanonicalize(c.args)),
+      );
+      for (const record of matching) remainingChecks.delete(record);
+      return Array.from(
+        { length: c.count },
+        (_, index): ObligationObservation => {
+          const record =
+            matching.length <= c.count ? matching[index] : undefined;
+          // Current emitters classify crashes. Retained false rows without that fact
+          // cannot establish a behavioral failure in an independently measured check.
+          const verdict =
+            record &&
+            record.checker_status !== 'errored' &&
+            (record.passed ||
+              record.checker_status === 'completed' ||
+              e?.check_execution_complete) &&
+            (c.authority.kind !== 'process_check' ||
+              artifactClass('normalized_trace').length > 0)
+              ? record.passed
+                ? 'pass'
+                : 'fail'
+              : null;
+          return {
+            id: `check:${c.ordinal}`,
+            verdict,
+            evidence: verdict ? checksEvidence : [],
+          };
+        },
+      );
+    });
+  const criteria = (requirements?.criteria ?? []).map(
+    (c): ObligationObservation => {
+      const row = e?.gauntlet?.criteria?.[c.ordinal - 1];
+      const dependencies = c.required_artifact_classes.map(artifactClass);
+      const checkDependenciesAvailable =
+        !c.required_artifact_classes.includes('check_dispositions') ||
+        (c.check_refs.length > 0 &&
+          c.check_refs.every((ref) => {
+            const records = checks.filter(
+              (r) => r.id === `check:${ref.ordinal}`,
+            );
+            return (
+              records.length > 0 && records.every((r) => r.verdict !== null)
+            );
+          }));
+      const accepted =
+        requirements?.mode !== 'conversation' ||
+        (e?.assessment_report !== null && e?.assessment_report !== undefined);
+      const verdict =
+        accepted &&
+        checkDependenciesAvailable &&
+        row?.criterion === c.text &&
+        ['pass', 'fail', 'unclear'].includes(row.verdict) &&
+        row.evidence.trim().length > 0 &&
+        dependencies.every((r) => r.length > 0)
+          ? (row.verdict as 'pass' | 'fail' | 'unclear')
+          : null;
+      return {
+        id: `${requirements?.rubric_sha256}:${c.ordinal}`,
+        verdict,
+        evidence: verdict
+          ? [
+              ...(e?.assessment_report
+                ? [e.assessment_report]
+                : supporting('verdict.json')),
+              ...dependencies.flat(),
+            ]
+          : [],
+      };
+    },
+  );
+  checks.sort(
+    (a, b) => Number(a.id.split(':')[1]) - Number(b.id.split(':')[1]),
+  );
+  return { interaction, checks, criteria };
 }

@@ -1236,7 +1236,7 @@ test('registration freezes role budgets from committed story and agent bytes des
   const agent = readFileSync(agentPath, 'utf8');
   writeFileSync(
     storyPath,
-    '---\nquorum_mode: conversation\nquorum_assessment_max_time: 5m\nquorum_assessment_report_grace: 60s\n---\nStory.\n',
+    '---\nquorum_mode: conversation\nquorum_assessment_max_time: 5m\nquorum_assessment_report_grace: 60s\n---\nStory.\n\n## Acceptance Criteria\n\n- Deliver the requested result.\n',
   );
   writeFileSync(agentPath, `${agent}max_time: 20m\n`);
   git(['add', 'scenarios/scn-a/story.md', 'coding-agents/claude.yaml']);
@@ -1287,3 +1287,136 @@ test('present frozen role budgets require exact cell and arm inventory and valid
   const { role_budgets: _budgets, ...retained } = experiment;
   expect(ExperimentSchema.parse(retained).role_budgets).toBeUndefined();
 });
+
+test('registration authenticates requirements and qualification source bytes in both intake passes', () => {
+  const args = experimentRegisterArgs();
+  mkdirSync(join(args.evalsCheckout, 'dep'));
+  writeFileSync(
+    join(args.evalsCheckout, 'dep/package.json'),
+    JSON.stringify({ name: 'fixture-dep', version: '0.0.0' }),
+  );
+  writeFileSync(
+    join(args.evalsCheckout, 'package.json'),
+    JSON.stringify({
+      name: 'fixture',
+      version: '0.0.0',
+      workspaces: ['dep'],
+      dependencies: { 'fixture-dep': 'workspace:*' },
+    }),
+  );
+  const installed = args.runner.run('bun', ['install'], {
+    cwd: args.evalsCheckout,
+  });
+  if (installed.status !== 0) throw new Error(installed.stderr);
+  const story = readFileSync(
+    join(args.evalsCheckout, 'scenarios/scn-a/story.md'),
+    'utf8',
+  );
+  const manifest = readFileSync(
+    join(args.evalsCheckout, 'scenarios/scn-a/checks-manifest.json'),
+    'utf8',
+  );
+  const rubric = sha256Hex(story);
+  const requirements = JSON.stringify({
+    schema_version: 1,
+    scenarios: {
+      'scn-a': {
+        mode: 'qa',
+        story_sha256: rubric,
+        rubric_sha256: rubric,
+        criteria: [],
+        checks: [],
+        oracle_authority: { check_manifest_sha256: sha256Hex(manifest) },
+      },
+    },
+  });
+  const cases = JSON.stringify({
+    schema_version: 1,
+    assessments_per_case: 1,
+    cases: [
+      {
+        id: 'case',
+        rubric_sha256: rubric,
+        expected: [
+          {
+            criterion: 1,
+            verdict: 'pass',
+            required_reason: 'fixture expected behavior',
+          },
+        ],
+      },
+    ],
+  });
+  const qualification = JSON.stringify({
+    schema_version: 1,
+    gauntlet_sha: 'a'.repeat(40),
+    grader: {
+      credential: 'fixture',
+      model: 'fixture',
+      configuration_sha256: 'a'.repeat(64),
+    },
+    evidence_semantics_sha256: 'b'.repeat(64),
+    scopes: [
+      {
+        scenario: 'scn-a',
+        rubric_sha256: rubric,
+        criterion_ids: ['scn-a:1'],
+        assessment_ms: 300000,
+        report_grace_ms: 60000,
+        case_manifest: { path: 'cases.json', sha256: sha256Hex(cases) },
+        private_receipt_sha256: 'c'.repeat(64),
+        observations: [],
+      },
+    ],
+  });
+  for (const [path, bytes] of Object.entries({
+    'requirements.json': requirements,
+    'cases.json': cases,
+    'qualification.json': qualification,
+  }))
+    writeFileSync(join(args.evalsCheckout, path), bytes);
+  const git = (argv: string[]) => {
+    const result = args.runner.run('git', ['-C', args.evalsCheckout, ...argv]);
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git([
+    'add',
+    'requirements.json',
+    'cases.json',
+    'qualification.json',
+    'package.json',
+    'bun.lock',
+    'dep/package.json',
+  ]);
+  git(['commit', '-qm', 'freeze public measurement declarations']);
+  const evalsRef = git(['rev-parse', 'HEAD']);
+  const suiteRaw = `${args.suiteRaw}\nmeasurement_requirements:\n  path: requirements.json\n  sha256: ${sha256Hex(requirements)}\nassessment_qualification:\n  path: qualification.json\n  sha256: ${sha256Hex(qualification)}\n`;
+  const frozen = registerExperimentCampaign({
+    ...args,
+    evalsRef,
+    suiteRaw,
+  }).experiment;
+  expect(frozen.measurement_requirements?.['scn-a']?.rubric_sha256).toBe(
+    rubric,
+  );
+  expect(frozen.assessment_qualification?.scopes[0]?.status).toBe('unverified');
+  for (const path of ['requirements.json', 'cases.json', 'src/cli/index.ts']) {
+    const runner: CommandRunner = {
+      run(command, argv, options) {
+        const result = args.runner.run(command, argv, options);
+        if (
+          command === 'bun' &&
+          argv.includes('install') &&
+          options?.cwd?.startsWith(realpathSync(args.campaignsRoot)) &&
+          options.cwd.endsWith('/evals')
+        )
+          writeFileSync(join(options.cwd, path), 'tampered');
+        return result;
+      },
+    };
+    expect(() =>
+      registerExperimentCampaign({ ...args, evalsRef, suiteRaw, runner }),
+    ).toThrow(/drifted from intake bytes/);
+  }
+}, 60000);

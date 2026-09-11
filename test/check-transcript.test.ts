@@ -162,6 +162,7 @@ test('valid zero-tool evidence makes a positive requirement fail normally and a 
   expect(positive.lastRecord).toMatchObject({
     check: 'tool-called',
     passed: false,
+    checker_status: 'completed',
   });
   expect(negative.exitCode).toBe(0);
   expect(negative.lastRecord).toMatchObject({
@@ -178,6 +179,7 @@ for (const availability of ['unavailable', 'errored'] as const) {
     expect(result.lastRecord).toMatchObject({
       check: 'tool-not-called',
       passed: false,
+      checker_status: 'errored',
     });
     expect(result.lastRecord?.['detail']).toContain(availability);
   });

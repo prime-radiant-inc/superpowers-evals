@@ -122,3 +122,46 @@ Require truthful dispositions for all 84/366 primary samples, every declared
 repetition, required judgments/checks/capture and authenticated source identity.
 Report actor-specific cost coverage separately. Small-sample descriptive deltas
 do not establish equivalence, and these reports make no automatic release decision.
+
+## Qualification and independent measurements
+
+The six conversation-code-review criteria explicitly set
+`requires_assessment_qualification: true`. This is measurement scope metadata;
+it does not alter their text, expected labels or evidence requirements. Other
+criteria retain their own assessment/check provenance with accuracy not
+calibrated by this pack. An accepted judgment remains visible independently of
+qualification. An unverified scoped pass cannot support a quality conclusion.
+
+Suite `measurement_requirements` and optional `assessment_qualification` use
+repository-relative `{path, sha256}` references. Both registration intake
+passes verify the consumed bytes. Registration freezes rubric/check ordinals,
+text, hashes, evidence dependencies and declared check-support scope into the
+experiment. Templates attach qualification only after Task 9 produces its
+versioned public record.
+
+Qualification records use `schema_version: 1`, `gauntlet_sha`,
+`grader: {credential, model, configuration_sha256}` and
+`evidence_semantics_sha256`. Grader configuration hashes JCS of the complete
+normalized public `CredentialSchema` value; environment variable names are
+included but no resolved secret values are used. Evidence semantics hash JCS
+of a sorted mapping from every authenticated `src/` file plus `package.json`
+and `bun.lock` to its exact-byte SHA-256. Registration recomputes this from the
+object-store and materialized intake. It excludes docs and qualification data,
+avoiding a circular reference to the evals commit containing the record.
+
+Each record scope carries `scenario`, `rubric_sha256`, `criterion_ids`,
+`assessment_ms`, `report_grace_ms`, `case_manifest: {path, sha256}` and
+`private_receipt_sha256`. Its `observations` contain `case_id`, one-based
+`replicate`, `completed`, criterion rows `{criterion, verdict, reason_support}`
+and `cost: {subject, grader}`, each actor having `{known_subtotal, complete}`.
+Verdict may be null; reason support is `supported`, `unsupported` or
+`unavailable`. No private path or raw response belongs in this record.
+
+The consumer authenticates the referenced public case manifest and requires
+its entire case/replicate inventory, expected verdict vectors and supported
+reason judgments, plus exact source, grader, rubric and role-budget bindings.
+Unknown price coverage alone does not invalidate semantic qualification.
+Missing or mismatched scope is unverified; malformed or hash-corrupt consumed
+files reject registration. Source changes conservatively require new
+qualification. Fold version 2 reports independent quantity cohorts and never
+rewrites historical reports.

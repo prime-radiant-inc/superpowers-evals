@@ -131,6 +131,10 @@ function evalsRepo(): { dir: string; sha: string } {
     join(dir, 'scenarios', 'scn-a', 'checks.sh'),
     'pre() { :; }\npost() { :; }\n',
   );
+  writeFileSync(
+    join(dir, 'scenarios', 'scn-a', 'checks-manifest.json'),
+    JSON.stringify({ schema_version: 1, entries: [] }),
+  );
   mkdirSync(join(dir, 'src', 'cli'), { recursive: true });
   writeFileSync(
     join(dir, 'src', 'cli', 'index.ts'),
