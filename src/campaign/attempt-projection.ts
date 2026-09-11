@@ -80,6 +80,7 @@ function assertAttemptId(attemptId: string): void {
     attemptId === '' ||
     attemptId === '.' ||
     attemptId === '..' ||
+    !attemptId.isWellFormed() ||
     attemptId.includes('/') ||
     attemptId.includes('\\') ||
     attemptId.includes('\0') ||
