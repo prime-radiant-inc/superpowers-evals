@@ -772,10 +772,10 @@ test('sampler distinguishes an opaque storage failure from missing probe evidenc
 test('admission observations preserve host-only coverage and the valid stream prefix', async () => {
   const root = mkdtempSync(join(tmpdir(), 'wait-telemetry-'));
   const wait = {
-    kind: 'admission_wait',
+    kind: 'admission_wait' as const,
     at: '2026-09-10T00:00:00Z',
     block_id: 'block',
-    reason: 'pool_capacity',
+    reason: 'pool_capacity' as const,
     pool_id: 'grader',
     reserved: 2,
     capacity: 2,

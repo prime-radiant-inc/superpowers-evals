@@ -1917,3 +1917,34 @@ for (const graderCap of [6, 2])
     }
     await settle(f, run);
   });
+
+test('a block observes capacity changing to launch spacing without per-tick records', async () => {
+  const f = fixture({ n: 2, spacing: 1, reserve: 0 });
+  const run = runCampaignDispatch(f.context, f.deps);
+  await flush();
+  f.clock.advance(1);
+  await flush();
+  expect(f.started).toHaveLength(2);
+  const reasons = () =>
+    parseSidecar(f.context.campaignDir)
+      .waits.filter((w) => w.block_id === 'second')
+      .map((w) => w.reason);
+  expect(reasons()).toEqual(['pool_capacity']);
+  f.complete(0);
+  f.complete(1);
+  await flush();
+  expect(reasons()).toEqual(['pool_capacity', 'launch_spacing']);
+  f.clock.advance(0.25);
+  await flush();
+  expect(reasons()).toEqual(['pool_capacity', 'launch_spacing']);
+  for (let i = 0; i < 40 && f.started.length < 4; i++) {
+    const next = f.clock.earliestWaiter();
+    if (next === null) break;
+    f.clock.setTo(next);
+    await flush();
+  }
+  expect(f.started).toHaveLength(4);
+  f.complete(2);
+  f.complete(3);
+  await settle(f, run);
+});

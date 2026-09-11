@@ -193,11 +193,55 @@ export function readAttemptEvidence(args: {
       fail('checks', 'malformed authenticated check artifact');
     }
   }
+  if (bodies.has(`${runId}/trajectory.json`)) {
+    const trajectory = json('trajectory.json');
+    if (!Array.isArray(trajectory['steps']) || trajectory['steps'].length === 0)
+      fail('normalized_trace', 'malformed or empty normalized trajectory');
+  }
   if (object(v['error'])['stage'] === 'capture')
     fail(
       'normalized_trace',
       'capture reported unavailable or defective normalization',
     );
+  // QA terminal captures establish visible evidence availability, never a
+  // conversation endpoint. Only the bound producer stream can name captures.
+  if (!e.conversation && e.gauntlet?.run_id) {
+    try {
+      const id = e.gauntlet.run_id;
+      if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw Error('invalid QA run identity');
+      const root = `${runId}/gauntlet-agent/results/${id}`;
+      const stream = bodies.get(`${root}/run.jsonl`);
+      if (!stream) throw Error('missing QA event stream');
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(stream);
+      if (!text.endsWith('\n')) throw Error('incomplete QA event stream');
+      let captures = 0;
+      for (const line of text.trimEnd().split('\n')) {
+        const event = object(JSON.parse(line));
+        if (typeof event['type'] !== 'string') throw Error('invalid QA event');
+        if (
+          event['type'] !== 'tool_result' ||
+          event['capturePath'] === undefined
+        )
+          continue;
+        const path = event['capturePath'];
+        if (typeof path !== 'string' || !/^captures\/\d+\.ansi$/.test(path))
+          throw Error('unbound QA capture');
+        const ansi = bodies.get(`${root}/${path}`);
+        const grid = bodies.get(`${root}/${path.replace(/\.ansi$/, '.json')}`);
+        if (!ansi || !grid) throw Error('missing QA capture twin');
+        new TextDecoder('utf-8', { fatal: true }).decode(ansi);
+        z.object({
+          cells: z.array(z.array(z.object({ ch: z.string() }))),
+        }).parse(
+          JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(grid)),
+        );
+        captures++;
+      }
+      if (!captures) throw Error('no bound QA captures');
+    } catch (error) {
+      fail('visible_delivery', String(error));
+    }
+  }
   if (e.roles) {
     const out = e.roles.assessment.out_dir;
     const completion = json(`${out}/assessment-completion.json`);
@@ -457,14 +501,24 @@ export function measureAttempt(
   ): ArtifactRef[] => {
     const matches = (path: string) =>
       kind === 'normalized_trace'
-        ? path.endsWith('/trajectory.json')
+        ? path === `${runRoot}/trajectory.json`
         : kind === 'native_session'
-          ? path.includes('/evidence/native/')
+          ? path.startsWith(`${runRoot}/evidence/native/`)
           : kind === 'output'
-            ? path.includes('/evidence/output/') ||
-              path.includes('/coding-agent-workdir/')
+            ? path.startsWith(`${runRoot}/evidence/output/`) ||
+              path.startsWith(`${runRoot}/coding-agent-workdir/`)
             : false;
-    if (kind === 'visible_delivery') return visible;
+    if (kind === 'visible_delivery') {
+      if (e?.missingness.some((m) => m.field === kind)) return [];
+      if (visible.length) return visible;
+      if (e?.conversation || !e?.gauntlet?.run_id) return [];
+      const root = `${runRoot}/gauntlet-agent/results/${e.gauntlet.run_id}`;
+      return refs.filter(
+        (r) =>
+          r.path === `${root}/run.jsonl` ||
+          r.path.startsWith(`${root}/captures/`),
+      );
+    }
     if (kind === 'check_dispositions') return e?.checks ? checksEvidence : [];
     if (e?.missingness.some((m) => m.field === kind || matches(m.field)))
       return [];

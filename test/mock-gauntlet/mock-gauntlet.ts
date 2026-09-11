@@ -13,7 +13,13 @@
 // graceful-SIGINT receiver test can interrupt the runner mid-flight;
 // `startup-error` and `killed` die before writing anything, the way the real
 // binary does when its grader cannot even be constructed or it is signalled.
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -104,6 +110,38 @@ if (fixture === 'hang') {
   const resultsDir = join(projectDir, 'gauntlet-agent', 'results', runId);
   mkdirSync(resultsDir, { recursive: true });
   cpSync(join(fixtureDir, 'result.json'), join(resultsDir, 'result.json'));
+  // The QA capture fixture uses the same event and capture twins as EvidenceLogger.
+  if (process.env['MOCK_GAUNTLET_QA_CAPTURE'] === '1') {
+    const resultPath = join(resultsDir, 'result.json');
+    const result = JSON.parse(readFileSync(resultPath, 'utf8'));
+    result.criteria = [
+      {
+        criterion: 'Observed the subject',
+        verdict: 'pass',
+        evidence: 'The retained terminal contains fixture output.',
+      },
+    ];
+    writeFileSync(resultPath, JSON.stringify(result));
+    mkdirSync(join(resultsDir, 'captures'));
+    writeFileSync(join(resultsDir, 'captures/000.ansi'), 'fixture output');
+    writeFileSync(
+      join(resultsDir, 'captures/000.json'),
+      JSON.stringify({ cells: [[{ ch: 'f' }]] }),
+    );
+    writeFileSync(
+      join(resultsDir, 'run.jsonl'),
+      `${JSON.stringify({
+        eventId: 1,
+        parentEventId: 0,
+        ts: new Date().toISOString(),
+        type: 'tool_result',
+        toolCallId: 'capture-1',
+        name: 'terminal',
+        capturePath: 'captures/000.ansi',
+        text: 'captures/000.ansi',
+      })}\n`,
+    );
+  }
   const usageSrc = join(fixtureDir, 'usage.jsonl');
   if (existsSync(usageSrc)) {
     cpSync(usageSrc, join(resultsDir, 'usage.jsonl'));

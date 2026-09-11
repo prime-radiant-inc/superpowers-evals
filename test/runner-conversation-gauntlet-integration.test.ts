@@ -4,6 +4,7 @@ import { expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,8 +14,17 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { readCommittedPrefix } from '../src/campaign/execution-journal.ts';
+import { foldComparisonReport } from '../src/campaign/report.ts';
+import {
+  deliverComparisonReport,
+  readReportDelivery,
+} from '../src/campaign/report-delivery.ts';
+import { readAttemptEvidence } from '../src/campaign/report-evidence.ts';
+import { readComparisonReadout } from '../src/campaign/report-publication.ts';
 import { snapshotDir } from '../src/capture/index.ts';
 import { GauntletRolesSchema } from '../src/contracts/conversation.ts';
+import type { FinalVerdict } from '../src/contracts/verdict.ts';
 import type { RunEconomics } from '../src/economics.ts';
 import { getEnv } from '../src/env.ts';
 import { runPreparedConversation } from '../src/runner/conversation.ts';
@@ -23,6 +33,162 @@ import {
   AssessmentFixtureEvidence,
   DeferredResponses,
 } from './assessment-wire-fixture.ts';
+import { twoArmExperiment } from './fixtures/core-comparison/factory.ts';
+import {
+  completedPublicationFixture,
+  finishPublicationFixture,
+} from './fixtures/core-comparison/publication.ts';
+
+function verifyPublishedFailure(
+  runDir: string,
+  verdict: FinalVerdict,
+  mode: string,
+) {
+  const experiment = twoArmExperiment();
+  experiment.measurement_requirements = {
+    scenario: {
+      mode: 'conversation',
+      story_sha256: 'a'.repeat(64),
+      rubric_sha256: 'b'.repeat(64),
+      check_manifest_sha256: 'c'.repeat(64),
+      checks: verdict.checks.map((check, ordinal) => ({
+        ordinal,
+        phase: check.phase!,
+        check: check.check,
+        args: check.args,
+        negated: check.negated,
+        count: 1,
+        authority: { kind: 'output_check' as const, sources: ['oracle.cjs'] },
+      })),
+      criteria: [
+        {
+          id: 'scenario:1',
+          ordinal: 1,
+          text: 'Fix pricing',
+          required_artifact_classes: ['normalized_trace', 'output'],
+          check_refs: [],
+        },
+      ],
+    },
+  };
+  const f = completedPublicationFixture(
+    'primary',
+    experiment,
+    undefined,
+    (target, identity) => {
+      for (const path of [
+        'conversation-agent',
+        'gauntlet-agent',
+        'evidence',
+        'conversation.json',
+        'gauntlet-roles.json',
+        'trajectory.json',
+        'coding-agent-token-usage.json',
+      ]) {
+        if (
+          existsSync(join(runDir, path)) &&
+          !(mode === 'trace-unavailable' && path === 'trajectory.json')
+        )
+          cpSync(join(runDir, path), join(target, path), { recursive: true });
+      }
+      writeFileSync(
+        join(target, 'verdict.json'),
+        JSON.stringify({
+          ...verdict,
+          campaign:
+            mode === 'source-mismatch'
+              ? { ...identity, sample_id: 'other-source' }
+              : identity,
+        }),
+      );
+    },
+  );
+  try {
+    const processes = { observe: () => 'dead' as const };
+    const active = readComparisonReadout(f, { observe: () => 'live' as const });
+    expect(active.report.behavior_available).toBe(false);
+    expect(active.report.comparisons).toEqual([]);
+    expect(() =>
+      deliverComparisonReport({
+        ...f,
+        processes: { observe: () => 'live' as const },
+        now: Date.now,
+      }),
+    ).toThrow('behavioral report unavailable');
+    finishPublicationFixture(f);
+    const state = readCommittedPrefix(f.campaignDir).projection;
+    const evidenceByAttempt = new Map(
+      [...state.attempts.values()].map((a) => [
+        a.intent.identity.execution_attempt_id,
+        readAttemptEvidence({
+          resultsRoot: f.resultsRoot,
+          expectedIdentity: a.intent.identity,
+          artifacts: a.observation!.artifacts,
+        }),
+      ]),
+    );
+    const folded = foldComparisonReport({
+      experiment: f.experiment,
+      state,
+      evidenceByAttempt,
+      validityByBlock: new Map([['primary', { available: true, reasons: [] }]]),
+    });
+    const delivered = deliverComparisonReport({
+      ...f,
+      processes,
+      now: Date.now,
+    });
+    expect(delivered.report.report.comparisons).toEqual(folded.comparisons);
+    for (const arm of folded.comparisons[0]!.arms) {
+      const m = arm.measurements;
+      for (const obligation of [m.interaction, ...m.checks, ...m.criteria])
+        expect(
+          obligation.pass +
+            obligation.fail +
+            obligation.unclear +
+            obligation.unavailable,
+        ).toBe(obligation.planned);
+      expect(m.interaction.pass).toBe(mode === 'source-mismatch' ? 0 : 1);
+      const accepted = [
+        'reserve',
+        'retry',
+        'checker-missing',
+        'checker-crash',
+        'check-fail',
+      ].includes(mode);
+      expect(m.criteria[0]!.pass).toBe(accepted ? 1 : 0);
+      expect(m.criteria[0]!.unavailable).toBe(accepted ? 0 : 1);
+      expect(m.checks[0]!.fail).toBe(mode === 'check-fail' ? 1 : 0);
+      expect(m.checks[0]!.unavailable).toBe(
+        ['checker-missing', 'checker-crash', 'source-mismatch'].includes(mode)
+          ? 1
+          : 0,
+      );
+    }
+    expect(folded.accounting.grader_cost_usd.attempts).toBe(2);
+    if (mode === 'retry') {
+      expect(folded.accounting.grader_cost_usd.known_subtotal).toBeGreaterThan(
+        0,
+      );
+      expect(folded.accounting.grader_cost_usd.complete).toBe(false);
+    }
+    const criterionReady = delivered.delivery.measurement_readiness.filter(
+      (r) => r.kind === 'criterion',
+    );
+    expect(criterionReady.every((r) => r.complete)).toBe(
+      [
+        'reserve',
+        'retry',
+        'checker-missing',
+        'checker-crash',
+        'check-fail',
+      ].includes(mode),
+    );
+    expect(readReportDelivery(delivered.report)).toEqual(delivered.delivery);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+}
 
 const gauntletRoot = getEnv('GAUNTLET_ROOT');
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -585,6 +751,7 @@ await new Promise(() => {});
         expect(firstAssessment.tools.map((tool) => tool.name).sort()).toEqual([
           'read_evidence',
           'report_result',
+          'search_evidence',
         ]);
       } finally {
         await server.stop(true);
@@ -608,6 +775,11 @@ for (const mode of [
   'parent-cancel',
   'parent-deadline',
   'retry',
+  'checker-missing',
+  'checker-crash',
+  'check-fail',
+  'trace-unavailable',
+  'source-mismatch',
 ] as const)
   test.skipIf(!gauntletRoot)(
     `actual assessment lifecycle and physical costs: ${mode}`,
@@ -628,10 +800,13 @@ for (const mode of [
         join(scenarioDir, 'story.md'),
         '---\nid: demo\ntitle: Offline lifecycle fixture\nstatus: ready\nquorum_mode: conversation\nquorum_max_time: 10m\n---\nFix pricing.\n\n## Acceptance Criteria\n- Fix pricing\n',
       );
-      writeFileSync(join(scenarioDir, 'oracle.cjs'), 'process.exit(0);\n');
+      writeFileSync(
+        join(scenarioDir, 'oracle.cjs'),
+        `process.exit(${mode === 'check-fail' ? 1 : mode === 'checker-crash' ? 127 : 0});\n`,
+      );
       writeFileSync(
         join(scenarioDir, 'checks.sh'),
-        'pre() { :; }\npost() { :; }\n',
+        `pre() { :; }\npost() { command-succeeds ${shellQuote(mode === 'checker-missing' ? '/missing-checker-task8' : `node ${shellQuote(join(scenarioDir, 'oracle.cjs'))}`)}; }\n`,
       );
       writeFileSync(join(runDir, 'fixture-mode'), 'refusal');
       const preload = join(runDir, 'preload.ts');
@@ -644,15 +819,17 @@ import * as writer from ${JSON.stringify(join(gauntletRoot!, 'src/evidence/write
 const mode = ${JSON.stringify(mode)};
 const argv = process.argv;
 const hard = Number(argv[argv.indexOf('--hard-deadline-at-ms')+1]);
-const anchor = hard - 120000;
+const anchor = hard - 600000;
 let time = 0;
+let responses = 0;
 if (['reserve','late','parent-cancel','parent-deadline','writer-failure','double-fault'].includes(mode)) {
   spyOn(Date,'now').mockImplementation(()=>anchor);
   spyOn(performance,'now').mockImplementation(()=>time);
   const fetch = globalThis.fetch;
   globalThis.fetch = async (...args) => {
     const response = await fetch(...args);
-    if (response.headers.has('x-report')) time = mode === 'late' ? 115000 : 114999;
+    responses++;
+    time = response.headers.has('x-report') ? (mode === 'late' ? 595000 : 594999) : (responses === 1 ? 0 : 540000);
     return response;
   };
 }
@@ -662,7 +839,7 @@ if (mode === 'forced-kill') {
 }
 const write = writer.writeResultFiles;
 spyOn(writer,'writeResultFiles').mockImplementation((dir,result,writeFile)=>{
-  time = 117000;
+  time = 597000;
   if (mode === 'parent-cancel') fs.writeFileSync(${JSON.stringify(join(runDir, 'cancel'))}, 'decision');
   return write(dir,result,(path,text)=>{
     if (mode === 'writer-failure' && path.endsWith('result.md')) throw new Error('local storage fixture failure');
@@ -690,7 +867,7 @@ if (mode === 'double-fault') {
       // exec keeps the assessment PID owned directly by quorum, including SIGKILL.
       writeFileSync(
         gauntlet,
-        `#!/bin/sh\nif [ "$1" = assess ]; then\n${mode === 'timeout' ? `  exec ${shellQuote(process.execPath)} --preload ${shellQuote(preload)} ${shellQuote(join(gauntletRoot!, 'src/index.ts'))} "$@" --max-time 5500ms\n` : `  exec ${shellQuote(process.execPath)} --preload ${shellQuote(preload)} ${shellQuote(join(gauntletRoot!, 'src/index.ts'))} "$@"\n`}fi\nexec ${shellQuote(process.execPath)} ${shellQuote(resolve(import.meta.dir, 'fixtures/conversation-role.ts'))} "$@"\n`,
+        `#!/bin/sh\nif [ "$1" = assess ]; then\n${mode === 'timeout' ? `  exec ${shellQuote(process.execPath)} --preload ${shellQuote(preload)} ${shellQuote(join(gauntletRoot!, 'src/index.ts'))} "$@" --max-time 5500ms --report-grace 100ms\n` : `  exec ${shellQuote(process.execPath)} --preload ${shellQuote(preload)} ${shellQuote(join(gauntletRoot!, 'src/index.ts'))} "$@"\n`}fi\nexec ${shellQuote(process.execPath)} ${shellQuote(resolve(import.meta.dir, 'fixtures/conversation-role.ts'))} "$@"\n`,
       );
       chmodSync(gauntlet, 0o755);
       let requests = 0;
@@ -711,7 +888,19 @@ if (mode === 'double-fault') {
               },
               { status: 429, headers: { 'retry-after-ms': '1' } },
             );
-          const report = index >= (mode === 'retry' ? 2 : 1);
+          const report =
+            index >=
+            ([
+              'reserve',
+              'late',
+              'parent-cancel',
+              'parent-deadline',
+              'writer-failure',
+              'double-fault',
+              'retry',
+            ].includes(mode)
+              ? 2
+              : 1);
           await Bun.sleep(20);
           return Response.json(
             {
@@ -773,7 +962,7 @@ if (mode === 'double-fault') {
             ) => {
               const result = read(...args);
               if (String(args[0]).endsWith('assessment-completion.json'))
-                offset = 120001;
+                offset = 600001;
               return result;
             }) as typeof fs.readFileSync)
           : null;
@@ -819,6 +1008,19 @@ if (mode === 'double-fault') {
           },
         });
         evidence.phase('whole-run-return');
+        if (
+          [
+            'reserve',
+            'timeout',
+            'retry',
+            'checker-missing',
+            'checker-crash',
+            'check-fail',
+            'trace-unavailable',
+            'source-mismatch',
+          ].includes(mode)
+        )
+          verifyPublishedFailure(runDir, verdict, mode);
         const role = JSON.parse(
           read(join(runDir, 'gauntlet-roles.json'), 'utf8'),
         ).assessment;
@@ -830,28 +1032,37 @@ if (mode === 'double-fault') {
           ? JSON.parse(read(join(out, 'assessment-completion.json'), 'utf8'))
           : null;
         const economics = verdict.economics as unknown as RunEconomics;
-        if (mode === 'reserve' || mode === 'retry') {
+        if (
+          [
+            'reserve',
+            'retry',
+            'trace-unavailable',
+            'source-mismatch',
+            'check-fail',
+          ].includes(mode)
+        ) {
           expect(verdict.error).toBeNull();
-          expect(verdict.final).toBe('pass');
+          expect(verdict.final).toBe(mode === 'check-fail' ? 'fail' : 'pass');
           expect(marker.status).toBe('completed');
           if (mode === 'reserve')
             expect(
               Date.parse(marker.terminal_at) - Date.parse(role.started_at),
-            ).toBe(114999);
+            ).toBe(594999);
         } else {
           expect(verdict.final).toBe('indeterminate');
           expect(verdict.error).not.toBeNull();
         }
         if (['timeout', 'cancel', 'forced-kill'].includes(mode)) {
-          expect(requests).toBe(1);
+          expect(requests).toBe(mode === 'timeout' ? 2 : 1);
           expect(role.stop_cause).toBe(
             mode === 'timeout' ? 'timed_out' : 'cancelled',
           );
           expect(economics.gauntlet?.roles?.assessment.usage).toBeNull();
           expect(verdict.economics?.['assessment_accounting']).toMatchObject({
             logicalResponses: 0,
-            physicalAttempts: 1,
-            unknownUsageAttemptIds: ['001'],
+            physicalAttempts: mode === 'timeout' ? 2 : 1,
+            unknownUsageAttemptIds:
+              mode === 'timeout' ? ['001', '002'] : ['001'],
             complete: false,
           });
           if (mode === 'forced-kill') {
@@ -866,7 +1077,20 @@ if (mode === 'double-fault') {
         } else {
           expect(
             economics.gauntlet?.roles?.assessment.usage?.total_tokens,
-          ).toBe(mode === 'conversion-error' ? 20 : 40);
+          ).toBe(
+            mode === 'conversion-error'
+              ? 20
+              : [
+                    'reserve',
+                    'late',
+                    'parent-cancel',
+                    'parent-deadline',
+                    'writer-failure',
+                    'double-fault',
+                  ].includes(mode)
+                ? 60
+                : 40,
+          );
           expect(
             economics.gauntlet?.roles?.assessment.usage?.est_cost_usd,
           ).toBeGreaterThan(0);

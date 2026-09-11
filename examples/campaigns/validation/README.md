@@ -165,3 +165,40 @@ Missing or mismatched scope is unverified; malformed or hash-corrupt consumed
 files reject registration. Source changes conservatively require new
 qualification. Fold version 2 reports independent quantity cohorts and never
 rewrites historical reports.
+
+## Ordinary operator path
+
+Register the focused acceptance with full pinned commits and declared display
+labels. This prepares a receipt; it does not authorize or start a paid run.
+
+```sh
+/srv/quorum/bin/evals-appliance campaign register /srv/quorum/superpowers-evals/examples/campaigns/validation/focused.yaml --baseline b36e0829c6d0140e93cfef2ca599b1b07d4a7797 --candidate 3a8bdc11e1db42955350d6d6f063f7a8e89aef58 --baseline-label v6.3.0 --candidate-label dev --pair claude:opus_bedrock --pair codex:openai_responses_56sol --global-cap 8 --json
+```
+
+For release acceptance, change `focused.yaml` to `release.yaml` and add
+`--pair pi:pi_gpt56_sol`. Review the registration receipt, including source,
+role budgets, credential pools and frozen workload. Copy its campaign identity
+into the existing `campaign run`, `status`, `cancel`, `costs` and `report`
+commands as needed; never launch through shell substitution of an unreviewed
+registration response. Deployment and paid execution require separate approval.
+
+Keep every completed subject even when assessment expires or price is missing.
+Those faults leave the corresponding quality or cost measurement incomplete;
+they do not cancel the entire comparison. Authentication, billing, ownership,
+host and operator stop policies still apply. These declarations admit no
+replacement. A necessary fresh comparison receives a new identity, with the
+failed acceptance receipt retained alongside it.
+
+The controller journal supplies attempt overlap timestamps, while role files
+supply role durations. `contention-telemetry.jsonl` also retains bounded
+`admission_wait` observations when a block's limiting reason or pool changes.
+Their `reserved` and `capacity` values describe admission reservations. Host
+waits use pool `host` and zero reservation/capacity placeholders. They do not
+measure active provider requests or refresh host sample coverage. Unknown
+provider concurrency remains unknown.
+
+QA native logs are selected by the capture adapter and retained outside the
+private home. Bound QA event streams and valid terminal capture twins can
+support visible-evidence dependencies; they establish neither conversation
+completion nor the correctness of a judgment. QA interaction completion remains
+unavailable without an independent endpoint record.

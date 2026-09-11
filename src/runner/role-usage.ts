@@ -94,6 +94,7 @@ const settlementSchema = identity.extend({
   schema_version: z.literal(1),
   event: z.literal('settlement'),
   timestamp_ms: count,
+  aborted_at_ms: count.optional(),
   outcome: z.enum([
     'response',
     'transport_error',
@@ -176,6 +177,7 @@ export function reconcileAssessmentAccounting(
   };
   const requests = new Set<string>();
   const responses = new Set<string>();
+  const abandoned = new Map<string, string>();
   let pending: string | null = null;
   let ended = false;
   for (const event of readLines(input.runJsonl, 'run'))
@@ -186,12 +188,9 @@ export function reconcileAssessmentAccounting(
         if (turn === 0 || event['assessment_request_id'] !== id || ended)
           throw new Error('invalid assessment logical identity');
         if (event['type'] === 'llm_request') {
-          if (
-            pending !== null ||
-            turn !== requests.size + 1 ||
-            requests.has(id)
-          )
+          if (turn !== requests.size + 1 || requests.has(id))
             throw new Error('duplicate or nonsequential assessment request');
+          if (pending !== null) abandoned.set(pending, id);
           requests.add(id);
           pending = id;
         } else {
@@ -295,6 +294,41 @@ export function reconcileAssessmentAccounting(
         )
       )
         throw new Error('logical response missing recorded physical response');
+    });
+  // A phase change may abandon an SDK response. Its settled physical work
+  // must precede successor admission; logical IDs alone cannot prove that.
+  for (const [predecessor, successor] of abandoned)
+    check(() => {
+      const before = [...admissions.values()].filter(
+        (a) => a.assessment_request_id === predecessor,
+      );
+      const after = [...admissions.values()].filter(
+        (a) => a.assessment_request_id === successor,
+      );
+      const nextAt = Math.min(...after.map((a) => a.timestamp_ms));
+      if (
+        !before.length ||
+        !after.length ||
+        before.some((a) => {
+          const settled = settlements.get(a.assessment_attempt_id);
+          return (
+            !settled ||
+            settled.timestamp_ms < a.timestamp_ms ||
+            settled.timestamp_ms > nextAt ||
+            !(
+              settled.outcome === 'aborted' ||
+              (settled.outcome === 'response' &&
+                known.has(a.assessment_attempt_id) &&
+                settled.aborted_at_ms !== undefined &&
+                settled.aborted_at_ms >= a.timestamp_ms &&
+                settled.aborted_at_ms <= settled.timestamp_ms)
+            )
+          );
+        })
+      )
+        throw new Error(
+          'abandoned assessment request lacks settled cancellation before successor admission',
+        );
     });
   const unknownUsageAttemptIds = [...admissions.keys()].filter(
     (id) => !known.has(id),
