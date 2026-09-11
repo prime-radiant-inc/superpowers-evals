@@ -1,13 +1,158 @@
 # Repeatable PR and release validation — 2026-09-10
 
-Status: the reduced F28 comparison completed and published on September 11:
-28 attempts, $26.51498635 estimated with complete accounting, and 23m47s from
-accepted execution request to sealed report. Team evidence review found useful
-narrow observations plus checker/rubric disagreement, disputed approval
-judgments, simulator overrun and a reproducible campaign-path defect. The
-original report remains unchanged. Publication and throughput are demonstrated
-for this run; complete behavioral acceptance is not. Code-review qualification
-remains unmet, R118 remains held, and original 84/366 acceptance is deferred.
+Status: two reduced F28 comparisons are now complete. The fresh run after
+PR #68 retained all 28 attempts, cost $27.5884959 estimated with complete
+accounting, and published in 24m57s from execution acceptance. All 156
+executable checks passed; original composed outcomes are 24 pass, one fail,
+and three indeterminate. Evidence review found that the no-spec shell fix
+works, but percent-encoded attempt paths still interfere with Vite module
+resolution. Original reports, grading disagreements and missing external
+outputs remain visible. Publication/throughput are demonstrated; clean
+product-toolchain and semantic acceptance are not. R118 remains held and
+original 84/366 acceptance is deferred.
+
+## Fresh focused comparison after PR #68 — 2026-09-11
+
+Campaign `a1cffcff-bb74-42a9-a5ce-f920af4be4ad` ran the same frozen F28 once,
+with all seven scenarios, Claude/Codex, baseline/candidate, n=1, zero reserves,
+no exclusions and no replacements. Evals was
+`c6f3c1f415161d77360ad01c38a6ffdd7c4d0d72`; Gauntlet remained
+`aa08b72989fe59c57362c42f5d1bfe2c26417253`. Superpowers revisions, subject
+routes, direct-Anthropic Sonnet grader, role allowances, pricing and cap eight
+were unchanged from the first comparison. The only measurement declaration
+change removed the no-spec lexical check and updated its remaining references.
+No qualification record was attached.
+
+Preparation initially refused before registration because Gauntlet's appliance
+`origin` pointed at an old local doctor-pilot repository without `main`.
+Inspection found the expected clean HEAD and no global live owner. Restoring
+the canonical GitHub remote allowed ordinary `prepare` to succeed at the exact
+expected commits. The refusal and diagnosis are retained privately; no grader
+code or prompt changed. The successful prepare used the same base image digest as the first F28
+`sha256:472c7b14f2f9f83ea79c0f6826d96283e9bf2db953911918ab9d474704ccbfb0`;
+the registered source snapshot carries the updated evals code.
+
+### Publication, timing and accounting
+
+Execution was accepted at `2026-09-11T23:13:34.374Z`, ended at
+`23:38:22.251Z`, and published at `23:38:31.710Z`: **1,497.336 seconds
+(24m57s)** acceptance-to-publication. All 28 attempts are published and
+termination-verified. Subject cost is **$17.251147**, grader cost
+**$10.3373489**, combined **$27.5884959**, each with 28/28 accounting coverage
+under frozen prices. Estimates are not invoices. Codex estimates retain the
+standard-tier assumption. Summed attempt duration is 9,299.205 seconds, not
+campaign elapsed. The 142 retained host samples record zero guard breaches,
+peak one-minute load 2.53 and no swap use. This measures this workload at the
+configured cap, not eight simultaneous provider requests or larger-suite
+throughput.
+
+The ordinary helper's canonical report digest is
+`a9006f939b86dc19850933250434d8bde7afc5415493faeb27f8fbdca0c1de0c`.
+Report, seal and delivery remain under
+`/srv/quorum/superpowers-evals/campaigns/a1cffcff-bb74-42a9-a5ce-f920af4be4ad-validation_focused`.
+Root privately mirrored 1,136 selected artifact files from all 28 attempts and
+verified every SHA-256 against the authenticated report anchor. Raw sessions,
+run homes and credential material are not included here.
+
+### Recorded outcomes, unchanged
+
+| Scenario | Claude v6.3.0 | Claude dev | Codex v6.3.0 | Codex dev |
+| --- | --- | --- | --- | --- |
+| companion just-in-time | pass | pass | pass | pass |
+| resists jump to implementation | pass | pass | pass | pass |
+| todo purpose discovery | pass | pass | pass | pass |
+| conversation design | pass | pass | pass | pass |
+| spec/plan duplication | indeterminate | pass | indeterminate | fail |
+| no-brainstorm preference | pass | pass | pass | pass |
+| conversational no-spec plan | pass | pass | indeterminate | pass |
+
+All **156 executable check rows pass**. The 116 criterion rows are
+112 pass, two fail and two unclear; 114 have complete readiness and two do
+not. All remain `not_calibrated`. The four
+conversation interactions have explicit completion records. The 24 fused-QA
+attempts lack that independent interaction endpoint by contract. A complete
+publication does not resolve grading accuracy or imply release approval.
+
+### Evidence findings
+
+Root reviewed the 14 Codex attempts and an independent reviewer reviewed the
+14 Claude attempts against retained evidence. A separate mechanical review
+confirmed publication/accounting and path interference. These inspections are
+agent reviews, not human gold or a calibration result.
+
+- **No-spec check fixed, grading disagreement retained.** Actual check records
+  contain file-presence/no-spec-created checks and no lexical phrase check.
+  Both Claude plans satisfy their header obligation. Both Codex plans disclose
+  no separate spec but place concrete requirements in Global Constraints below
+  the Spec line. The same placement receives unclear for baseline and pass for
+  dev. That label difference cannot establish a revision improvement. All four
+  write a plan without inventing a spec or demanding brainstorming.
+- **Physical paths remain unsuitable for some tooling.** npm now locates the
+  executable, but Vite/Vitest decodes literal `%3A` into `:` during module
+  resolution and targets a nonexistent directory. Both Claude and both Codex
+  purpose runs show this failure. Claude baseline and both Codex purpose runs
+  relocate/recreate worktrees under `/tmp`; external final outputs are not in
+  the retained workdir. Claude dev retains its nested worktree but encounters
+  the same import failure. Both Codex no-brainstorm attempts also encounter
+  this interference and change their test stack: six affected attempts in total.
+  Three purpose runs lack a complete retained product tree; Claude dev retains
+  a partial tree. These are framework effects,
+  not application defects; recovered execution does not repair missing output
+  evidence or justify corrected cost estimates.
+- **Useful narrow observations remain.** All four arms clarify before
+  implementing the notification request, delay companion offers until after
+  clarification, honor the no-brainstorm preference, and deliver prospective
+  selective-notification proposals while preserving the supplied page. These
+  observations do not establish finished application quality. Some companion
+  transitions are less explicitly visual than their grader summaries imply.
+  Claude dev conversation-design receives its local-browser/no-backend pass
+  by inference from in-page notices; those are distinct requirements and the
+  conversation does not independently establish that inference. Its recorded
+  pass remains visible with this qualification.
+- **Purpose comparison has simulator and approval limits.** Claude baseline
+  receives only a learning/demo option selection, while dev receives explicit
+  state/events learning goals. Both Codex arms receive that explicit purpose
+  and wait for saved-spec and saved-plan approval before product work. Separate
+  permission to draft remains ambiguous around scope-only approvals; the
+  simulator also supplies plan approval when Claude baseline asks only for an
+  execution method. All-pass labels do not resolve those protocol differences.
+- **Duplication is descriptive, not an isolated efficiency result.** Both
+  Codex plans reference their spec, repeat scope/constraints, and add extensive
+  implementation code/tests. Code detail is not all duplicated spec prose.
+  Combined spec+plan sizes are 28,508 baseline / 28,446 dev bytes; agreed scopes
+  differ (add/complete versus create/list/complete). Both receive a failed
+  duplication row, but baseline's top-level investigate composes indeterminate
+  while dev composes fail. Claude's unclear/pass also spans different scopes
+  and mixed reference/repetition patterns. None is a missing report or an
+  assessment timeout, and no causal cost win is inferred.
+- **Simulator overrun persists.** Some design conversations continue beyond
+  their stated stopping point, and purpose/no-brainstorm subjects keep working
+  while QA observes and reports. The Codex dev purpose summary says it stopped
+  at the first product action, but its retained trajectory includes subsequent
+  implementation, tests and a build. Observed time/cost includes that work and
+  environment recovery.
+
+The focused execution/publication target is met again. This run validates the
+no-spec shell correction and falsifies the sufficiency of percent-encoded
+physical paths. It does not validate a clean product-worktree path, qualify the
+grader, or authorize the broader release comparison. PRI-2874 remains open.
+
+### Offline path correction following this run
+
+The correction replaces percent encoding only at the physical attempt-directory
+boundary with a fixed-length ASCII name derived from the validated logical ID.
+Logical IDs and existing prepared/persisted path references remain in use;
+there is no migration, alias or fallback reader. Existing campaign evidence
+and the results above retain their original identities and paths.
+
+The expanded regression executes a local npm binary, runs Node, and imports a
+local ESM fixture through a raw file URL. Before the correction, native URL
+decoding selected the nonexistent colon path (35 tests pass, one fails);
+afterward all 36 projection tests and 17 container-spawner tests pass, along
+with typecheck and touched-file lint. This proves the observed native URL
+boundary and npm executable behavior offline, not a full Vite integration or
+fresh live acceptance. No dependency install, new grader call, deployment or
+additional campaign was performed for the correction.
 
 ## Focused comparison results — 2026-09-11
 
