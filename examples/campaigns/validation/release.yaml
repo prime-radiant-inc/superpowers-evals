@@ -13,7 +13,7 @@ pricing_snapshot:
   sha256: b4f9e5512b4a62adcf2b47bbe96f5972fc9c5d6fdc313f4d95f965f6343be780
 measurement_requirements:
   path: examples/campaigns/validation/requirements.json
-  sha256: 4bef2871b9890dbc5246bdb2e30607522975ff00b4631ea17daf25af0a856af1
+  sha256: f476f4c8004cacfb2c0d4375a62cf7b7a99b7f698c6c73868e41f08e37b998e7
 comparisons:
   - baseline: baseline
     treatment: candidate

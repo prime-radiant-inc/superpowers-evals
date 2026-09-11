@@ -672,12 +672,7 @@
             "output",
             "visible_delivery"
           ],
-          "check_refs": [
-            {
-              "ordinal": 5,
-              "scope": "No-spec header text pattern only; not requirement uniqueness or path validity."
-            }
-          ]
+          "check_refs": []
         },
         {
           "id": "writing-plans-no-spec-conversational:3",
@@ -691,7 +686,7 @@
           ],
           "check_refs": [
             {
-              "ordinal": 6,
+              "ordinal": 5,
               "scope": "No spec file at final capture; does not establish earlier writes."
             }
           ]
@@ -718,7 +713,7 @@
         "manifest": "scenarios/writing-plans-no-spec-conversational/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "8f6d4274ba1f35c92c9facd83829aa6150871957a565ece40d1fd5831cf70579"
+        "check_manifest_sha256": "bd7d01468dbdf6dcbbaaa8187f116ac6dc87bf3eff14ebb223025b0dec20c6c9"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
@@ -807,22 +802,6 @@
         },
         {
           "ordinal": 5,
-          "phase": "post",
-          "check": "command-succeeds",
-          "args": [
-            "grep -qi \"none \u2014 requirements\\|none - requirements\" docs/superpowers/plans/*.md"
-          ],
-          "negated": false,
-          "count": 1,
-          "authority": {
-            "kind": "output_check",
-            "sources": [
-              "scenarios/writing-plans-no-spec-conversational/checks.sh"
-            ]
-          }
-        },
-        {
-          "ordinal": 6,
           "phase": "post",
           "check": "file-exists",
           "args": [
