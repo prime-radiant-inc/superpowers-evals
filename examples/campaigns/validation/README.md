@@ -16,7 +16,7 @@ registration; no comparison-specific arm files belong here.
 | OS | Linux, existing scenario/adapter/credential eligibility |
 | Replacements | Zero reserves, one attempt; retain invalid samples |
 | Admission | Existing paired admission, maximum exposure skew 60 |
-| Capacity target | Eight global attempts; grader pool eight only after Task 9 verifies capacity |
+| Capacity target | Eight global attempts; quota-supported grader cap eight, sustained throughput unproven |
 | Implementation identity | Freeze final evals/Gauntlet commits and image digest at registration |
 
 `focused.yaml` covers the first seven declared scenarios on Claude and Codex,
@@ -49,9 +49,30 @@ for pricing, config-repair, debugging and verification. Each total includes 60
 seconds of report grace and five seconds of publication reserve. These budgets
 are engineering declarations, not measurements of optimal limits.
 
-The committed pricing snapshot reference is retained verbatim. Its rate date is
-not claimed current; Task 9 must verify coverage. Missing prices leave costs
+The templates bind the acceptance-specific
+[pricing snapshot](../../../docs/experiments/2026-09-10-repeatable-pr-release-validation-pricing/current.json)
+with SHA-256 `b4f9e5512b4a62adcf2b47bbe96f5972fc9c5d6fdc313f4d95f965f6343be780`.
+The [September 10 capacity and forecast record](../../../docs/experiments/2026-09-10-repeatable-pr-release-validation.md#capacity-and-pricing-preflight)
+documents current source checks, six regional Opus/Haiku alias corrections,
+unchanged direct Sonnet/OpenAI rates and the remaining route/accounting limits.
+This snapshot applies to this acceptance's Mantle regional route; it is not a
+universal correction to canonical model rates. Missing prices leave costs
 unknown rather than zero and do not erase behavioral measurement.
+
+Drew's current console reports support grader cap eight. Subject Claude cap six,
+the shared OpenAI pool 15 and all host guards remain unchanged. Historical host
+load reached 24.98, exceeding the current 16 guard: sustainable eight-way
+throughput and the four/24-hour targets remain unproven. Quotas and retained
+returned-usage samples do not measure active request concurrency or retries.
+
+Planning means are $120.34 standard / $166.87 upper for focused and $705.79 /
+$1,096.23 for release; summed cell p90 estimates are $157.74 / $220.05 and
+$890.70 / $1,374.44. These use 78/84 and 272/366 exact primary slots, respectively,
+with six and 94 explicit model/harness proxy slots. The separate 24-assessment
+qualification has a $1–$10 planning allowance. These are neither spending ceilings
+nor measured final costs; see the record for role subtotals, proxy selection,
+rate sources and uncertainty. No qualification is attached, and this data
+preflight does not authorize deployment or live acceptance.
 
 ## Requirements data contract
 

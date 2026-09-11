@@ -1,0 +1,121 @@
+{
+  "as_of": "2026-09-10",
+  "namespaces": {
+    "litellm": {
+      "gpt-6-astra": {
+        "input": 10,
+        "output": 50,
+        "cache_read": 1,
+        "cache_write": 12.5,
+        "tier_boundary": 272000,
+        "input_above": 20,
+        "output_above": 75.0,
+        "cache_read_above": 2,
+        "cache_write_above": 25.0
+      },
+      "gpt-5.6-sol": {
+        "input": 4,
+        "output": 20,
+        "cache_read": 0.4,
+        "cache_write": 5.0,
+        "tier_boundary": 272000,
+        "input_above": 8,
+        "output_above": 30.0,
+        "cache_read_above": 0.8,
+        "cache_write_above": 10.0
+      },
+      "gpt-5.6-terra": {
+        "input": 2,
+        "output": 12,
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "tier_boundary": 272000,
+        "input_above": 4,
+        "output_above": 18.0,
+        "cache_read_above": 0.4,
+        "cache_write_above": 5.0
+      },
+      "gpt-5.6-luna": {
+        "input": 0.2,
+        "output": 1.2,
+        "cache_read": 0.02,
+        "cache_write": 0.25,
+        "tier_boundary": 272000,
+        "input_above": 0.4,
+        "output_above": 1.7999999999999998,
+        "cache_read_above": 0.04,
+        "cache_write_above": 0.5
+      },
+      "claude-opus-5": {
+        "input": 5,
+        "output": 25,
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "cache_write_1h": 10
+      },
+      "anthropic.claude-opus-5": {
+        "input": 5,
+        "output": 25,
+        "cache_read": 0.5,
+        "cache_write": 6.25,
+        "cache_write_1h": 10
+      },
+      "claude-opus-4-8": {
+        "input": 5.5,
+        "output": 27.5,
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "cache_write_1h": 11.0
+      },
+      "anthropic.claude-opus-4-8": {
+        "input": 5.5,
+        "output": 27.5,
+        "cache_read": 0.55,
+        "cache_write": 6.875,
+        "cache_write_1h": 11.0
+      },
+      "claude-sonnet-5": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "cache_write_1h": 4
+      },
+      "anthropic.claude-sonnet-5": {
+        "input": 2,
+        "output": 10,
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "cache_write_1h": 4
+      },
+      "claude-haiku-4-5": {
+        "input": 1.1,
+        "output": 5.5,
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "cache_write_1h": 2.2
+      },
+      "claude-haiku-4-5-20251001": {
+        "input": 1.1,
+        "output": 5.5,
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "cache_write_1h": 2.2
+      },
+      "anthropic.claude-haiku-4-5": {
+        "input": 1.1,
+        "output": 5.5,
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "cache_write_1h": 2.2
+      },
+      "anthropic.claude-haiku-4-5-20251001": {
+        "input": 1.1,
+        "output": 5.5,
+        "cache_read": 0.11,
+        "cache_write": 1.375,
+        "cache_write_1h": 2.2
+      }
+    }
+  }
+}
