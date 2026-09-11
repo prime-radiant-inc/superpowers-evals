@@ -16,6 +16,7 @@ import {
   selectAgentEnv,
   writePinnedFile,
 } from '../appliance/credential-scope.ts';
+import { sha256Hex } from '../contracts/campaign/digest.ts';
 import { type Grader, GraderSchema } from '../contracts/campaign/experiment.ts';
 import type { Credential } from '../contracts/credential.ts';
 import {
@@ -125,7 +126,7 @@ export function prepareAttemptStage(
   args: PrepareAttemptStageArgs,
 ): PreparedAttemptStage {
   assertAttemptId(args.attemptId);
-  const attemptPathComponent = encodeURIComponent(args.attemptId);
+  const attemptPathComponent = `attempt-${sha256Hex(args.attemptId)}`;
 
   const registry =
     args.grader === undefined
