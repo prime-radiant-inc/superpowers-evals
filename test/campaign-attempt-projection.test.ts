@@ -474,6 +474,22 @@ test('projection refuses missing subject material and unsafe line content before
   expect(existsSync(join(unsafe.campaignDir, 'attempts'))).toBe(false);
 });
 
+test('projection refuses malformed UTF-16 attempt ids before hashing or writes', () => {
+  for (const attemptId of ['\ud800', '\ud801']) {
+    const fx = projectionFixture();
+    try {
+      expect(() => stage(fx, attemptId)).toThrow(AttemptProjectionError);
+      expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
+      const replacement = stage(fx, '\ufffd');
+      expect(replacement.attemptId).toBe('\ufffd');
+    } finally {
+      for (const path of [fx.corpus, fx.campaignDir, fx.bundleDir]) {
+        rmSync(path, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
 test('projection refuses a staged symlink without touching its target', () => {
   const fx = projectionFixture();
   const prepared = stage(fx, 'symlink');
