@@ -14,6 +14,7 @@ import {
   AttemptPublicationStorageError,
   publishExecution,
 } from '../src/campaign/attempt-publish.ts';
+import { parseSidecar } from '../src/campaign/contention.ts';
 import {
   runCampaignDispatch,
   type SessionDependencies,
@@ -90,6 +91,7 @@ function fixture(
     fourAliases?: boolean;
     reorderKeys?: boolean;
     threeComparisons?: boolean;
+    graderCap?: number;
   } = {},
 ) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'session-'));
@@ -280,6 +282,8 @@ function fixture(
     registry['subject']!.max_concurrency = 6;
     registry['grader']!.max_concurrency = 6;
   }
+  if (options.graderCap !== undefined)
+    registry['grader']!.max_concurrency = options.graderCap;
   const activeNames = [
     ...experiment.execution_surface.map((a) => a.credential),
     'grader',
@@ -1083,6 +1087,9 @@ test('pool launch spacing is preserved within an atomically admitted block', asy
   await flush();
   expect(f.started).toHaveLength(1);
   expect(f.writer.readProjection().attempts.size).toBe(2);
+  expect(
+    parseSidecar(f.context.campaignDir).waits.map((w) => w.reason),
+  ).toContain('launch_spacing');
   f.clock.advance(0.5);
   await flush();
   expect(f.started).toHaveLength(1);
@@ -1639,6 +1646,9 @@ test.each([
     f.clock.setTo(next);
   }
   await flush();
+  expect(
+    parseSidecar(f.context.campaignDir).waits.some((w) => w.reason === 'host'),
+  ).toBe(true);
   expect(f.started).toHaveLength(2);
   // The gate at this boundary held: the next attempt preparation ran only
   // once the sampler had refreshed the sidecar, a cadence after telemetry
@@ -1863,3 +1873,47 @@ test('stale telemetry wait is cut short by operator cancellation', async () => {
   );
   expect(f.finished).toBe(true);
 });
+
+for (const graderCap of [6, 2])
+  test(`unrelated pairs use free capacity while a long subject remains, grader cap ${graderCap}`, async () => {
+    const f = fixture({ threeComparisons: true, graderCap });
+    const run = runCampaignDispatch(f.context, f.deps);
+    for (let i = 0; i < 10; i++) await flush();
+    expect(f.started.length).toBe(graderCap);
+    const before = f.writer.readProjection();
+    expect([...before.attempts.values()].every((a) => a.stopped === null)).toBe(
+      true,
+    );
+    const waits = parseSidecar(f.context.campaignDir).waits;
+    expect(waits.some((w) => w.reason === 'pool_capacity')).toBe(true);
+    const count = waits.length;
+    for (let tick = 0; tick < 3; tick++) {
+      f.clock.advance(1);
+      await flush();
+    }
+    expect(parseSidecar(f.context.campaignDir).waits.length).toBe(count);
+    if (graderCap === 6) {
+      expect(
+        f.started.slice(0, 6).map((a) => a.intent.identity.comparison_id),
+      ).toEqual(['c1', 'c1', 'c2', 'c2', 'c3', 'c3']);
+      // The third pair already started before the deliberately long first pair stops.
+      expect(f.alive.size).toBe(6);
+    } else {
+      expect(
+        new Set(f.started.map((a) => a.intent.identity.comparison_id)),
+      ).toEqual(new Set(['c1']));
+      f.complete(0);
+      await flush();
+      expect(f.started).toHaveLength(2);
+      f.complete(1);
+      await flush();
+      expect(f.started.length).toBeGreaterThan(2);
+    }
+    let completed = graderCap === 2 ? 2 : 0;
+    while (completed < 12) {
+      for (const end = f.started.length; completed < end; completed++)
+        f.complete(completed);
+      await flush();
+    }
+    await settle(f, run);
+  });

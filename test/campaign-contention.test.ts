@@ -768,3 +768,54 @@ test('sampler distinguishes an opaque storage failure from missing probe evidenc
   await running;
   expect(sources).toEqual(['storage']);
 });
+
+test('admission observations preserve host-only coverage and the valid stream prefix', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'wait-telemetry-'));
+  const wait = {
+    kind: 'admission_wait',
+    at: '2026-09-10T00:00:00Z',
+    block_id: 'block',
+    reason: 'pool_capacity',
+    pool_id: 'grader',
+    reserved: 2,
+    capacity: 2,
+  };
+  appendSidecarLine(root, { ts_ms: 1000, missing: true });
+  appendFileSync(join(root, SIDECAR_FILENAME), `${JSON.stringify(wait)}\n`);
+  appendSidecarLine(root, { ts_ms: 2000, missing: true });
+  const parsed = parseSidecar(root);
+  expect(parsed.truncatedTail).toBe(false);
+  expect(parsed.lines).toEqual([
+    { ts_ms: 1000, missing: true },
+    { ts_ms: 2000, missing: true },
+  ]);
+  expect(parsed).toHaveProperty('waits', [wait]);
+  expect(samplerStaleMs(parsed.lines, 3000)).toBe(1000);
+  appendFileSync(join(root, SIDECAR_FILENAME), '{"kind":"admission_wait"');
+  const damaged = captureStderr(() => parseSidecar(root)).result;
+  expect(damaged.truncatedTail).toBe(true);
+  expect(damaged.lines).toEqual(parsed.lines);
+  expect(damaged).toHaveProperty('waits', [wait]);
+  const sampler = new ContentionSampler({
+    campaignDir: root,
+    probe: { sample: (now) => stats(now) },
+    clock: new FakeClock(4),
+    thresholds: [MEM_FLOOR],
+    sustainK: 3,
+    cadenceMs: 1000,
+    cpuCores: FROZEN_CORES,
+    onBreachEntry() {},
+    onBreachExit() {},
+    onSampleError() {},
+  });
+  const running = captureStderr(() => sampler.start()).result;
+  await sampler.stop();
+  await running;
+  const repaired = parseSidecar(root);
+  expect(repaired.truncatedTail).toBe(false);
+  expect(repaired.waits).toEqual([wait]);
+  expect(repaired.lines.slice(0, 2)).toEqual(parsed.lines);
+  expect(
+    repaired.lines.some((line) => 'missing' in line && line.ts_ms === 4000),
+  ).toBe(true);
+});

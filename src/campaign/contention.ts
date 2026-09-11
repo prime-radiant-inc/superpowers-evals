@@ -41,6 +41,37 @@ export interface TelemetryGap {
 
 export type SidecarLine = TelemetrySample | TelemetryGap;
 
+/** Non-authoritative admission observation; never a host sample. */
+export interface AdmissionWait {
+  readonly kind: 'admission_wait';
+  readonly at: string;
+  readonly block_id: string;
+  readonly reason: 'pool_capacity' | 'launch_spacing' | 'host';
+  readonly pool_id: string;
+  readonly reserved: number;
+  readonly capacity: number;
+}
+function isAdmissionWait(x: unknown): x is AdmissionWait {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
+  const r = x as Record<string, unknown>;
+  return (
+    r['kind'] === 'admission_wait' &&
+    typeof r['at'] === 'string' &&
+    Number.isFinite(Date.parse(r['at'])) &&
+    typeof r['block_id'] === 'string' &&
+    r['block_id'].length > 0 &&
+    ['pool_capacity', 'launch_spacing', 'host'].includes(String(r['reason'])) &&
+    typeof r['pool_id'] === 'string' &&
+    r['pool_id'].length > 0 &&
+    typeof r['reserved'] === 'number' &&
+    Number.isFinite(r['reserved']) &&
+    r['reserved'] >= 0 &&
+    typeof r['capacity'] === 'number' &&
+    Number.isFinite(r['capacity']) &&
+    r['capacity'] >= 0
+  );
+}
+
 /** Injectable fs seam for sidecar appends and the atomic crash repair:
  *  tests record durability order, force short writes, and crash the repair
  *  at chosen cutover boundaries; production uses the real node:fs (R1-F5,
@@ -97,7 +128,7 @@ function writeDurable(
 /** Append one JSON line, fsynced per sample (Decision D-3). */
 export function appendSidecarLine(
   campaignDir: string,
-  line: SidecarLine,
+  line: SidecarLine | AdmissionWait,
   ops: SidecarFsOps = REAL_SIDECAR_FS,
 ): void {
   writeDurable(
@@ -135,6 +166,7 @@ export function isValidSidecarLine(x: unknown): x is SidecarLine {
 
 interface SidecarScan {
   readonly lines: SidecarLine[];
+  readonly waits: AdmissionWait[];
   /** Byte length of the valid prefix — the repair truncation point. */
   readonly validByteLength: number;
   readonly damaged: boolean;
@@ -147,6 +179,7 @@ interface SidecarScan {
  *  point (R1-F1: skipping damage was fail-open). */
 function scanSidecarText(text: string): SidecarScan {
   const lines: SidecarLine[] = [];
+  const waits: AdmissionWait[] = [];
   let pos = 0;
   let validByteLength = 0;
   while (pos < text.length) {
@@ -154,6 +187,7 @@ function scanSidecarText(text: string): SidecarScan {
     if (nl === -1) {
       return {
         lines,
+        waits,
         validByteLength,
         damaged: true,
         damageDetail: 'unterminated tail (crash mid-append)',
@@ -167,25 +201,28 @@ function scanSidecarText(text: string): SidecarScan {
       } catch {
         return {
           lines,
+          waits,
           validByteLength,
           damaged: true,
           damageDetail: `unparseable line ${JSON.stringify(raw.slice(0, 60))}`,
         };
       }
-      if (!isValidSidecarLine(parsed)) {
+      if (!isValidSidecarLine(parsed) && !isAdmissionWait(parsed)) {
         return {
           lines,
+          waits,
           validByteLength,
           damaged: true,
           damageDetail: `invalid record ${JSON.stringify(raw.slice(0, 60))}`,
         };
       }
-      lines.push(parsed);
+      if (isAdmissionWait(parsed)) waits.push(parsed);
+      else lines.push(parsed);
     }
     pos = nl + 1;
     validByteLength += Buffer.byteLength(raw, 'utf8') + 1;
   }
-  return { lines, validByteLength, damaged: false, damageDetail: null };
+  return { lines, waits, validByteLength, damaged: false, damageDetail: null };
 }
 
 /** Damage-tolerant parse: truncate at the last COMPLETE valid line with a
@@ -194,17 +231,18 @@ function scanSidecarText(text: string): SidecarScan {
  *  discarded). */
 export function parseSidecar(campaignDir: string): {
   lines: SidecarLine[];
+  waits: AdmissionWait[];
   truncatedTail: boolean;
 } {
   const path = join(campaignDir, SIDECAR_FILENAME);
-  if (!existsSync(path)) return { lines: [], truncatedTail: false };
+  if (!existsSync(path)) return { lines: [], waits: [], truncatedTail: false };
   const scan = scanSidecarText(readFileSync(path, 'utf8'));
   if (scan.damaged) {
     process.stderr.write(
       `contention sidecar at ${path} has a damaged suffix (${scan.damageDetail}) — truncated at the last complete line; the truncated interval counts as uncovered\n`,
     );
   }
-  return { lines: scan.lines, truncatedTail: scan.damaged };
+  return { lines: scan.lines, waits: scan.waits, truncatedTail: scan.damaged };
 }
 
 export interface ResolvedThreshold {
