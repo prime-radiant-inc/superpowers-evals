@@ -15,6 +15,7 @@ import {
   cancelCampaign,
   observeCampaignStatus,
 } from '../campaign/cancellation.ts';
+import type { ComparisonInput } from '../campaign/comparison-input.ts';
 import { ContainerAttemptRuntime } from '../campaign/container-spawner.ts';
 import {
   type HostStatsProbe,
@@ -45,6 +46,7 @@ export interface CampaignCommandArgs {
   json: boolean;
 }
 export interface CampaignRegisterArgs {
+  comparisonInput?: ComparisonInput;
   suite: string;
   globalCap?: number;
   json: boolean;
@@ -179,7 +181,10 @@ export function campaignCommands(deps: CampaignCommandDeps) {
       const globalCap = args.globalCap ?? DEFAULT_GLOBAL_CAP;
       if (!Number.isSafeInteger(globalCap) || globalCap <= 0)
         throw new Error('global cap must be a positive integer');
-      return registerCampaign({
+      const result = registerCampaign({
+        ...(args.comparisonInput === undefined
+          ? {}
+          : { comparisonInput: args.comparisonInput }),
         suitePath: args.suite,
         suiteRaw: readFileSync(args.suite, 'utf8'),
         campaignsRoot: root,
@@ -196,6 +201,29 @@ export function campaignCommands(deps: CampaignCommandDeps) {
         registeredBy: getEnv('USER') ?? 'operator',
         nowMs: Date.now(),
       });
+      const experiment = result.experiment;
+      return {
+        ...result,
+        summary: {
+          comparison_request: experiment.comparison_request,
+          planned_samples: experiment.planned_slots.length,
+          reserve_slots: experiment.reserve_slots.length,
+          coverage: experiment.cells,
+          exclusions: experiment.excluded_cells,
+          effort: experiment.execution_surface.map((arm) => ({
+            arm: arm.name,
+            effort: arm.effort ?? 'provider default',
+          })),
+          global_cap: experiment.contention.global_run_cap,
+          pools: experiment.pool_policy.map((pool) => ({
+            ...pool,
+            effective_max_concurrency: Math.min(
+              experiment.contention.global_run_cap,
+              pool.max_concurrency,
+            ),
+          })),
+        },
+      };
     },
     list() {
       if (!existsSync(root)) return [];

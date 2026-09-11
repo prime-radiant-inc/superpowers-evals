@@ -9,7 +9,7 @@ import {
   realpathSync,
   statSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { CommandRunner } from '../agents/command-runner.ts';
 import { superpowersCapability } from '../agents/index.ts';
@@ -59,6 +59,12 @@ import {
   requiresSuperpowersFromStory,
 } from '../story-meta.ts';
 import { publishFrozenCampaign } from './campaign-document.ts';
+import {
+  type ComparisonInput,
+  ComparisonInputSchema,
+  materializeComparison,
+  type ResolvedComparisonInput,
+} from './comparison-input.ts';
 import {
   type CommittedTransition,
   ExecutionJournalWriter,
@@ -1015,6 +1021,7 @@ function probeChildContract(
 }
 
 export interface RegisterArgs {
+  readonly comparisonInput?: ComparisonInput;
   readonly suitePath: string;
   readonly suiteRaw: string;
   readonly campaignsRoot: string;
@@ -1076,6 +1083,62 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     args.gauntletRef,
     args.runner,
   );
+  // Resolve mutable refs before either intake pass; labels never participate in resolution.
+  let comparisonRequest: Experiment['comparison_request'];
+  if (args.comparisonInput !== undefined) {
+    const input = ComparisonInputSchema.parse(args.comparisonInput);
+    const checkout = realpathSync(args.evalsCheckout);
+    const suiteFile = realpathSync(resolve(args.suitePath));
+    const suitePath = relative(checkout, suiteFile);
+    if (
+      isAbsolute(suitePath) ||
+      suitePath === '..' ||
+      suitePath.startsWith(`..${sep}`)
+    ) {
+      throw new RegistrationError(
+        'runtime suite template is outside the evals repository',
+      );
+    }
+    const frozenBytes = gitOutText(args.runner, [
+      '-C',
+      checkout,
+      'show',
+      `${evalsSha}:${suitePath}`,
+    ]);
+    if (
+      frozenBytes !== args.suiteRaw ||
+      readFileSync(suiteFile, 'utf8') !== frozenBytes
+    ) {
+      throw new RegistrationError(
+        'runtime suite template bytes differ from the frozen evals commit',
+      );
+    }
+    const repo = { path: args.superpowersCheckout, remote: 'origin' };
+    const resolved: ResolvedComparisonInput = {
+      baseline: {
+        label: input.baselineLabel ?? input.baseline,
+        sha: resolveSuperpowersRef(repo, input.baseline, args.runner),
+      },
+      candidate: {
+        label: input.candidateLabel ?? input.candidate,
+        sha: resolveSuperpowersRef(repo, input.candidate, args.runner),
+      },
+      pairs: input.pairs,
+    };
+    comparisonRequest = {
+      ...resolved,
+      suite_path: suitePath,
+      suite_sha256: sha256Hex(frozenBytes),
+    };
+  }
+  const runtimeComparison =
+    comparisonRequest === undefined
+      ? undefined
+      : materializeComparison(suite, {
+          baseline: comparisonRequest.baseline,
+          candidate: comparisonRequest.candidate,
+          pairs: comparisonRequest.pairs,
+        });
   const now = new Date(args.nowMs).toISOString();
   const stats = args.probe.sample(args.nowMs);
   const contention = buildContentionBlock({
@@ -1090,8 +1153,10 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
   const campaignId = (args.campaignId ?? randomUUID)();
 
   const compile = (intake: SnapshotIntake): Experiment => {
+    const compiledSuite = runtimeComparison?.suite ?? suite;
+    const arms = runtimeComparison?.arms ?? intake.arms;
     const armNames = new Set<string>();
-    for (const comparison of suite.comparisons) {
+    for (const comparison of compiledSuite.comparisons) {
       if ('arm' in comparison) armNames.add(comparison.arm);
       else {
         armNames.add(comparison.baseline);
@@ -1100,22 +1165,24 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     }
     const superpowers_by_arm: Record<string, string | null> = {};
     for (const name of [...armNames].sort()) {
-      const arm = intake.arms[name];
+      const arm = arms[name];
       if (arm === undefined) {
         throw new RegistrationError(`arm ${name} is absent from arms/`);
       }
       superpowers_by_arm[name] =
         arm.superpowers === 'none'
           ? null
-          : resolveSuperpowersRef(
-              { path: args.superpowersCheckout, remote: 'origin' },
-              arm.superpowers,
-              args.runner,
-            );
+          : runtimeComparison !== undefined
+            ? arm.superpowers
+            : resolveSuperpowersRef(
+                { path: args.superpowersCheckout, remote: 'origin' },
+                arm.superpowers,
+                args.runner,
+              );
     }
     const prepared = prepareRegistration({
-      suite,
-      arms: intake.arms,
+      suite: compiledSuite,
+      arms,
       credentials: intake.credentials,
       grader,
       refs: {
@@ -1137,6 +1204,9 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
     });
     const draft = {
       ...prepared,
+      ...(comparisonRequest === undefined
+        ? {}
+        : { comparison_request: comparisonRequest }),
       campaign_id: campaignId,
       input_digest: '0'.repeat(64),
       registered_at: now,
@@ -1149,6 +1219,8 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
   };
 
   const intake = readSnapshotIntake(args.evalsCheckout, evalsSha, args.runner);
+  if (comparisonRequest !== undefined)
+    intake.files[comparisonRequest.suite_path] = args.suiteRaw;
   const staged = compile(intake);
   mkdirSync(args.campaignsRoot, { recursive: true });
   const campaignsRoot = realpathSync(args.campaignsRoot);
