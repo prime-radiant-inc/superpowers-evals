@@ -327,6 +327,15 @@ test('production command journey registers a fresh identity, gates one real cont
       f.commands.status(args).next_action === 'report',
   );
   expect(f.commands.status(args).state).toBe('completed');
+  await waitUntil(() =>
+    existsSync(join(registration.campaignDir, 'report-delivery.json')),
+  );
+  expect(f.commands.status(args).delivery).not.toBeNull();
+  expect(f.commands.status(args).report_pending).toBe(false);
+  const start = readProjection(registration.campaignDir).start!;
+  expect(Date.parse(start.requested_at!)).toBeLessThanOrEqual(
+    Date.parse(start.claimed_at),
+  );
   expect(f.commands.costs(args).subject_cost_usd.known_subtotal).toBe(2);
   const report = f.commands.report(args);
   expect(report.report.complete).toBe(true);
@@ -434,7 +443,7 @@ test('controller loss permits termination-only cancel, incomplete report and a f
   const snapshotDir = join(
     registered.campaignDir,
     'report-snapshots',
-    `${early.anchor.last_sequence}-${digestReportBytes(canonicalReportBytes(early))}`,
+    `${early.anchor.last_sequence}-${digestReportBytes(canonicalReportBytes({ report: early.report, anchor: early.anchor }))}`,
   );
   const earlyBytes = readFileSync(join(snapshotDir, 'report.json'));
   expect(commands.report(args)).toEqual(early);
@@ -532,7 +541,7 @@ test('an ended readout preserves its snapshot before final termination and seal'
     const snapshot = join(
       registration.campaignDir,
       'report-snapshots',
-      `${early.anchor.last_sequence}-${digestReportBytes(canonicalReportBytes(early))}`,
+      `${early.anchor.last_sequence}-${digestReportBytes(canonicalReportBytes({ report: early.report, anchor: early.anchor }))}`,
       'report.json',
     );
     const bytes = readFileSync(snapshot);
@@ -552,7 +561,7 @@ test('an ended readout preserves its snapshot before final termination and seal'
     expect(readFileSync(snapshot)).toEqual(bytes);
     expect(
       readFileSync(join(registration.campaignDir, 'report.json')).equals(
-        canonicalReportBytes(final),
+        canonicalReportBytes({ report: final.report, anchor: final.anchor }),
       ),
     ).toBe(true);
     expect(existsSync(join(registration.campaignDir, 'report-seal.json'))).toBe(
@@ -679,3 +688,59 @@ test.each([
   expect(code).toBe(1);
   expect(JSON.parse(output.join('')).ok).toBe(false);
 });
+
+test('publication failure preserves terminal execution and report command repairs pending delivery without launch', async () => {
+  const f = helperFixture('controllerWithReportFailure');
+  const registration = f.commands.register({ suite: f.suite, json: true });
+  const args = {
+    campaignSelector: registration.experiment.campaign_id,
+    json: true,
+  };
+  await f.commands.run(args);
+  await waitUntil(
+    () =>
+      existsSync(join(registration.campaignDir, 'report.md')) &&
+      !existsSync(join(f.loaded.config.root, 'state', 'locks', 'run.lock')),
+  );
+  expect(f.commands.status(args).state).toBe('completed');
+  expect(f.commands.status(args).report_pending).toBe(true);
+  expect(
+    existsSync(join(registration.campaignDir, 'report-delivery.json')),
+  ).toBe(false);
+  rmSync(join(registration.campaignDir, 'report.md'), { recursive: true });
+  const recovered = f.commands.report(args);
+  expect(recovered.delivery.report_digest).toHaveLength(64);
+  expect(f.commands.status(args).report_pending).toBe(false);
+  expect(f.launches()).toBe(1);
+  rmSync(f.root, { recursive: true, force: true });
+}, 20000);
+
+for (const target of ['controllerCancelled', 'controllerWithTerminalError'])
+  test(`automatic delivery survives ${target}`, async () => {
+    const f = helperFixture(target);
+    const registration = f.commands.register({ suite: f.suite, json: true });
+    const args = {
+      campaignSelector: registration.experiment.campaign_id,
+      json: true,
+    };
+    await f.commands.run(args);
+    await waitUntil(() => f.commands.status(args).delivery != null);
+    const status = f.commands.status(args);
+    expect(status.report_pending).toBe(false);
+    if (target === 'controllerCancelled') {
+      expect(status.state).toBe('cancelled');
+      expect(status.delivery!.execution_started_at).toBeNull();
+      expect(
+        existsSync(join(registration.campaignDir, 'report-delivery.json')),
+      ).toBe(false);
+      expect(
+        existsSync(join(registration.campaignDir, 'report-seal.json')),
+      ).toBe(false);
+    } else {
+      expect(status.state).toBe('completed');
+      expect(
+        existsSync(join(registration.campaignDir, 'report-delivery.json')),
+      ).toBe(true);
+    }
+    rmSync(f.root, { recursive: true, force: true });
+  }, 20000);

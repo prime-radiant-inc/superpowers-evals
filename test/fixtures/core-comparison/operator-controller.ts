@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 // Real controller, preparation, publication and termination; only the worker and clock are fake.
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
 import type { CampaignControllerContext } from '../../../src/appliance/campaign-run.ts';
@@ -10,6 +11,7 @@ import {
   runCampaignDispatch,
   type SessionDependencies,
 } from '../../../src/campaign/controller.ts';
+import { publishCancelIntent } from '../../../src/campaign/ownership.ts';
 import { sha256Hex } from '../../../src/contracts/campaign/digest.ts';
 import type {
   BoundExecution,
@@ -231,4 +233,45 @@ export async function controllerWithHeldTermination(
       Bun.sleepSync(10);
     }
   });
+}
+
+export async function controllerWithReportFailure(
+  context: CampaignControllerContext,
+) {
+  await execute(context);
+  mkdirSync(join(context.campaignDir, 'report.md'));
+}
+
+export async function controllerWithTerminalError(
+  context: CampaignControllerContext,
+) {
+  await execute(context);
+  throw new Error('fixture error after settlement');
+}
+export async function controllerCancelled(context: CampaignControllerContext) {
+  const at = new Date().toISOString();
+  publishCancelIntent(context.campaignDir, {
+    campaign_id: context.experiment.campaign_id,
+    input_digest: context.experiment.input_digest,
+    start_id: context.start.start_id,
+    requested_at: at,
+    controller_loss_established: false,
+    reason: 'fixture cancellation',
+  });
+  const body = readFileSync(join(context.campaignDir, 'cancel-intent.json'));
+  context.writer.commitTransition({
+    type: 'ended',
+    transition_id: randomUUID(),
+    at,
+    payload: {
+      outcome: 'cancelled',
+      reason: 'fixture cancellation',
+      cancel_intent: {
+        path: 'cancel-intent.json',
+        sha256: Bun.SHA256.hash(body, 'hex'),
+        bytes: body.length,
+      },
+    },
+  });
+  completeControllerTermination({ ...context, assertNoUnsettledStarts() {} });
 }

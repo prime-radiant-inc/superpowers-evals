@@ -27,12 +27,14 @@ import {
   registerCampaign,
 } from '../campaign/registration.ts';
 import {
-  publishReportSnapshot,
+  deliverComparisonReport,
+  readReportDelivery,
+} from '../campaign/report-delivery.ts';
+import {
   readComparisonReadout,
   readComparisonReport,
 } from '../campaign/report-publication.ts';
 import { resolveCampaignResultsRoot } from '../campaign/results-root.ts';
-import { sealReport } from '../campaign/seal.ts';
 import { getEnv } from '../env.ts';
 import { RealClock } from '../scheduler/clock.ts';
 import { startCampaignOnce } from './campaign-run.ts';
@@ -261,10 +263,18 @@ export function campaignCommands(deps: CampaignCommandDeps) {
       });
     },
     status(args: CampaignCommandArgs) {
-      return observeCampaignStatus(
-        context(args.campaignSelector),
-        deps.processes,
-      );
+      const ctx = context(args.campaignSelector);
+      const status = observeCampaignStatus(ctx, deps.processes);
+      if (
+        status.state === 'registered' ||
+        status.state === 'running' ||
+        status.state === 'unresolved' ||
+        status.state === 'stopping'
+      )
+        return { ...status, delivery: null, report_pending: false };
+      const report = readComparisonReport(ctx, deps.processes);
+      const delivery = readReportDelivery(report);
+      return { ...status, delivery, report_pending: delivery === null };
     },
     run(args: CampaignCommandArgs) {
       return (deps.launch ?? startCampaignOnce)(
@@ -302,16 +312,12 @@ export function campaignCommands(deps: CampaignCommandDeps) {
       ).report.accounting;
     },
     report(args: CampaignCommandArgs) {
-      const ctx = context(args.campaignSelector);
-      const report = readComparisonReport(ctx, deps.processes);
-      if (
-        report.report.status === 'completed' &&
-        report.report.complete &&
-        report.report.termination_verified
-      )
-        sealReport({ campaignDir: ctx.campaignDir, report });
-      else publishReportSnapshot({ campaignDir: ctx.campaignDir, report });
-      return report;
+      const { report, delivery } = deliverComparisonReport({
+        ...context(args.campaignSelector),
+        processes: deps.processes,
+        now: Date.now,
+      });
+      return { ...report, delivery };
     },
   };
 }

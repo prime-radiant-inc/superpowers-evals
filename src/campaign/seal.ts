@@ -12,6 +12,7 @@ import {
  * reports remain publishable without claiming final termination or a seal. */
 export function sealReport(args: { campaignDir: string; report: Report }): {
   digest: string;
+  directory: string;
 } {
   const value = ReportSchema.parse(args.report);
   if (

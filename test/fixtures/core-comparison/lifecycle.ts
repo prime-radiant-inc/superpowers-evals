@@ -14,7 +14,7 @@ import { realProcessIdentityProbe } from '../../../src/campaign/locks.ts';
 import { experimentDigest } from '../../../src/contracts/campaign/experiment-digest.ts';
 import { RealClock } from '../../../src/scheduler/clock.ts';
 import { transition, twoArmExperiment } from './factory.ts';
-export function lifecycleFixture() {
+export function lifecycleFixture(experiment = twoArmExperiment()) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'campaign-lifecycle-'));
   const campaignDir = join(root, 'campaign');
   mkdirSync(campaignDir);
@@ -32,7 +32,6 @@ export function lifecycleFixture() {
     }),
   );
   const loaded = loadStateConfig(configPath, { ensureState: true });
-  const experiment = twoArmExperiment();
   experiment.input_digest = experimentDigest(experiment);
   initExecutionJournal({ campaignDir, experiment });
   writeFileSync(join(campaignDir, 'campaign.json'), JSON.stringify(experiment));

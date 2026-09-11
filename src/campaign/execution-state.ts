@@ -390,6 +390,12 @@ function applyValidatedTransition(
       );
       sameIdentity(state, t.payload);
       timeWithin(t.payload.claimed_at, state.experiment.registered_at, t.at);
+      if (t.payload.requested_at !== undefined)
+        timeWithin(
+          t.payload.requested_at,
+          state.experiment.registered_at,
+          t.payload.claimed_at,
+        );
       state.start = t.payload;
       break;
     case 'controller_bound':
