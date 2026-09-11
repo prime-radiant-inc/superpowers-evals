@@ -20,12 +20,13 @@ registration; no comparison-specific arm files belong here.
 | Implementation identity | Freeze final evals/Gauntlet commits and image digest at registration |
 
 `focused.yaml` covers the first seven declared scenarios on Claude and Codex,
-three repetitions on both revisions: **84 primary samples**, a **four-hour**
+one repetition on both revisions: **28 primary samples**, a **four-hour**
 target from durable execution acceptance to a usable report, and a 5400-second
 outer attempt bound. `release.yaml` covers all 22 scenarios on the three
-pairings, with three repetitions except five for `sdd-go-fractals-opus48`:
-**366 primary samples** (Claude 136, Codex 136, Pi 94), a **24-hour** target,
-and a 10800-second outer bound. These are targets, not measured throughput.
+pairings, one repetition everywhere: **118 primary samples** (Claude 44,
+Codex 44, Pi 30), a **24-hour** target, and a 10800-second outer bound. These
+are reduced workflow-validation counts, not measured throughput or the original
+full-scale acceptance.
 
 Pi is excluded from exactly these seven release scenarios by their existing
 eligibility: `user-pref-no-brainstorm`, `conversation-design`,
@@ -65,14 +66,16 @@ load reached 24.98, exceeding the current 16 guard: sustainable eight-way
 throughput and the four/24-hour targets remain unproven. Quotas and retained
 returned-usage samples do not measure active request concurrency or retries.
 
-Planning means are $120.34 standard / $166.87 upper for focused and $705.79 /
-$1,096.23 for release; summed cell p90 estimates are $157.74 / $220.05 and
-$890.70 / $1,374.44. These use 78/84 and 272/366 exact primary slots, respectively,
-with six and 94 explicit model/harness proxy slots. The separate 24-assessment
-qualification has a $1–$10 planning allowance. These are neither spending ceilings
-nor measured final costs; see the record for role subtotals, proxy selection,
-rate sources and uncertainty. No qualification is attached, and this data
-preflight does not authorize deployment or live acceptance.
+The reduced forecast is $40.11 standard / $55.62 upper mean for focused and
+$193.44 / $295.83 for release; summed cell p90 estimates are $52.58 / $73.35
+and $248.65 / $378.18. The separate 24-assessment qualification has a $1–$10
+planning allowance. Combined planning arithmetic is approximately $235–$462
+(exactly $234.55–$461.53), neither a spending ceiling nor a guaranteed final
+cost. These reweight retained per-cell cohorts; unknown physical usage, retries,
+proxy-filled historical samples and the reduced n=1 design remain limitations.
+The original 84/366 full-scale proposal is deferred and is not satisfied by this
+reduced validation. No qualification is attached, and this data preflight does
+not authorize deployment or live acceptance.
 
 ## Requirements data contract
 
@@ -139,10 +142,12 @@ change requires explicit re-freezing of affected inputs, not silent refresh.
 The YAML's `grader` is parsed separately using the existing `GraderSchema`, as
 registration already does, and the remaining fields use `SuiteSchema`.
 
-Require truthful dispositions for all 84/366 primary samples, every declared
+Require truthful dispositions for all 28/118 primary samples, every declared
 repetition, required judgments/checks/capture and authenticated source identity.
-Report actor-specific cost coverage separately. Small-sample descriptive deltas
-do not establish equivalence, and these reports make no automatic release decision.
+Report actor-specific cost coverage separately. One repetition per cell provides
+initial behavioral observations only; it does not establish equivalence,
+run-to-run variability or the original full-scale acceptance. These reports make
+no automatic release decision.
 
 ## Qualification and independent measurements
 

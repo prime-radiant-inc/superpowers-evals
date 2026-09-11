@@ -123,8 +123,8 @@ import { SuiteSchema } from '../src/contracts/campaign/suite.ts';
 import { FAKE_PROBE } from './fixtures/core-comparison/registration.ts';
 
 test.each([
-  ['focused', 84, 2],
-  ['release', 366, 3],
+  ['focused', 28, 2],
+  ['release', 118, 3],
 ] as const)('real %s template compiles declared coverage through ordinary preparation', (name, slots, pairCount) => {
   const root = resolve(import.meta.dir, '..');
   const { grader, ...rawSuite } = parseYaml(
@@ -197,8 +197,7 @@ test.each([
   expect(Object.keys(requirements)).toHaveLength(name === 'focused' ? 7 : 22);
   expect(prepared.planned_slots).toHaveLength(slots);
   expect(prepared.reserve_slots).toHaveLength(0);
-  for (const cell of prepared.cells)
-    expect(cell.n).toBe(cell.scenario === 'sdd-go-fractals-opus48' ? 5 : 3);
+  for (const cell of prepared.cells) expect(cell.n).toBe(1);
   expect(prepared.excluded_cells.map((cell) => cell.cell).sort()).toEqual(
     name === 'focused'
       ? []

@@ -161,8 +161,8 @@ test('qualification denominators separate grounding from omitted findings', () =
 test('workload declarations preserve samples, exclusions and existing suite fields', () => {
   const requirements = json(join(workloads, 'requirements.json'));
   for (const [name, scenarioCount, samples, bound] of [
-    ['focused', 7, 84, 5400],
-    ['release', 22, 366, 10800],
+    ['focused', 7, 28, 5400],
+    ['release', 22, 118, 10800],
   ] as const) {
     const { grader, ...raw } = parse(
       readFileSync(join(workloads, `${name}.yaml`), 'utf8'),
@@ -181,7 +181,7 @@ test('workload declarations preserve samples, exclusions and existing suite fiel
     expect(comparison).toMatchObject({
       baseline: 'baseline',
       treatment: 'candidate',
-      n: 3,
+      n: 1,
     });
     const scenarios = comparison.scenarios as string[];
     expect(scenarios).toHaveLength(scenarioCount);

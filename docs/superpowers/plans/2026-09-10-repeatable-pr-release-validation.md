@@ -4,6 +4,16 @@
 
 **Goal:** Compare Superpowers dev with v6.3.0 through reusable appliance inputs and deliver trustworthy focused and release reports within four and 24 hours, respectively.
 
+### Dated execution amendment — 2026-09-10
+
+Drew amended the execution counts after implementation merged. The current
+data-only validation is F28/R118 with n=1 for every eligible scenario, harness
+and arm; qualification24, scenario selection, exclusions, frozen refs, prices,
+role allowances and outer time budgets remain unchanged. Plan approximately
+$500. The original 84/366 live acceptance and statistical/scale claims are
+deferred and are not satisfied by the reduced workflow validation. No software
+behavior, Gauntlet change or appliance change is authorized by this amendment.
+
 **Architecture:** Extend ordinary campaign registration, role execution and report publication. Preserve the controller, isolated workers, immutable evidence and separate simulated-user/assessor histories. Measurement availability is derived from authenticated artifacts; it is not inherited from the aggregate verdict.
 
 **Tech Stack:** Bun (evals requires ≥1.3.13; Gauntlet requires ≥1.3.14), TypeScript, existing Zod/YAML contracts, Gauntlet's existing Anthropic client, Linux appliance containers. No new dependencies.
