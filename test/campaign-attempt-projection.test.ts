@@ -2,6 +2,7 @@ import { expect, spyOn, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -142,6 +143,77 @@ test('projection writes exact private files and synthesized identity files', () 
   ]);
 });
 
+test('colon-bearing attempt paths run local npm binaries and preserve logical ids', () => {
+  const fx = projectionFixture();
+  const attemptIds = ['c1:s', 'c1%3As'];
+  try {
+    const preparedStages = attemptIds.map((attemptId) => stage(fx, attemptId));
+    const prepared = preparedStages[0];
+    const codingAgentWorkdir = join(
+      prepared.stagingDir,
+      'coding-agent-workdir',
+    );
+    const binDir = join(codingAgentWorkdir, 'node_modules', '.bin');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(codingAgentWorkdir, 'package.json'),
+      JSON.stringify({
+        private: true,
+        scripts: { probe: 'f28-local-probe' },
+      }),
+    );
+    const sentinel = join(codingAgentWorkdir, 'npm-sentinel');
+    const localCommand = join(binDir, 'f28-local-probe');
+    writeFileSync(
+      localCommand,
+      '#!/bin/sh\nprintf "local executable ran\\n" > "$PWD/npm-sentinel"\n',
+    );
+    chmodSync(localCommand, 0o755);
+
+    const mounts = buildAttemptMounts({
+      ...prepared,
+      evalsRoot: fx.corpus,
+      gauntletRoot: join(fx.corpus, 'gauntlet'),
+      binRoot: join(fx.corpus, 'bin'),
+      superpowersTree: null,
+    });
+    const npm = spawnSync('npm', ['run', 'probe', '--silent'], {
+      cwd: codingAgentWorkdir,
+      env: {
+        ...Bun.env,
+        HOME: prepared.homeDir,
+        npm_config_audit: 'false',
+        npm_config_cache: join(fx.campaignDir, 'npm-cache'),
+        npm_config_fund: 'false',
+        npm_config_offline: 'true',
+        npm_config_update_notifier: 'false',
+      },
+      encoding: 'utf8',
+    });
+    expect(npm.status).toBe(0);
+    expect(readFileSync(sentinel, 'utf8')).toBe('local executable ran\n');
+    expect(prepared.attemptId).toBe(attemptIds[0]);
+    expect(prepared.attemptDir).toBe(
+      join(fx.campaignDir, 'attempts', encodeURIComponent(attemptIds[0])),
+    );
+    expect(mounts).toContainEqual({
+      source: prepared.attemptDir,
+      target: prepared.attemptDir,
+      mode: 'rw',
+    });
+    expect(
+      new Set(preparedStages.map(({ attemptDir }) => attemptDir)).size,
+    ).toBe(2);
+    expect(readdirSync(join(fx.campaignDir, 'attempts')).sort()).toEqual(
+      attemptIds.map(encodeURIComponent).sort(),
+    );
+  } finally {
+    for (const path of [fx.corpus, fx.campaignDir, fx.bundleDir]) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  }
+});
+
 test('passwd home resolves to each attempt private home through a writable bind', () => {
   const fx = projectionFixture();
   try {
@@ -166,7 +238,7 @@ test('passwd home resolves to each attempt private home through a writable bind'
         { source: prepared.homeDir, target: '/home/quorum', mode: 'rw' },
       ]);
       expect(prepared.homeDir).toBe(
-        join(fx.campaignDir, 'attempts', attemptId, 'home'),
+        join(fx.campaignDir, 'attempts', encodeURIComponent(attemptId), 'home'),
       );
       expect(mounts).toContainEqual({
         source: prepared.attemptDir,
