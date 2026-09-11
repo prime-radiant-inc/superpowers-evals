@@ -44,3 +44,15 @@ test('conversation projection refuses qa and unknown modes', () => {
     projectConversationStory(STORY.replace('conversation', 'unknown')),
   ).toThrow(StoryMetaError);
 });
+
+test('assessment allowances do not change the frozen rubric or other frontmatter bytes', () => {
+  for (const separator of ['\n', '\r', '\r\n', '\u2028']) {
+    const story = STORY.replace(
+      'quorum_mode: conversation\n',
+      `quorum_mode: conversation\n quorum_assessment_max_time : "10m"${separator}quorum_assessment_report_grace: '60s'\n`,
+    );
+    expect(projectConversationStory(story)).toEqual(
+      projectConversationStory(STORY),
+    );
+  }
+});

@@ -8,7 +8,7 @@ reserve: 0
 max_exposure_skew: 60
 attempt_bounds:
   max_attempts: 1
-  max_time_s: 900
+  max_time_s: 2100
 grader:
   credential: sonnet5
   model: claude-sonnet-5

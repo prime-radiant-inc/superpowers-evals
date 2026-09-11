@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  assessmentBudgetFromStory,
   quorumModeFromStory,
   readQuorumMaxTime,
   readQuorumMode,
@@ -122,4 +123,61 @@ test('resolves a field separated from the prior one by a bare carriage return', 
     '---\nquorum_tier: sentinel\rquorum_max_time: 90m\n---\nbody',
   );
   expect(readQuorumMaxTime(p)).toBe('90m');
+});
+
+const assessmentStory = (
+  fields: string,
+  mode = 'quorum_mode: conversation\n',
+) => `---\n${mode}${fields}\n---\n`;
+test('assessment budget uses real frontmatter and includes report grace', () => {
+  expect(
+    assessmentBudgetFromStory(
+      assessmentStory(
+        'quorum_assessment_max_time: 10m\nquorum_assessment_report_grace: 60s',
+      ),
+    ),
+  ).toEqual({ totalMs: 600000, reportGraceMs: 60000 });
+  expect(
+    assessmentBudgetFromStory(
+      assessmentStory(
+        'quorum_assessment_max_time: 5m\nquorum_assessment_report_grace: 60s',
+      ),
+    ),
+  ).toEqual({ totalMs: 300000, reportGraceMs: 60000 });
+  expect(assessmentBudgetFromStory('No frontmatter')).toBeNull();
+});
+for (const fields of [
+  '',
+  'quorum_assessment_max_time: 10m',
+  'quorum_assessment_report_grace: 60s',
+  ...[
+    '60s',
+    '65s',
+    '0',
+    '-1m',
+    'bad',
+    '9007199254740992ms',
+    '2147483648ms',
+    '999999999999999999999h',
+  ].map(
+    (value) =>
+      `quorum_assessment_max_time: ${value}\nquorum_assessment_report_grace: 60s`,
+  ),
+  ...['0ms', 'bad', '9007199254740992ms'].map(
+    (value) =>
+      `quorum_assessment_max_time: 10m\nquorum_assessment_report_grace: ${value}`,
+  ),
+])
+  test(`reject invalid assessment budget ${fields}`, () => {
+    expect(() => assessmentBudgetFromStory(assessmentStory(fields))).toThrow();
+  });
+test('QA rejects ignored assessment declarations', () => {
+  for (const fields of [
+    'quorum_assessment_max_time: 10m',
+    'quorum_assessment_report_grace: 60s',
+    'quorum_assessment_max_time: 10m\nquorum_assessment_report_grace: 60s',
+  ])
+    expect(() =>
+      assessmentBudgetFromStory(assessmentStory(fields, '')),
+    ).toThrow();
 });

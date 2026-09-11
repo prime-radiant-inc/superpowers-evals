@@ -17,6 +17,7 @@ import {
   type ScenarioIntake,
 } from '../src/campaign/registration.ts';
 import type { Arm } from '../src/contracts/campaign/arm.ts';
+import { ExperimentSchema } from '../src/contracts/campaign/experiment.ts';
 import { experimentDigest } from '../src/contracts/campaign/experiment-digest.ts';
 import type { Credential } from '../src/contracts/credential.ts';
 import {
@@ -47,7 +48,7 @@ function experimentInput(
       ],
       reserve: 1,
       max_exposure_skew: 30,
-      attempt_bounds: { max_attempts: 2, max_time_s: 300 },
+      attempt_bounds: { max_attempts: 2, max_time_s: 5400 },
     },
     arms: {
       arm_a: arm('arm_a'),
@@ -73,6 +74,7 @@ function experimentInput(
     capability: () => ({ ref: true, none: true }),
     agentOsSupport: () => ['linux'],
     agentFamily: () => 'claude',
+    agentMaxTime: () => undefined,
     campaignOs: 'linux',
     globalCap: 8,
     contention: {
@@ -513,6 +515,7 @@ function scenario(
 ): ScenarioIntake {
   return {
     name,
+    story: 'QA story',
     tier: 'full',
     requires_superpowers: false,
     coupling: 'arm-independent',
@@ -1149,3 +1152,138 @@ test('runtime identity includes labels, refs, ordered pairings, effort and exact
     }),
   ).toThrow(/credential unknown/);
 }, 60000);
+
+test('role budgets resolve each arm from story then agent defaults', () => {
+  const input = experimentInput({
+    arms: { arm_a: arm('arm_a'), arm_b: arm('arm_b', { agent: 'pi' }) },
+    agentMaxTime: (agent) => (agent === 'pi' ? '20m' : '10m'),
+  });
+  expect(prepareExperimentRegistration(input).role_budgets['c1:scn-a']).toEqual(
+    {
+      arm_a: {
+        subject_ms: 600000,
+        assessment_ms: null,
+        assessment_report_grace_ms: null,
+        overhead_ms: 900000,
+      },
+      arm_b: {
+        subject_ms: 1200000,
+        assessment_ms: null,
+        assessment_report_grace_ms: null,
+        overhead_ms: 900000,
+      },
+    },
+  );
+  const withStory = {
+    ...input,
+    scenarios: [
+      scenario('scn-a', {
+        story:
+          '---\nquorum_max_time: 30m\nquorum_mode: conversation\nquorum_assessment_max_time: 10m\nquorum_assessment_report_grace: 60s\n---\n',
+      }),
+    ],
+  };
+  const budget =
+    prepareExperimentRegistration(withStory).role_budgets['c1:scn-a'];
+  for (const name of ['arm_a', 'arm_b'])
+    expect(budget?.[name]).toEqual({
+      subject_ms: 1800000,
+      assessment_ms: 600000,
+      assessment_report_grace_ms: 60000,
+      overhead_ms: 900000,
+    });
+});
+test('outer attempt bounds accommodate every arm including QA final-report headroom', () => {
+  const base = experimentInput();
+  const input = {
+    ...base,
+    suite: {
+      ...base.suite,
+      attempt_bounds: { max_attempts: 2, max_time_s: 1500 },
+    },
+  };
+  expect(
+    prepareExperimentRegistration(input).role_budgets['c1:scn-a']?.['arm_a']
+      ?.subject_ms,
+  ).toBe(600000);
+  expect(() =>
+    prepareExperimentRegistration({ ...input, agentMaxTime: () => '601s' }),
+  ).toThrow(
+    /attempt bound cannot accommodate scn-a's role budgets and overhead/,
+  );
+  expect(() =>
+    prepareExperimentRegistration({
+      ...input,
+      scenarios: [
+        scenario('scn-a', {
+          story:
+            '---\nquorum_mode: conversation\nquorum_assessment_max_time: 5m\nquorum_assessment_report_grace: 60s\n---\n',
+        }),
+      ],
+    }),
+  ).toThrow(/attempt bound cannot accommodate/);
+});
+
+test('registration freezes role budgets from committed story and agent bytes despite checkout edits', () => {
+  const args = experimentRegisterArgs();
+  const git = (argv: string[]) => {
+    const result = args.runner.run('git', ['-C', args.evalsCheckout, ...argv]);
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  const storyPath = join(args.evalsCheckout, 'scenarios/scn-a/story.md');
+  const agentPath = join(args.evalsCheckout, 'coding-agents/claude.yaml');
+  const agent = readFileSync(agentPath, 'utf8');
+  writeFileSync(
+    storyPath,
+    '---\nquorum_mode: conversation\nquorum_assessment_max_time: 5m\nquorum_assessment_report_grace: 60s\n---\nStory.\n',
+  );
+  writeFileSync(agentPath, `${agent}max_time: 20m\n`);
+  git(['add', 'scenarios/scn-a/story.md', 'coding-agents/claude.yaml']);
+  git(['commit', '-qm', 'freeze role allowances']);
+  const evalsRef = git(['rev-parse', 'HEAD']);
+  writeFileSync(
+    storyPath,
+    '---\nquorum_max_time: 1s\n---\nMutable checkout.\n',
+  );
+  writeFileSync(agentPath, `${agent}max_time: 1s\n`);
+  const result = registerExperimentCampaign({ ...args, evalsRef });
+  expect(result.experiment.role_budgets?.['c1:scn-a']?.['arm_a']).toEqual({
+    subject_ms: 1200000,
+    assessment_ms: 300000,
+    assessment_report_grace_ms: 60000,
+    overhead_ms: 900000,
+  });
+  expect(result.experiment.input_digest).toBe(
+    experimentDigest(result.experiment),
+  );
+}, 30000);
+
+test('present frozen role budgets require exact cell and arm inventory and valid bounds', () => {
+  const prepared = prepareExperimentRegistration(experimentInput());
+  const experiment = {
+    ...prepared,
+    campaign_id: 'test',
+    input_digest: '0'.repeat(64),
+    registered_at: '2026-09-10T00:00:00Z',
+    registered_by: 'test',
+  };
+  const budgets = prepared.role_budgets;
+  expect(ExperimentSchema.safeParse(experiment).success).toBe(true);
+  for (const role_budgets of [
+    {},
+    { ...budgets, extra: budgets['c1:scn-a'] },
+    { 'c1:scn-a': { arm_a: budgets['c1:scn-a']?.['arm_a'] } },
+    {
+      'c1:scn-a': {
+        ...budgets['c1:scn-a'],
+        arm_a: { ...budgets['c1:scn-a']?.['arm_a'], subject_ms: 5400000 },
+      },
+    },
+  ])
+    expect(
+      ExperimentSchema.safeParse({ ...experiment, role_budgets }).success,
+    ).toBe(false);
+  const { role_budgets: _budgets, ...retained } = experiment;
+  expect(ExperimentSchema.parse(retained).role_budgets).toBeUndefined();
+});

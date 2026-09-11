@@ -17,6 +17,7 @@ import { snapshotDir } from '../src/capture/index.ts';
 import type { RunEconomics } from '../src/economics.ts';
 import { getEnv } from '../src/env.ts';
 import { runPreparedConversation } from '../src/runner/conversation.ts';
+import { assessmentBudgetFromStory } from '../src/story-meta.ts';
 
 const PI_SESSION_LAUNCH_FIXTURE = resolve(
   import.meta.dir,
@@ -37,7 +38,7 @@ function setup(mode = 'refusal') {
   writeFileSync(join(runDir, 'fixture-mode'), mode);
   writeFileSync(
     join(scenarioDir, 'story.md'),
-    '---\nid: demo\nquorum_mode: conversation\nquorum_max_time: 10m\n---\nPlease fix pricing.\n\n## Acceptance Criteria\n- Fix pricing\n',
+    '---\nid: demo\nquorum_mode: conversation\nquorum_max_time: 10m\nquorum_assessment_max_time: 10m\nquorum_assessment_report_grace: 60s\n---\nPlease fix pricing.\n\n## Acceptance Criteria\n- Fix pricing\n',
   );
   writeFileSync(join(scenarioDir, 'oracle.cjs'), 'process.exit(1)');
   writeFileSync(
@@ -75,6 +76,9 @@ function setup(mode = 'refusal') {
     gauntletBin,
     graderModel: 'offline',
     maxTime: '1s',
+    assessmentBudget: assessmentBudgetFromStory(
+      readFileSync(join(scenarioDir, 'story.md'), 'utf8'),
+    )!,
     envBase: {
       PATH: getEnv('PATH'),
       HOME: runDir,
@@ -375,8 +379,18 @@ test('runner rejects an unsupported family even when it uses the Pi normalizer',
   expect(existsSync(join(result.runDir, 'coding-agent-workdir'))).toBe(false);
 });
 
-test('full runner uses prepared launcher/home and returns the persisted completed verdict', async () => {
+test.each([
+  '10m',
+  '5m',
+])('full runner uses prepared launcher/home and the declared %s assessment budget', async (total) => {
   const args = setup();
+  writeFileSync(
+    args.storyPath,
+    readFileSync(args.storyPath, 'utf8').replace(
+      'quorum_assessment_max_time: 10m',
+      `quorum_assessment_max_time: ${total}`,
+    ),
+  );
   const agents = join(args.runDir, 'agents');
   const context = join(agents, 'claude-context');
   mkdirSync(context, { recursive: true });
@@ -421,7 +435,8 @@ test('full runner uses prepared launcher/home and returns the persisted complete
       .conversation,
   ).toEqual(result.verdict.conversation);
   expect(runWasStopped()).toBe(false);
-});
+  expectAssessmentBudget(result.runDir, total);
+}, 30000);
 
 test('Pi default cwd encoding fails at the real filesystem component limit', () => {
   const root = mkdtempSync(join(tmpdir(), 'pi-session-control-'));
@@ -901,3 +916,35 @@ test('usage-only conversation stays indeterminate and retains incurred subject c
       .split('\n'),
   ).toHaveLength(1);
 });
+
+for (const total of ['10m', '5m'])
+  test(`assessment passes the declared ${total} budget through the process boundary`, async () => {
+    const args = setup();
+    args.maxTime = '10s';
+    const story = readFileSync(args.storyPath, 'utf8').replace(
+      'quorum_assessment_max_time: 10m',
+      `quorum_assessment_max_time: ${total}`,
+    );
+    writeFileSync(args.storyPath, story);
+    args.assessmentBudget = assessmentBudgetFromStory(story)!;
+    await runPreparedConversation(args);
+    expectAssessmentBudget(args.runDir, total);
+  }, 30000);
+
+function expectAssessmentBudget(runDir: string, total: string): void {
+  const invocation = readFileSync(join(runDir, 'invocations.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .find((row) => row.role === 'assess');
+  const roles = JSON.parse(
+    readFileSync(join(runDir, 'gauntlet-roles.json'), 'utf8'),
+  );
+  const deadlineMs =
+    Number(invocation.arguments['hard-deadline-at-ms']) -
+    Date.parse(roles.assessment.started_at);
+  const totalMs = total === '10m' ? 600000 : 300000;
+  expect(deadlineMs).toBe(totalMs);
+  expect(invocation.arguments['max-time']).toBe(`${totalMs}ms`);
+  expect(invocation.arguments['report-grace']).toBe('60000ms');
+}

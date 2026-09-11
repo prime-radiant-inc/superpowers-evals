@@ -151,6 +151,7 @@ for (const interruption of ['cancelled', 'timed_out'] as const)
           expectedChecks: null,
           gauntletBin: gauntlet,
           graderModel: 'claude-sonnet-4-6',
+          assessmentBudget: { totalMs: 600000, reportGraceMs: 60000 },
           maxTime: '5s',
           envBase: {
             HOME: home,
@@ -443,6 +444,7 @@ await new Promise(() => {});
           expectedChecks: null,
           gauntletBin: gauntlet,
           graderModel: 'claude-sonnet-4-6',
+          assessmentBudget: { totalMs: 600000, reportGraceMs: 60000 },
           maxTime: '20s',
           envBase: {
             HOME: home,
@@ -798,6 +800,7 @@ if (mode === 'double-fault') {
           expectedChecks: null,
           gauntletBin: gauntlet,
           graderModel: 'claude-sonnet-4-6',
+          assessmentBudget: { totalMs: 600000, reportGraceMs: 60000 },
           maxTime: '5s',
           envBase: {
             HOME: runDir,

@@ -120,7 +120,12 @@ import {
 } from '../openrouter/generations.ts';
 import { hexNonce, nowStampUtc, repoRoot } from '../paths.ts';
 import { runSetup, SetupError } from '../setup-step.ts';
-import { readQuorumMaxTime, readQuorumMode } from '../story-meta.ts';
+import {
+  type AssessmentBudget,
+  assessmentBudgetFromStory,
+  readQuorumMaxTime,
+  readQuorumMode,
+} from '../story-meta.ts';
 import { populateContextDir } from './context.ts';
 import {
   readConversationRecord,
@@ -1615,9 +1620,13 @@ async function runInnerBody(
 
   // 3. Per-scenario duration override (StoryMetaError -> setup runner error).
   let storyMaxTime: string | null;
+  let assessmentBudget: AssessmentBudget | null;
   let conversationNormalizer: 'claude' | 'codex' | 'pi' | null = null;
   try {
     storyMaxTime = readQuorumMaxTime(storyPath);
+    assessmentBudget = assessmentBudgetFromStory(
+      readFileSync(storyPath, 'utf8'),
+    );
     if (readQuorumMode(storyPath) === 'conversation') {
       if (
         os !== 'linux' ||
@@ -2045,7 +2054,7 @@ async function runInnerBody(
       ? copilotGauntletEnv(envSnapshot())
       : gauntletEnvBase(envSnapshot());
 
-  if (conversationNormalizer !== null) {
+  if (conversationNormalizer !== null && assessmentBudget !== null) {
     return runPreparedConversation({
       runDir,
       normalizationContext,
@@ -2072,6 +2081,7 @@ async function runInnerBody(
       gauntletBin: a.gauntletBin ?? 'gauntlet',
       graderModel: a.graderModel ?? GRADER_MODEL,
       maxTime: maxTime ?? '10m',
+      assessmentBudget,
       envBase: gauntletEnvBaseValue,
       shouldStop: a.shouldStop ?? (() => false),
       identity,

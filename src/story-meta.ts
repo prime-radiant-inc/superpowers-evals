@@ -45,7 +45,11 @@ function frontmatter(storyPath: string): Map<string, string> {
  * frontmatter omits it. Throws {@link StoryMetaError} on a malformed value.
  */
 export function readQuorumMaxTime(storyPath: string): string | null {
-  const v = frontmatter(storyPath).get('quorum_max_time');
+  return quorumMaxTimeFromStory(readFileSync(storyPath, 'utf8'));
+}
+
+export function quorumMaxTimeFromStory(story: string): string | null {
+  const v = frontmatterOf(story).get('quorum_max_time');
   if (v === undefined) return null;
   if (!/^\d+(ms|s|m|h)?$/.test(v)) {
     throw new StoryMetaError(`invalid quorum_max_time: ${v}`);
@@ -136,4 +140,49 @@ export function couplingFromStory(story: string): CouplingValue | null {
 /** {@link couplingFromStory} over the story file at `storyPath`. */
 export function readCoupling(storyPath: string): CouplingValue | null {
   return couplingFromStory(readFileSync(storyPath, 'utf8'));
+}
+
+/** Resolve the role-duration grammar within the process timer's signed 32-bit range. */
+export function durationMs(value: string): number {
+  const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
+  if (!match) throw new StoryMetaError(`invalid role duration: ${value}`);
+  const milliseconds =
+    Number(match[1]) *
+    ({ ms: 1, s: 1000, m: 60000, h: 3600000 }[match[2] ?? 's'] ?? 1000);
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    milliseconds <= 0 ||
+    milliseconds > 2147483647
+  )
+    throw new StoryMetaError(`invalid role duration: ${value}`);
+  return milliseconds;
+}
+
+export type AssessmentBudget = { totalMs: number; reportGraceMs: number };
+
+/** Assessment totals include report grace and Gauntlet's 5s publication reserve. */
+export function assessmentBudgetFromStory(
+  story: string,
+): AssessmentBudget | null {
+  const fields = frontmatterOf(story);
+  const total = fields.get('quorum_assessment_max_time');
+  const grace = fields.get('quorum_assessment_report_grace');
+  if (quorumModeFromStory(story) === 'qa') {
+    if (total !== undefined || grace !== undefined)
+      throw new StoryMetaError(
+        'assessment budgets require quorum_mode: conversation',
+      );
+    return null;
+  }
+  if (total === undefined || grace === undefined)
+    throw new StoryMetaError(
+      'conversation requires quorum_assessment_max_time and quorum_assessment_report_grace',
+    );
+  const totalMs = durationMs(total);
+  const reportGraceMs = durationMs(grace);
+  if (totalMs <= reportGraceMs + 5000)
+    throw new StoryMetaError(
+      'assessment budget must exceed report grace plus 5000ms publication reserve',
+    );
+  return { totalMs, reportGraceMs };
 }

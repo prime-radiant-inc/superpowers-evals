@@ -145,7 +145,7 @@ const EXPERIMENT_SUITE_RAW = [
   'name: finite_comparison',
   'reserve: 1',
   'max_exposure_skew: 30',
-  'attempt_bounds: { max_attempts: 2, max_time_s: 300 }',
+  'attempt_bounds: { max_attempts: 2, max_time_s: 5400 }',
   'grader: { credential: cred_g, model: test-model }',
   'comparisons:',
   '  - baseline: arm_a',

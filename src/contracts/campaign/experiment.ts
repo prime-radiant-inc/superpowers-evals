@@ -118,6 +118,27 @@ export const ExperimentCellSchema = z
     coupling: z.enum(COUPLING_CLASSES),
   })
   .strict();
+const BudgetMillisecondsSchema = z.number().int().positive().max(2147483647);
+export const RoleBudgetSchema = z
+  .object({
+    subject_ms: BudgetMillisecondsSchema,
+    assessment_ms: BudgetMillisecondsSchema.nullable(),
+    assessment_report_grace_ms: BudgetMillisecondsSchema.nullable(),
+    overhead_ms: z.literal(900000),
+  })
+  .strict()
+  .superRefine((budget, ctx) => {
+    if (
+      (budget.assessment_ms === null) !==
+        (budget.assessment_report_grace_ms === null) ||
+      (budget.assessment_ms !== null &&
+        budget.assessment_ms <= (budget.assessment_report_grace_ms ?? 0) + 5000)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'invalid assessment role budget',
+      });
+  });
 export const ExperimentSchema = z
   .object({
     schema_version: z.literal(2),
@@ -143,6 +164,9 @@ export const ExperimentSchema = z
       .strict(),
     grader: GraderSchema,
     cells: z.array(ExperimentCellSchema).min(1),
+    role_budgets: z
+      .record(IdSchema, z.record(NameSchema, RoleBudgetSchema))
+      .optional(),
     excluded_cells: z.array(
       z.object({ cell: IdSchema, reason: IdSchema }).strict(),
     ),
@@ -266,7 +290,40 @@ export const ExperimentSchema = z
       )
         issue('primary block must contain exactly its coherent arm inventory');
     }
+    if (experiment.role_budgets !== undefined) {
+      const budgetKeys = experiment.cells.map(
+        (cell) => `${cell.comparison_id}:${cell.scenario}`,
+      );
+      if (
+        Object.keys(experiment.role_budgets).length !== budgetKeys.length ||
+        Object.keys(experiment.role_budgets).some(
+          (key) => !budgetKeys.includes(key),
+        )
+      )
+        issue('role budgets must match frozen cells');
+    }
     for (const cell of experiment.cells) {
+      if (experiment.role_budgets !== undefined) {
+        const budgets =
+          experiment.role_budgets[`${cell.comparison_id}:${cell.scenario}`];
+        if (
+          !budgets ||
+          Object.keys(budgets).length !== cell.arms.length ||
+          Object.keys(budgets).some((arm) => !cell.arms.includes(arm))
+        )
+          issue('role budgets must match cell arms');
+        for (const arm of cell.arms) {
+          const budget = budgets?.[arm];
+          if (
+            !budget ||
+            budget.subject_ms +
+              (budget.assessment_ms ?? 0) +
+              budget.overhead_ms >
+              experiment.runtime_limits.max_time_s * 1000
+          )
+            issue('attempt bound cannot accommodate frozen role budgets');
+        }
+      }
       const arms = comparisons.get(cell.comparison_id);
       if (
         !arms ||

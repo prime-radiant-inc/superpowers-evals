@@ -30,6 +30,8 @@ import { TRANSCRIPT_VERBS } from './check/transcript-dispatch.ts';
 import { validateBaselineManifest } from './scenario-manifest.ts';
 import { KNOWN_HELPER_NAMES } from './setup-helpers/registry.ts';
 
+import { assessmentBudgetFromStory } from './story-meta.ts';
+
 // The valid quorum_tier set; matches src/story-meta.ts readQuorumTier.
 const VALID_TIERS = ['sentinel', 'full', 'adhoc'] as const;
 
@@ -41,6 +43,9 @@ status: draft
 quorum_tier: full
 quorum_mode: conversation
 quorum_max_time: 10m
+# Editable author-selected assessment allowances, including report grace.
+quorum_assessment_max_time: 10m
+quorum_assessment_report_grace: 60s
 tags: TODO
 ---
 
@@ -347,6 +352,13 @@ export function checkScenario(scenarioDir: string): string[] {
       problems.push(
         `story.md quorum_tier=${pyReprValue(tier)} is not valid ` +
           `(expected one of: ${VALID_TIERS.join(', ')})`,
+      );
+    }
+    try {
+      assessmentBudgetFromStory(text);
+    } catch (error) {
+      problems.push(
+        `story.md ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     const mode = fm['quorum_mode'];

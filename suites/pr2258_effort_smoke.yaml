@@ -33,4 +33,4 @@ max_exposure_skew: 60
 attempt_bounds:
   max_attempts: 2
   # A fractals drive runs about 56 minutes.
-  max_time_s: 5400
+  max_time_s: 8100

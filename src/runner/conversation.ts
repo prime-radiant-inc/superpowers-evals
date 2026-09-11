@@ -43,6 +43,7 @@ import {
 import { buildRunEconomics } from '../economics.ts';
 import type { AtifNormalizationContext } from '../normalize/context.ts';
 import { estimateUsageSidecar } from '../obol/index.ts';
+import { type AssessmentBudget, durationMs } from '../story-meta.ts';
 import { projectConversationStory } from './conversation-input.ts';
 import { invokeGauntletRole } from './gauntlet-role.ts';
 import { type RunIdentity, writePhase } from './phase.ts';
@@ -72,6 +73,7 @@ export type PreparedConversation = {
   gauntletBin: string;
   graderModel: string;
   maxTime: string;
+  assessmentBudget: AssessmentBudget;
   envBase: Readonly<Record<string, string | undefined>>;
   shouldStop: () => boolean;
   identity: RunIdentity;
@@ -114,14 +116,6 @@ function retainConversationRecord(
   return fallback;
 }
 
-function durationMs(value: string): number {
-  const match = /^(\d+)(ms|s|m|h)?$/.exec(value);
-  if (!match) throw new Error(`invalid role duration: ${value}`);
-  return (
-    Number(match[1]) *
-    ({ ms: 1, s: 1000, m: 60000, h: 3600000 }[match[2] ?? 's'] ?? 1000)
-  );
-}
 function runId(scenario: string): string {
   if (!/^[a-zA-Z0-9-]+$/.test(scenario))
     throw new Error('invalid conversation scenario id');
@@ -486,11 +480,13 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
           '--model',
           `agent=${a.graderModel}`,
           '--max-time',
-          '2m',
+          `${a.assessmentBudget.totalMs}ms`,
+          '--report-grace',
+          `${a.assessmentBudget.reportGraceMs}ms`,
         ],
         runDir: a.runDir,
         env: a.envBase,
-        deadlineMs: 120000,
+        deadlineMs: a.assessmentBudget.totalMs,
         shouldStop: a.shouldStop,
       });
     } catch (error) {

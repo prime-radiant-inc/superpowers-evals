@@ -33,6 +33,12 @@ eligibility: `user-pref-no-brainstorm`, `conversation-design`,
 `conversation-review-feedback`, `conversation-config-repair`, and
 `conversation-debugging`. Any additional exclusion misses declared coverage.
 
+New registrations freeze `role_budgets` by cell and arm from the authenticated
+story and agent configuration. Retained campaigns without this metadata have
+unavailable role-budget declarations; no allowances are synthesized for them.
+They retain their existing frozen source and execution rules. Acceptance work
+uses fresh registrations.
+
 The exact subject/fused-QA allowances are in `requirements.json`. An absent
 scenario allowance resolves to the frozen agent's existing ten-minute default.
 Do not consume spare outer time by increasing those allowances. Reserve 15
