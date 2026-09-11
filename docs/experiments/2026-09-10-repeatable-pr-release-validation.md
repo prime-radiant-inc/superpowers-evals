@@ -116,7 +116,7 @@ accuracy or that an Opus upgrade qualifies the instrument.
 
 Seventeen sessions were accepted on the first submission. There were 26 report
 submissions and five unread-citation rejections; no empty criteria arrays,
-XML repairs, truncations, deadline decisions or grace events. All 117 returned
+XML repairs, model-output truncations, deadline decisions or grace events. All 117 returned
 model responses stopped with `tool_use`. The longest session took 171.557
 seconds under its unchanged 600-second total allowance.
 
