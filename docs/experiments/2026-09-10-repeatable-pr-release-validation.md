@@ -148,8 +148,11 @@ and the results above retain their original identities and paths.
 The expanded regression executes a local npm binary, runs Node, and imports a
 local ESM fixture through a raw file URL. Before the correction, native URL
 decoding selected the nonexistent colon path (35 tests pass, one fails);
-afterward all 36 projection tests and 17 container-spawner tests pass, along
-with typecheck and touched-file lint. This proves the observed native URL
+afterward the initial 36 projection tests and 17 container-spawner tests pass.
+Review also caught malformed UTF-16 IDs aliasing under UTF-8 hashing. They now
+fail before writes, preserving the old encoder's refusal; valid replacement
+characters remain accepted. The resulting 37 projection tests, typecheck and
+touched-file lint pass. This proves the observed native URL
 boundary and npm executable behavior offline, not a full Vite integration or
 fresh live acceptance. No dependency install, new grader call, deployment or
 additional campaign was performed for the correction.
