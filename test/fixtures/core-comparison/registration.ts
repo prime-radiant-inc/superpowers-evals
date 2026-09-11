@@ -236,3 +236,32 @@ export {
   FAKE_PROBE,
   probeRunner,
 };
+
+export function comparisonRegisterArgs(): ExperimentRegisterArgs {
+  const args = experimentRegisterArgs();
+  const superpowers = gauntletRepo();
+  git(superpowers.dir, ['tag', 'release']);
+  writeFileSync(join(superpowers.dir, 'README.md'), 'candidate fixture\n');
+  git(superpowers.dir, ['commit', '-qam', 'candidate']);
+  git(superpowers.dir, ['update-ref', 'refs/remotes/origin/dev', 'HEAD']);
+  const suiteRaw = args.suiteRaw
+    .replace('baseline: arm_a', 'baseline: baseline')
+    .replace('treatment: arm_b', 'treatment: candidate');
+  mkdirSync(join(args.evalsCheckout, 'suites'));
+  const suitePath = join(args.evalsCheckout, 'suites/comparison.yaml');
+  writeFileSync(suitePath, suiteRaw);
+  git(args.evalsCheckout, ['add', 'suites/comparison.yaml']);
+  git(args.evalsCheckout, ['commit', '-qm', 'comparison template']);
+  return {
+    ...args,
+    suitePath,
+    suiteRaw,
+    evalsRef: git(args.evalsCheckout, ['rev-parse', 'HEAD']),
+    superpowersCheckout: superpowers.dir,
+    comparisonInput: {
+      baseline: 'release',
+      candidate: 'dev',
+      pairs: [{ agent: 'claude', credential: 'cred_a' }],
+    },
+  };
+}

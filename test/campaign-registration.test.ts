@@ -639,6 +639,7 @@ test('V2 registrations of identical inputs publish distinct IDs with equal input
   const first = registerExperimentCampaign(args);
   const second = registerExperimentCampaign(args);
 
+  expect(first.experiment.comparison_request).toBeUndefined();
   expect(first.experiment.campaign_id).not.toBe(second.experiment.campaign_id);
   expect(first.experiment.input_digest).toBe(second.experiment.input_digest);
   expect(first.campaignDir).not.toBe(second.campaignDir);
@@ -980,3 +981,171 @@ test('V2 registration refuses an effort the arm agent family cannot honor', () =
     ),
   ).toThrow(/arm arm_a effort high refused: harness pi has no effort control/);
 });
+
+import { comparisonRegisterArgs } from './fixtures/core-comparison/registration.ts';
+
+function fixtureGit(path: string, ...args: string[]): string {
+  const result = spawnSync('git', ['-C', path, ...args], { encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
+test('runtime registration freezes refs once across intake passes and authenticates the template', () => {
+  const args = comparisonRegisterArgs();
+  const initial = fixtureGit(
+    args.superpowersCheckout,
+    'rev-parse',
+    'refs/remotes/origin/dev',
+  );
+  const baseline = fixtureGit(args.superpowersCheckout, 'rev-parse', 'release');
+  let moved = false;
+  const runner: CommandRunner = {
+    run(command, argv, options) {
+      if (!moved && command === 'git' && argv.includes('worktree')) {
+        fixtureGit(
+          args.superpowersCheckout,
+          'update-ref',
+          'refs/remotes/origin/dev',
+          baseline,
+        );
+        moved = true;
+      }
+      return args.runner.run(command, argv, options);
+    },
+  };
+  const result = registerExperimentCampaign({ ...args, runner });
+  expect(moved).toBe(true);
+  expect(
+    fixtureGit(
+      args.superpowersCheckout,
+      'rev-parse',
+      'refs/remotes/origin/dev',
+    ),
+  ).toBe(baseline);
+  expect(result.experiment.refs.superpowers_by_arm).toEqual({
+    p1_baseline: baseline,
+    p1_candidate: initial,
+  });
+  expect(result.experiment.comparison_request).toEqual({
+    baseline: { label: 'release', sha: baseline },
+    candidate: { label: 'dev', sha: initial },
+    pairs: [{ agent: 'claude', credential: 'cred_a' }],
+    suite_path: 'suites/comparison.yaml',
+    suite_sha256: sha256Hex(args.suiteRaw),
+  });
+  expect(
+    existsSync(join(result.campaignDir, 'evals/arms/p1_baseline.yaml')),
+  ).toBe(false);
+  expect(loadExperiment(result.campaignDir)).toEqual(result.experiment);
+});
+
+test('runtime registration refuses dirty, untracked, outside and snapshot-substituted templates', () => {
+  const args = comparisonRegisterArgs();
+  expect(() =>
+    registerExperimentCampaign({
+      ...args,
+      suiteRaw: `${args.suiteRaw}# changed\n`,
+    }),
+  ).toThrow(/suite.*bytes|template/i);
+  writeFileSync(args.suitePath, `${args.suiteRaw}# dirty\n`);
+  expect(() => registerExperimentCampaign(args)).toThrow(
+    /suite.*bytes|template/i,
+  );
+  writeFileSync(args.suitePath, args.suiteRaw);
+  const untracked = join(args.evalsCheckout, 'suites/untracked.yaml');
+  writeFileSync(untracked, args.suiteRaw);
+  expect(() =>
+    registerExperimentCampaign({ ...args, suitePath: untracked }),
+  ).toThrow();
+  const outside = join(args.campaignsRoot, 'outside.yaml');
+  writeFileSync(outside, args.suiteRaw);
+  expect(() =>
+    registerExperimentCampaign({ ...args, suitePath: outside }),
+  ).toThrow(/outside/);
+  const runner: CommandRunner = {
+    run(command, argv, options) {
+      const result = args.runner.run(command, argv, options);
+      if (
+        command === 'bun' &&
+        argv.includes('install') &&
+        options?.cwd?.endsWith('/evals')
+      ) {
+        writeFileSync(
+          join(options.cwd, 'suites/comparison.yaml'),
+          `${args.suiteRaw}# corrupt\n`,
+        );
+      }
+      return result;
+    },
+  };
+  expect(() => registerExperimentCampaign({ ...args, runner })).toThrow(
+    /drifted|snapshot/,
+  );
+});
+
+test('runtime identity includes labels, refs, ordered pairings, effort and exact template bytes', () => {
+  const args = comparisonRegisterArgs();
+  const original = registerExperimentCampaign(args).experiment;
+  for (const comparisonInput of [
+    { ...args.comparisonInput!, baselineLabel: 'different label' },
+    { ...args.comparisonInput!, candidate: 'release' },
+    {
+      ...args.comparisonInput!,
+      pairs: [{ agent: 'claude', credential: 'cred_b' }],
+    },
+    {
+      ...args.comparisonInput!,
+      pairs: [
+        { agent: 'claude', credential: 'cred_a', effort: 'high' as const },
+      ],
+    },
+  ]) {
+    expect(
+      registerExperimentCampaign({ ...args, comparisonInput }).experiment
+        .input_digest,
+    ).not.toBe(original.input_digest);
+  }
+  const pairs = [
+    { agent: 'claude', credential: 'cred_a' },
+    { agent: 'claude', credential: 'cred_b' },
+  ];
+  const ordered = registerExperimentCampaign({
+    ...args,
+    comparisonInput: { ...args.comparisonInput!, pairs },
+  }).experiment;
+  const reversed = registerExperimentCampaign({
+    ...args,
+    comparisonInput: { ...args.comparisonInput!, pairs: [...pairs].reverse() },
+  }).experiment;
+  expect(ordered.input_digest).not.toBe(reversed.input_digest);
+  const changed = {
+    ...original,
+    comparison_request: {
+      ...original.comparison_request!,
+      suite_sha256: sha256Hex(`${args.suiteRaw}# comment\n`),
+    },
+  };
+  expect(experimentDigest(changed)).not.toBe(original.input_digest);
+  const suiteRaw = `${args.suiteRaw}# authenticated comment\n`;
+  writeFileSync(args.suitePath, suiteRaw);
+  fixtureGit(args.evalsCheckout, 'add', 'suites/comparison.yaml');
+  fixtureGit(args.evalsCheckout, 'commit', '-qm', 'revise template bytes');
+  const revised = registerExperimentCampaign({
+    ...args,
+    suiteRaw,
+    evalsRef: fixtureGit(args.evalsCheckout, 'rev-parse', 'HEAD'),
+  }).experiment;
+  expect(revised.comparison_request?.suite_sha256).toBe(sha256Hex(suiteRaw));
+  expect(revised.input_digest).not.toBe(original.input_digest);
+  writeFileSync(args.suitePath, args.suiteRaw);
+
+  expect(() =>
+    registerExperimentCampaign({
+      ...args,
+      comparisonInput: {
+        ...args.comparisonInput!,
+        pairs: [{ agent: 'claude', credential: 'unknown' }],
+      },
+    }),
+  ).toThrow(/credential unknown/);
+}, 60000);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EffortLevelSchema } from '../effort.ts';
 import { FiniteNumberSchema } from '../finite.ts';
 import {
   CampaignComparisonSchema,
@@ -11,6 +12,57 @@ import { ID_COMPONENT_RE, SuiteSchema } from './suite.ts';
 
 export type { Suite } from './suite.ts';
 export { SuiteSchema } from './suite.ts';
+
+export const PairingSchema = z
+  .object({
+    agent: z.string().trim().min(1),
+    credential: z.string().trim().min(1),
+    effort: EffortLevelSchema.optional(),
+  })
+  .strict()
+  .transform(({ agent, credential, effort }) => ({
+    agent,
+    credential,
+    ...(effort === undefined ? {} : { effort }),
+  }));
+const PairsSchema = z
+  .array(PairingSchema)
+  .min(1)
+  .superRefine((pairs, ctx) => {
+    const keys = pairs.map((pair) =>
+      JSON.stringify([pair.agent, pair.credential, pair.effort ?? null]),
+    );
+    if (new Set(keys).size !== keys.length)
+      ctx.addIssue({ code: 'custom', message: 'duplicate pairing' });
+  });
+export const ComparisonInputSchema = z
+  .object({
+    baseline: z.string().min(1),
+    candidate: z.string().min(1),
+    pairs: PairsSchema,
+    baselineLabel: z.string().min(1).optional(),
+    candidateLabel: z.string().min(1).optional(),
+  })
+  .strict()
+  .transform(
+    ({ baseline, candidate, pairs, baselineLabel, candidateLabel }) => ({
+      baseline,
+      candidate,
+      pairs,
+      ...(baselineLabel === undefined ? {} : { baselineLabel }),
+      ...(candidateLabel === undefined ? {} : { candidateLabel }),
+    }),
+  );
+const RevisionSchema = z
+  .object({ label: z.string().min(1), sha: z.string().regex(/^[0-9a-f]{40}$/) })
+  .strict();
+export const ResolvedComparisonInputSchema = z
+  .object({
+    baseline: RevisionSchema,
+    candidate: RevisionSchema,
+    pairs: PairsSchema,
+  })
+  .strict();
 
 export const IdSchema = z.string().min(1);
 export const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
@@ -72,6 +124,10 @@ export const ExperimentSchema = z
     campaign_id: IdSchema,
     input_digest: Sha256Schema,
     suite: SuiteSchema,
+    comparison_request: ResolvedComparisonInputSchema.extend({
+      suite_path: z.string().min(1),
+      suite_sha256: Sha256Schema,
+    }).optional(),
     refs: z
       .object({
         superpowers_by_arm: z.record(

@@ -7,6 +7,10 @@ import {
   defaultCommandRunner,
 } from '../agents/command-runner.ts';
 import {
+  ComparisonInputSchema,
+  parsePairing,
+} from '../campaign/comparison-input.ts';
+import {
   agentRuntimeFamily,
   loadAgentConfigForValidation,
 } from '../contracts/agent-config.ts';
@@ -1084,19 +1088,59 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
   campaign
     .command('register <suite>')
     .option('--global-cap <int>', 'parallel attempt cap')
+    .option('--baseline <ref>', 'baseline Superpowers ref')
+    .option('--candidate <ref>', 'candidate Superpowers ref')
+    .option(
+      '--pair <agent:credential[:effort]>',
+      'harness and credential pairing',
+      collectOccurrence,
+      NO_OCCURRENCES,
+    )
+    .option('--baseline-label <label>', 'display label for baseline')
+    .option('--candidate-label <label>', 'display label for candidate')
     .option('--json', 'emit JSON')
-    .action((suite: string, options: JsonOption & { globalCap?: string }) => {
-      const args = {
-        ...commandOptions(options),
-        suite,
-        ...(options.globalCap === undefined
-          ? {}
-          : { globalCap: Number(options.globalCap) }),
-      };
-      return handleAction(args, resolvedDeps, () =>
-        actions.campaignRegister(args),
-      );
-    });
+    .action(
+      (
+        suite: string,
+        options: JsonOption & {
+          globalCap?: string;
+          baseline?: string;
+          candidate?: string;
+          pair: readonly string[];
+          baselineLabel?: string;
+          candidateLabel?: string;
+        },
+      ) => {
+        const args = {
+          ...commandOptions(options),
+          suite,
+          ...(options.globalCap === undefined
+            ? {}
+            : { globalCap: Number(options.globalCap) }),
+        };
+        return handleAction(args, resolvedDeps, () => {
+          const hasComparison =
+            options.baseline !== undefined ||
+            options.candidate !== undefined ||
+            options.pair.length > 0 ||
+            options.baselineLabel !== undefined ||
+            options.candidateLabel !== undefined;
+          const comparisonInput = hasComparison
+            ? ComparisonInputSchema.parse({
+                baseline: options.baseline,
+                candidate: options.candidate,
+                pairs: options.pair.map(parsePairing),
+                baselineLabel: options.baselineLabel,
+                candidateLabel: options.candidateLabel,
+              })
+            : undefined;
+          return actions.campaignRegister({
+            ...args,
+            ...(comparisonInput === undefined ? {} : { comparisonInput }),
+          });
+        });
+      },
+    );
   campaign
     .command('list')
     .option('--json', 'emit JSON')

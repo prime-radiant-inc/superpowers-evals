@@ -563,3 +563,119 @@ test('an ended readout preserves its snapshot before final termination and seal'
     writeFileSync(join(f.root, 'release-termination'), 'release');
   }
 }, 20000);
+
+import { comparisonRegisterArgs } from './fixtures/core-comparison/registration.ts';
+
+test('runtime CLI registration parses ordered pairs and discloses effective coverage and caps', async () => {
+  const args = comparisonRegisterArgs();
+  const f = helperFixture();
+  const commands = campaignCommands({
+    loaded: {
+      ...f.loaded,
+      config: {
+        ...f.loaded.config,
+        evals: { ...f.loaded.config.evals, path: args.evalsCheckout },
+        superpowers: {
+          ...f.loaded.config.superpowers,
+          path: args.superpowersCheckout,
+        },
+      },
+    },
+    runner: args.runner,
+    probe: FAKE_PROBE,
+  });
+  const output: string[] = [];
+  const errors: string[] = [];
+  let code = 0;
+  const program = createApplianceProgram({
+    stdout: (value) => output.push(value),
+    stderr: (value) => errors.push(value),
+    setExitCode: (value) => {
+      code = value;
+    },
+    actions: { campaignRegister: (input) => commands.register(input) },
+  });
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'campaign',
+    'register',
+    args.suitePath,
+    '--baseline',
+    'release',
+    '--candidate',
+    'dev',
+    '--baseline-label',
+    'released',
+    '--candidate-label',
+    'development',
+    '--pair',
+    'claude:cred_a:high',
+    '--pair',
+    'claude:cred_b',
+    '--global-cap',
+    '3',
+    '--json',
+  ]);
+  expect(errors).toEqual([]);
+  expect(code).toBe(0);
+  const result = JSON.parse(output.join(''));
+  expect(result.experiment.comparison_request).toMatchObject({
+    baseline: { label: 'released' },
+    candidate: { label: 'development' },
+    pairs: [
+      { agent: 'claude', credential: 'cred_a', effort: 'high' },
+      { agent: 'claude', credential: 'cred_b' },
+    ],
+  });
+  expect(result.summary).toMatchObject({
+    planned_samples: 4,
+    reserve_slots: 2,
+    global_cap: 3,
+    effort: [
+      { arm: 'p1_baseline', effort: 'high' },
+      { arm: 'p1_candidate', effort: 'high' },
+      { arm: 'p2_baseline', effort: 'provider default' },
+      { arm: 'p2_candidate', effort: 'provider default' },
+    ],
+  });
+  for (const pool of result.summary.pools)
+    expect(pool.effective_max_concurrency).toBe(3);
+});
+
+test.each([
+  ['--baseline', 'release'],
+  ['--candidate', 'dev'],
+  ['--pair', 'claude:cred_a'],
+  ['--baseline-label', 'label'],
+])('runtime CLI rejects incomplete input %j without registration', async (flag, value) => {
+  const output: string[] = [];
+  let called = false;
+  let code = 0;
+  const program = createApplianceProgram({
+    stdout: (s) => output.push(s),
+    stderr: (s) => output.push(s),
+    setExitCode: (value) => {
+      code = value;
+    },
+    actions: {
+      campaignRegister: () => {
+        called = true;
+        return {};
+      },
+    },
+  });
+  await program.parseAsync([
+    'node',
+    'evals-appliance',
+    'campaign',
+    'register',
+    'suite.yaml',
+    '--json',
+    flag,
+    value,
+  ]);
+  expect(called).toBe(false);
+  expect(code).toBe(1);
+  expect(JSON.parse(output.join('')).ok).toBe(false);
+});
