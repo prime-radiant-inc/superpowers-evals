@@ -8,8 +8,36 @@ required full-review grounding failures; three Opus sessions ended on API errors
 **Grading qualification remains unmet.** No focused or release comparison was
 launched. Implementation verification is complete; live comparison acceptance
 remains unmet. The original failed qualification below is retained unchanged.
-Drew's approximately $500 reduced scope remains F28/R118, conditional on grading
-qualification; original 84/366 full-scale acceptance is deferred.
+Drew's approximately $500 reduced scope remains F28/R118. The September 11
+amendment below authorizes F28 without code-review qualification; R118 remains
+held. Original 84/366 full-scale acceptance is deferred.
+
+## Focused launch amendment — 2026-09-11
+
+Drew approved running the existing 28-sample dev-versus-v6.3.0 focused workload
+and requested a fresh team review before launch. Its seven scenarios do not
+include conversation-code-review, the sole scope of the failed qualification
+pack. The plan's qualification-before-F sequencing is explicitly superseded;
+the failed results, labels, rubric and review-quality requirement remain intact.
+No successful qualification record is created or attached. R118 and the
+alternate-candidate registration demonstration remain deferred.
+
+The six fused-QA scenarios and conversation-design retain their existing paths.
+Conversation-design shares the assessor implementation and prohibits unsupported
+claims, so this is not evidence of independent or calibrated graders. Preserve
+the ordinary report's uncalibrated labels, inspect decisive evidence for
+assessor-derived findings, and distinguish check authority, interaction,
+judgments, actor costs and missingness. A complete publication receipt does not
+prove semantic accuracy or complete release acceptance.
+
+The frozen baseline remains `b36e0829c6d0140e93cfef2ca599b1b07d4a7797`, candidate
+`3a8bdc11e1db42955350d6d6f063f7a8e89aef58`. Keep the seven scenarios, Claude/Codex
+pairings, n=1, zero reserves, role budgets, eight-way target and pricing snapshot.
+The retained focused forecast is $40.11/$55.62 standard/upper mean and
+$52.58/$73.35 summed-cell p90 estimates, not ceilings. The target remains four
+hours to a usable report; descriptive observations cannot establish equivalence
+or the deferred full-scale acceptance. No model calls or campaign launch have
+occurred under this amendment yet.
 
 ## Prompt-first retry — 2026-09-11
 

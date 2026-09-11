@@ -14,6 +14,24 @@ approximately $500. The original 84/366 live acceptance and its statistical or
 scale claims are deferred; a reduced result supplies initial observations and
 does not satisfy those claims. No software behavior or Gauntlet contract changes.
 
+### Focused launch amendment — 2026-09-11
+
+Drew authorized launching F28 without a successful conversation-code-review
+qualification record. F28 selects no code-review scenario; the qualification
+pack covers only that scenario's obligations. Its failed Sonnet and Opus results
+remain unchanged, grounding remains mandatory for review-quality claims, and
+R118 remains held. This amends execution sequencing only.
+
+The six fused-QA scenarios and conversation-design retain their existing
+graders, rubrics and evidence requirements. Conversation-design shares the
+assessor implementation and includes unsupported-claim checks; this amendment
+does not establish independent or calibrated judgments. Report those judgments
+as uncalibrated and inspect decisive evidence before claiming an improvement or
+regression. Executable checks establish only their declared scope. Complete
+publication is not semantic qualification or completed release acceptance.
+Keep all 28 samples, frozen refs, role budgets, eight-way admission target,
+pricing and missingness policy; n=1 supports descriptive observations only.
+
 ## Purpose and success
 
 Given a Superpowers baseline and candidate, run a declared comparison across

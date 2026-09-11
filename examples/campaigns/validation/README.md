@@ -28,6 +28,15 @@ Codex 44, Pi 30), a **24-hour** target, and a 10800-second outer bound. These
 are reduced workflow-validation counts, not measured throughput or the original
 full-scale acceptance.
 
+Drew's September 11 amendment authorizes F28 without successful code-review
+qualification, after a bounded team review. None of its seven scenarios is
+conversation-code-review. The failed qualification is retained, no success
+record is attached, and R118 remains held. This does not calibrate the focused
+graders: conversation-design shares the assessor and checks unsupported claims;
+the other six scenarios use fused QA. Report judgments with their evidence and
+uncalibrated status, checks within their declared authority, and cost/coverage
+separately. Publication completeness does not establish semantic accuracy.
+
 Pi is excluded from exactly these seven release scenarios by their existing
 eligibility: `user-pref-no-brainstorm`, `conversation-design`,
 `worktree-no-drift-to-main`, `tdd-holds-under-tests-later-pressure`,

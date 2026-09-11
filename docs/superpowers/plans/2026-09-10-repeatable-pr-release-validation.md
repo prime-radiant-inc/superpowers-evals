@@ -14,6 +14,24 @@ $500. The original 84/366 live acceptance and statistical/scale claims are
 deferred and are not satisfied by the reduced workflow validation. No software
 behavior, Gauntlet change or appliance change is authorized by this amendment.
 
+### Focused launch amendment — 2026-09-11
+
+Drew authorized the existing F28 comparison after a bounded team review,
+without successful conversation-code-review qualification. This supersedes
+Task 9's qualification-before-F sequencing. The pack's failed outcomes and
+scope remain unchanged; no successful qualification record is created or
+attached. F28 contains no code-review scenario. Its six fused-QA scenarios and
+conversation-design still use uncalibrated assessment, and conversation-design
+shares the assessor and checks unsupported claims. Inspect decisive evidence
+for assessor-derived findings; do not infer accuracy from a published report.
+
+Record the amendment, prepare and freeze the final source identity, register
+exactly 28 samples, then execute F through the existing helper and read its
+ordinary report. Preserve existing refs, pairings, n=1, budgets, caps, pricing,
+zero reserves and all missing/error outcomes. R118 and its acceptance remain
+held; the alternate-candidate registration demonstration remains deferred.
+No further prompt/model experiment or runtime change is part of this amendment.
+
 **Architecture:** Extend ordinary campaign registration, role execution and report publication. Preserve the controller, isolated workers, immutable evidence and separate simulated-user/assessor histories. Measurement availability is derived from authenticated artifacts; it is not inherited from the aggregate verdict.
 
 **Tech Stack:** Bun (evals requires ≥1.3.13; Gauntlet requires ≥1.3.14), TypeScript, existing Zod/YAML contracts, Gauntlet's existing Anthropic client, Linux appliance containers. No new dependencies.
