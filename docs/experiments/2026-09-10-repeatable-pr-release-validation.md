@@ -1,11 +1,13 @@
 # Repeatable PR and release validation — 2026-09-10
 
-Status: implementation and the reduced F28/R118 declarations are merged and
-deployed at Evals `c024c27d` and Gauntlet `9e5511e7`. The authorized qualification24
-finished for an estimated **$1.6580323**, but **qualification failed**: nine
-confirmed grounding false passes and a defective positive control affecting
-three further assessments. No focused or release comparison was launched.
-Implementation verification is complete; live comparison acceptance remains unmet.
+Status: implementation, reduced F28/R118 declarations and the prompt amendment
+are merged and deployed at Evals `ec6bdbb7` and Gauntlet `aa08b729`. After the
+initial failed qualification, the corrected-control prompt retry yielded
+16/24 supported vectors for Sonnet and 15/24 for Opus. Both still miss the
+required full-review grounding failures; three Opus sessions ended on API errors.
+**Grading qualification remains unmet.** No focused or release comparison was
+launched. Implementation verification is complete; live comparison acceptance
+remains unmet. The original failed qualification below is retained unchanged.
 Drew's approximately $500 reduced scope remains F28/R118, conditional on grading
 qualification; original 84/366 full-scale acceptance is deferred.
 
@@ -63,16 +65,16 @@ grounding failures, four fail correctly, seven pass and one is unclear; all
 criteria 3 and 5 in every repetition. Minor wording/citation inaccuracies in
 matching reports are retained in the private reason audit.
 
-| Case | Sonnet grounding, repetitions 1 / 2 / 3 |
-| --- | --- |
-| query-full | unclear / pass / pass; expected fail |
-| storage-full | pass / pass / pass; expected fail |
-| query-full-corrected | pass / pass / pass |
-| storage-full-corrected, new control | pass / pass / pass |
-| supported-complete | pass / pass / pass |
-| unsupported-query | pass / pass / fail; expected fail |
-| unsupported-storage | fail / fail / fail |
-| missing-credential | pass / pass / pass |
+| Case | Sonnet grounding, repetitions 1 / 2 / 3 | Opus grounding, repetitions 1 / 2 / 3 |
+| --- | --- | --- |
+| query-full; expected fail | unclear / pass / pass | pass / pass / pass |
+| storage-full; expected fail | pass / pass / pass | pass / pass / pass |
+| query-full-corrected | pass / pass / pass | unavailable / unavailable / pass |
+| storage-full-corrected, new control | pass / pass / pass | pass / pass / pass |
+| supported-complete | pass / pass / pass | pass / pass / pass |
+| unsupported-query; expected fail | pass / pass / fail | fail / fail / fail |
+| unsupported-storage; expected fail | fail / fail / fail | fail / fail / unavailable |
+| missing-credential | pass / pass / pass | pass / pass / pass |
 
 The new prompt elicited more explicit claim lists but did not reliably prevent
 the faulty lookup-implies-authentication inference or crediting unrelated
@@ -86,8 +88,66 @@ SHA-256: `0f8f0450864d0973fb7874af761a5ea4eed3b7be5ee5fa3dcf8d080914691842`.
 The finite invocation now sets the frozen pricing directory through obol's
 native API before pricing; all costs carry the September 10 pricing date.
 
-Opus comparison is in progress. F28/R118 and alternate-candidate registration
-remain held behind the grading gate.
+### Opus with the same prompt and settings
+
+All 24 scheduled pairs ran exactly once with `claude-opus-5`, changing only
+the model from the Sonnet setup above. Both used the existing **medium effort**
+setting; high effort was not tested. All 48 event streams contain the exact
+same system prompt, SHA-256
+`2ef4d21fbb002345ecf39a5c9d3f2ec1a80758427b817df4698c235ca2ded75d`.
+
+Opus published **21 accepted reports: 15 supported complete vectors and six
+grounding false passes**. Three sessions produced no report because the API
+returned errors. The 12 expected grounding negatives yielded five correct
+failures, six false passes and one unavailable judgment. The 12 expected
+positives yielded ten passes and two unavailable judgments. There were no
+semantic unclear judgments or false failures. The omission control correctly
+failed criteria 3 and 5 in all three repetitions. One matching control report
+misstates timing behavior as directly observed, while its decisive basis
+correctly recognizes the delivery's qualification; the private audit records
+this reason defect separately.
+
+All original full-review negatives still falsely pass. Opus explicitly excuses
+unsupported storage/bypass assertions as reasonable inferences or as hedged
+elsewhere. That fails the unchanged whole-delivery grounding obligation.
+Available constructed-negative judgments all correctly fail. This supports a
+specific full-delivery interpretation failure, not a claim of general model
+accuracy or that an Opus upgrade qualifies the instrument.
+
+Seventeen sessions were accepted on the first submission. There were 26 report
+submissions and five unread-citation rejections; no empty criteria arrays,
+XML repairs, truncations, deadline decisions or grace events. All 117 returned
+model responses stopped with `tool_use`. The longest session took 171.557
+seconds under its unchanged 600-second total allowance.
+
+The API returned HTTP 500 for `query-full-corrected` repetitions 1 and 2, and
+HTTP 400 (`Invalid request data`) for `unsupported-storage` repetition 3.
+Each error response omitted usage. Across 120 physical requests, 117 have
+returned usage and three remain unknown; known estimated Opus spend is
+**$9.11327175 plus those unreported requests**. This is not complete cost
+coverage. The API status and request linkage are retained; the underlying
+cause of those errors is not established here.
+
+The finite invocation stopped after each of the first two active batches.
+After inspection, fresh invocation identities admitted only the remaining
+scheduled pairs: repetitions 2–3, then repetition 3. All failed sessions remain
+included; no case was replaced, retried as a new session, or dropped. The exact
+24 distinct `(case, repetition)` pairs were verified. Active invocation time
+totaled 461.787 seconds; first start to last finish, including inspection and
+new-invocation gaps, was 666.857 seconds. These are not controlled latency
+comparisons with Sonnet.
+
+| Private Opus receipt ID | Exact receipt SHA-256 |
+| --- | --- |
+| assessment-qualification-HbL1MD | `b1e5b03ab3e82d47b12b4e6338fa8557c394d78d6d634f97e31a8cb14fa5a687` |
+| assessment-qualification-Ja0QEN | `9d050c3f9b8c46155708b09955233a4535e254016359af27b8a74a9c730d27d9` |
+| assessment-qualification-gD18TQ | `88d860a094395421f4e7222e845e1f53f5c266d805edf97fdd8efe7a783fef79` |
+
+Known estimated spend for this prompt/model comparison is **$11.32803745 plus
+three unknown-usage requests**. Both reason audits and all original receipts
+are retained privately. **Neither model qualifies on the required full-review
+grounding cases.** F28/R118 and alternate-candidate registration remain
+unstarted. No further model calls are queued.
 
 ## Current reduced execution amendment — 2026-09-10
 
