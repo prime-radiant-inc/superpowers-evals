@@ -15,7 +15,7 @@
 // (shared with the unified check-tool dispatcher's `not` path); this file owns
 // only the record emission + exit-code mapping.
 
-import { recordFail, recordPass } from '../check/record.ts';
+import { recordError, recordFail, recordPass } from '../check/record.ts';
 import { loadCalls } from '../check/transcript.ts';
 import { transcriptOutcome } from '../check/transcript-dispatch.ts';
 
@@ -39,7 +39,7 @@ const outcome = transcriptOutcome(verb ?? '', cliArgs, calls, availability);
 
 if (outcome.broken) {
   console.error(outcome.detail);
-  recordFail(verbName, cliArgs, outcome.detail);
+  recordError(verbName, cliArgs, outcome.detail);
   process.exit(NONINVERTIBLE_EXIT);
 }
 

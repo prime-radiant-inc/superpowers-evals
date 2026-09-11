@@ -11,6 +11,7 @@ const KNOWN_RECORD_KEYS: ReadonlySet<string> = new Set([
   'args',
   'negated',
   'passed',
+  'checker_status',
   'detail',
   'phase',
   'score',
