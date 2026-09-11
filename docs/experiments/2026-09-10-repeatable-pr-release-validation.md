@@ -1,9 +1,30 @@
 # Repeatable PR and release validation — 2026-09-10
 
-Status: declarations and fixture freeze complete; Task 9 capacity/pricing data
-preflight recorded below. Final implementation verification, grading qualification
-and live acceptance **pending**. No model calls, deployment or live workload was
-performed by this data preflight.
+Status: implementation is merged at Evals `1aca1214` and Gauntlet `9e5511e7`.
+Drew amended live validation to one repetition per declared cell: focused F28 and
+release R118, with qualification24 unchanged and an approximately $500 planning
+budget. Final implementation verification, grading qualification and live
+acceptance **pending**. No model calls, deployment or live workload was performed
+by this data preflight.
+
+## Current reduced execution amendment — 2026-09-10
+
+The current templates use F28/R118 (seven focused scenarios and 22 release
+scenarios, Claude/Codex/Pi eligibility unchanged, both arms, one repetition
+everywhere). The four-hour and 24-hour outer targets, per-role allowances,
+scenario selection, frozen refs, prices, exclusions and qualification24 remain
+unchanged. The retained forecast is $40.11/$55.62 standard/upper mean for F and
+$193.44/$295.83 for R; summed-cell p90 is $52.58/$73.35 and $248.65/$378.18.
+With qualification's $1–$10 allowance, combined planning arithmetic is
+$234.55–$461.53 (approximately $235–$462), not a spending ceiling or guaranteed
+final cost. Historical cohort proxies, unknown physical usage/retries and the
+one-repetition design limit interpretation.
+
+The original 84/366 declaration is a dated superseded full-scale proposal. It is
+deferred and is not satisfied by this reduced workflow validation; n=1 supplies
+initial behavioral observations and cannot establish equivalence or run-to-run
+variability. The current templates and this amendment are data-only; no Gauntlet
+or product behavior changed.
 
 ## Questions and frozen declarations
 
@@ -20,10 +41,11 @@ Versioned declarations: [workloads and constraints](../../examples/campaigns/val
 [focused](../../examples/campaigns/validation/focused.yaml),
 [release](../../examples/campaigns/validation/release.yaml), and
 [per-criterion requirements](../../examples/campaigns/validation/requirements.json).
-Focused: seven scenarios, Claude/Codex, two revisions, three repetitions,
-84 samples, four-hour target. Release: 22 scenarios, Claude/Codex/Pi, two
-revisions, three repetitions except five fractals repetitions, 366 samples,
-24-hour target. The seven existing Pi exclusions are declared in the README.
+Focused: seven scenarios, Claude/Codex, two revisions, one repetition, 28
+samples, four-hour target. Release: 22 scenarios, Claude/Codex/Pi, two
+revisions, one repetition everywhere, 118 samples, 24-hour target. The seven
+existing Pi exclusions are declared in the README. The earlier 84/366 counts
+remain below as a dated superseded proposal.
 Both use the frozen direct Anthropic Sonnet 5 grader and retain the committed
 acceptance-specific pricing snapshot described below. Eight-way capacity is a
 quota-supported configuration proposal, not a throughput result.
@@ -38,8 +60,8 @@ criteria 3 and 5 in its three assessments. No disputed label is counted as gold.
 
 Case-manifest SHA-256: `11b273a535f878a12ed1b075949b4e4f353b625636144b533b7f12a351782459`.
 Requirements SHA-256: `4bef2871b9890dbc5246bdb2e30607522975ff00b4631ea17daf25af0a856af1`.
-Focused-template SHA-256: `2bd7ce9b5b19738ceca9aaa8535588e52feef6b7ce1636860a95bb6bb132dc61`.
-Release-template SHA-256: `fae792e3d7249c6b5173850a8e9238ebb4a52a5751206f2e1e3767d598ea1f67`.
+Focused-template SHA-256: `9c72e7e8b0e5f6dfa04af9741a6d4914b4bdc204559b068bb4fc220397b0becd`.
+Release-template SHA-256: `fb956890b0946512ef5a34e91bd431f080d9524170b82ca05f1ca855cd651032`.
 
 The requirements digest includes explicit assessment-qualification scope metadata
 for the six conversation-code-review obligations; the rubric and case-manifest
@@ -70,9 +92,11 @@ Report workload dispositions, all declared repetitions, native/visible
 capture, trusted executable-check dispositions, every applicable rubric row,
 qualification scope, actor-specific known costs and missingness, full turnaround
 and coverage. Cost unknown is not zero and does not discard behavioral evidence.
-No detected difference at n=3/5 establishes equivalence. No automatic release
-decision follows. Model assessments, paid runs, operational capacity, four-hour
-and 24-hour targets, and live comparison results remain pending.
+The superseded n=3/5 proposal's “no detected difference” condition would not
+establish equivalence. The current n=1 amendment supplies initial observations
+only. No automatic release decision follows. Model assessments, paid runs,
+operational capacity, four-hour and 24-hour targets, and live comparison results
+remain pending.
 
 ## Independent-measurement integration boundary
 
@@ -205,7 +229,17 @@ also confirmed the existing Terra, Luna and Astra standard/long-context rates.
 Retained forecasting cohorts include 97 Codex Terra, 40 Luna, one Astra and
 90 Claude Haiku model records. No OpenAI rate correction is made.
 
-### Planning forecast, not spending limits
+### Current reduced planning forecast, not spending limits
+
+The reduced forecast reweights the existing per-cell cohorts to one repetition
+per declared cell. It is $40.11/$55.62 standard/upper mean for focused and
+$193.44/$295.83 for release; summed-cell p90 estimates are $52.58/$73.35 and
+$248.65/$378.18. With the unchanged qualification24 allowance of $1–$10, the
+combined planning arithmetic is $234.55–$461.53. It is neither a spending
+ceiling nor a confidence interval, and does not account for unknown physical
+usage or retries.
+
+### Superseded full-scale planning forecast, not current authorization
 
 The forecast selects each quantity's first populated cohort: exact scenario,
 harness and primary model; then the same scenario/harness with another model
@@ -246,8 +280,9 @@ drift and actual overlap still constrain delivery. Preserve this negative
 capacity evidence without promising the proposed cap will meet either target.
 
 Before any deployment/live authorization, present the final tested evals and
-Gauntlet heads, unchanged 84/366 declarations, these estimates and limitations,
-and the exact 24-assessment sequence. Then qualify the frozen grading gate,
+Gauntlet heads, the current F28/R118 declarations, these estimates and
+limitations, and the exact 24-assessment sequence. The original 84/366 counts
+remain deferred historical scope. Then qualify the frozen grading gate,
 freeze its data and instrument identity, register both comparisons plus the
 registration-only alternate candidate demonstration, and measure both ordinary
 reports against their turnaround and completeness obligations. This preflight

@@ -4,6 +4,16 @@ Status: written design for Drew's review. The operator, execution, grading and
 reporting contracts were agreed in conversation. Implementation and live
 acceptance have not started under this design.
 
+### Dated execution amendment — 2026-09-10
+
+Drew amended the live validation execution counts after implementation merged:
+the current data-only templates use F28/R118, n=1 for every eligible scenario,
+harness and arm, while qualification24 and all scenario selection, exclusions,
+refs, prices and time budgets remain unchanged. The planning budget is
+approximately $500. The original 84/366 live acceptance and its statistical or
+scale claims are deferred; a reduced result supplies initial observations and
+does not satisfy those claims. No software behavior or Gauntlet contract changes.
+
 ## Purpose and success
 
 Given a Superpowers baseline and candidate, run a declared comparison across

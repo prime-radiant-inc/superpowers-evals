@@ -18,5 +18,4 @@ comparisons:
   - baseline: baseline
     treatment: candidate
     scenarios: [brainstorming-todo-purpose-discovery, brainstorming-resists-jump-to-implementation, brainstorming-companion-just-in-time, user-pref-no-brainstorm, writing-plans-no-spec-conversational, cost-spec-plan-duplication, conversation-design, superpowers-bootstrap, triggering-test-driven-development, verification-phantom-completion, triggering-finishing-a-development-branch, worktree-no-drift-to-main, sdd-escalates-broken-plan, sdd-breaker-rules-and-continues, sdd-go-fractals-opus48, receiving-code-review-pushback, tdd-holds-under-tests-later-pressure, conversation-code-review, conversation-review-feedback, conversation-config-repair, conversation-pricing, conversation-debugging]
-    n: 3
-    cells: {sdd-go-fractals-opus48: {n: 5}}
+    n: 1
