@@ -38,6 +38,7 @@ import {
   type FinalVerdict,
   type GauntletLayer,
   GauntletLayerSchema,
+  type RunError,
   type RunErrorStage,
 } from '../contracts/verdict.ts';
 import { buildRunEconomics } from '../economics.ts';
@@ -127,7 +128,7 @@ function runId(scenario: string): string {
       'Z',
     )}_${Math.random().toString(36).slice(2, 6).padEnd(4, '0')}`;
 }
-function regularFile(root: string, path: string): string {
+export function regularFile(root: string, path: string): string {
   EvidenceIndexSchema.parse({ files: [path] });
   const full = join(root, path);
   const real = realpathSync(full);
@@ -218,6 +219,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
   let gauntlet: GauntletLayer | null = null;
   let checks = [...a.preRecords];
   let stage: RunErrorStage = 'setup';
+  let checkError: RunError | null = null;
   let captureEmpty = true;
   const files: string[] = [];
   const index = () => {
@@ -447,17 +449,17 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
     index();
     if (await stopRequested()) return stopped();
     if (post.exitCode !== 0)
-      return fail(
-        'checks',
-        `post-checks crashed (exit ${post.exitCode}): ${post.stderr}`,
-      );
+      checkError = {
+        stage: 'checks',
+        message: `post-checks crashed (exit ${post.exitCode}): ${post.stderr}`,
+      };
     if (a.expectedChecks !== null) {
       const mismatch = compareRecords(a.expectedChecks, checks);
       if (mismatch.missing.length || mismatch.unexpected.length) {
-        return fail(
-          'checks',
-          `expected-check manifest mismatch: ${JSON.stringify(mismatch)}`,
-        );
+        checkError ??= {
+          stage: 'checks',
+          message: `expected-check manifest mismatch: ${JSON.stringify(mismatch)}`,
+        };
       }
     }
     stage = 'gauntlet';
@@ -552,7 +554,7 @@ async function runConversation(a: PreparedConversation): Promise<FinalVerdict> {
       gauntlet,
       checks,
       captureEmpty,
-      error: null,
+      error: checkError,
       expected: a.expectedChecks,
     });
     return { ...verdict, conversation };

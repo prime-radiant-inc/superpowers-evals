@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { publishExecution } from '../../../src/campaign/attempt-publish.ts';
 import {
@@ -20,6 +20,10 @@ export function completedPublicationFixture(
   validityBlockId = 'primary',
   experiment = twoArmExperiment(),
   criteria?: Array<{ criterion: string; verdict: string; evidence: string }>,
+  retainRun?: (
+    runDir: string,
+    identity: import('../../../src/contracts/campaign/campaign.ts').CampaignIdentity,
+  ) => void,
 ) {
   const f = lifecycleFixture(experiment);
 
@@ -85,6 +89,10 @@ export function completedPublicationFixture(
       }),
     );
     writeFileSync(join(runDir, 'Z-binary'), Buffer.from([255, 128, 0]));
+    retainRun?.(runDir, intent.identity);
+    const retainedVerdict = JSON.parse(
+      readFileSync(join(runDir, 'verdict.json'), 'utf8'),
+    );
     writeAttemptManifest(runDir, intent.identity);
     const container_id = (i === 0 ? 'a' : 'b').repeat(64);
     const stopped = {
@@ -99,7 +107,7 @@ export function completedPublicationFixture(
       resultsRoot,
     });
     const obs = observation(block, i, 4 + i, {
-      outcome: i === 0 ? 'pass' : 'fail',
+      outcome: retainedVerdict.final,
       artifacts: result.artifacts,
       stopped,
     });

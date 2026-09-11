@@ -200,8 +200,8 @@ for (const checkerPresent of [true, false])
     const roles = JSON.parse(
       readFileSync(join(args.runDir, 'gauntlet-roles.json'), 'utf8'),
     );
-    if (checkerPresent) expect(roles.assessment.started_at).not.toBeNull();
-    else expect(roles.assessment.started_at).toBeNull();
+    expect(roles.assessment.started_at).not.toBeNull();
+    expect(verdict.gauntlet?.criteria?.length).toBeGreaterThan(0);
   }, 30_000);
 
 test('completed refusal retains evidence and failing oracle still reaches isolated assessment', async () => {
@@ -315,7 +315,7 @@ for (const mode of ['conversation-hang', 'assessment-hang'])
       mode === 'assessment-hang' ? 'completed' : 'stopped',
     );
   });
-test('a crashed checker preserves completion and records but starts no assessment', async () => {
+test('a crashed checker preserves completion, records and independent assessment', async () => {
   const args = setup();
   writeFileSync(
     args.checksSh,
@@ -329,7 +329,8 @@ test('a crashed checker preserves completion and records but starts no assessmen
     readFileSync(join(args.runDir, 'invocations.jsonl'), 'utf8')
       .trim()
       .split('\n'),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
+  expect(v.gauntlet?.criteria?.length).toBeGreaterThan(0);
 });
 test('cancellation after oracle starts no assessment', async () => {
   const args = setup();
@@ -604,7 +605,7 @@ test('conversation Windows rejection runs no setup or role', async () => {
   expect(existsSync(join(result.runDir, 'coding-agent-workdir'))).toBe(false);
 });
 
-test('a check manifest mismatch stops before assessment', async () => {
+test('a check manifest mismatch remains indeterminate with independent assessment', async () => {
   const args = setup();
   const v = await runPreparedConversation({
     ...args,
@@ -615,7 +616,8 @@ test('a check manifest mismatch stops before assessment', async () => {
     readFileSync(join(args.runDir, 'invocations.jsonl'), 'utf8')
       .trim()
       .split('\n'),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
+  expect(v.gauntlet?.criteria?.length).toBeGreaterThan(0);
 });
 
 test('Codex delivery uses native cwd-bound message evidence', async () => {

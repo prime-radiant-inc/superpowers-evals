@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -98,6 +99,7 @@ import type {
   RunError,
   RunErrorStage,
 } from '../contracts/verdict.ts';
+import { GauntletLayerSchema } from '../contracts/verdict.ts';
 import { assertCampaignCredentials } from '../credentials/check.ts';
 import {
   loadCredentialsFile,
@@ -129,6 +131,7 @@ import {
 import { populateContextDir } from './context.ts';
 import {
   readConversationRecord,
+  regularFile,
   runPreparedConversation,
 } from './conversation.ts';
 import { RunnerError, RunStoppedError } from './errors.ts';
@@ -269,11 +272,15 @@ export function gauntletLayerFromRunDir(runDir: string): GauntletLayer | null {
     const record = data as Record<string, unknown>;
     const summary = record['summary'];
     const reasoning = record['reasoning'];
+    const criteria = GauntletLayerSchema.shape.criteria.safeParse(
+      record['criteria'],
+    );
     return {
       status: coerceGauntletStatus(record['status']),
       summary: typeof summary === 'string' ? summary : '',
       reasoning: typeof reasoning === 'string' ? reasoning : '',
       run_id: runId,
+      ...(criteria.success && criteria.data ? { criteria: criteria.data } : {}),
     };
   }
   return null;
@@ -2279,6 +2286,23 @@ async function runInnerBody(
     launchCwd,
     normalizationContext,
   });
+
+  try {
+    for (const source of capture.sourceLogs) {
+      const path = relative(logDir, source);
+      const target = join(runDir, 'evidence/native', path);
+      const retainedSource = regularFile(logDir, path);
+      mkdirSync(dirname(target), { recursive: true });
+      copyFileSync(retainedSource, target);
+    }
+  } catch (error) {
+    return writeIndeterminate({
+      finalReason: `Native session retention failed: ${String(error)}`,
+      gauntlet,
+      checks: pre.records,
+      error: { stage: 'capture', message: String(error) },
+    });
+  }
 
   // Labeled Serf/OpenRouter campaigns require two independent capture proofs:
   // ATIF/obol token evidence plus metadata attesting every returned generation

@@ -74,3 +74,11 @@ test('gauntletLayerFromRunDir defaults missing summary/reasoning to empty string
   expect(layer?.summary).toBe('');
   expect(layer?.reasoning).toBe('');
 });
+
+for (const criteria of [undefined, [], [{ criterion: 'AC', verdict: 'pass' }]])
+  test('QA malformed or absent rows preserve the aggregate without inventing criteria', () => {
+    const root = makeRunDir();
+    writeResult(root, 'qa', JSON.stringify({ status: 'pass', criteria }));
+    expect(gauntletLayerFromRunDir(root)).toMatchObject({ status: 'pass' });
+    expect(gauntletLayerFromRunDir(root)?.criteria).toBeUndefined();
+  });

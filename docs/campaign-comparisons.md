@@ -211,3 +211,27 @@ actual platform checks. Portable fake-command tests establish source behavior;
 they do not establish Linux container isolation, installed cutover or provider
 readiness. Gated Linux fake-provider qualification and any paid run need separate
 operational authorization.
+
+## Repeatable PR and release validation
+
+Use the [versioned validation operator path](../examples/campaigns/validation/README.md#ordinary-operator-path)
+for the full pinned baseline/candidate registration command, display labels and
+focused/release pairings. Inspect the registration receipt before separately
+invoking `campaign run` with its identity. Existing `status`, `cancel`, `costs`
+and `report` remain the ordinary interface. Offline checks are not live acceptance.
+
+A completed subject survives assessment timeout and missing price data. Reports
+keep interaction, checks, individual criteria and actor cost denominators
+independent; active reports continue to hide behavior. Missing required quality
+or cost evidence remains unavailable rather than becoming a pass or zero cost.
+No replacement is admitted by these validation declarations. A fresh comparison
+has a new identity and preserves the failed receipt. Existing authentication,
+billing, ownership, host and operator stop policies remain in force.
+
+Admission wait observations share the physical contention telemetry stream but
+are parsed separately from host samples. Changes of reason/pool record bounded
+`admission_wait` records; repeated polling does not add records. Host coverage
+and stale-sampler decisions use only genuine host records. Reservations cover
+both subject and grader throughout an attempt because the simulated user also
+uses the grader credential. Attempt overlap is journal-derived, role durations
+come from role files, and active-provider concurrency remains unknown.

@@ -395,3 +395,87 @@ for (const bad of [
       ),
     ).toThrow();
   });
+
+for (const finalResponse of [false, true])
+  test(`aborted inspection before report request retains both physical attempts: response ${finalResponse}`, () => {
+    const aborted = {
+      ...settlement('001', '001', false),
+      outcome: 'aborted',
+      usage_unavailable: 'aborted',
+    };
+    const secondAdmission = { ...admission('002', '002'), timestamp_ms: 120 };
+    const secondSettlement = {
+      ...settlement('002', '002', finalResponse),
+      timestamp_ms: 130,
+      ...(finalResponse
+        ? {}
+        : { outcome: 'aborted', usage_unavailable: 'aborted' }),
+    };
+    const result = reconcileAssessmentAccounting({
+      runJsonl: lines([
+        request(),
+        request(2),
+        ...(finalResponse ? [response(2)] : []),
+        end(finalResponse ? 1 : 0),
+      ]),
+      attemptsJsonl: lines([
+        admission(),
+        aborted,
+        secondAdmission,
+        secondSettlement,
+      ]),
+      usageJsonl: lines(finalResponse ? [usage('002', '002')] : []),
+    });
+    expect(result.error).toBeNull();
+    expect(result.accounting).toEqual({
+      logicalResponses: finalResponse ? 1 : 0,
+      physicalAttempts: 2,
+      unknownUsageAttemptIds: finalResponse ? ['001'] : ['001', '002'],
+    });
+    expect(result.reportEligible).toBe(finalResponse);
+    expect(result.complete).toBe(false);
+  });
+
+for (const fault of ['unsettled', 'response', 'overlap'])
+  test(`an abandoned request without settled abort authority is refused: ${fault}`, () => {
+    const abandoned = {
+      ...settlement('001', '001', false),
+      outcome: fault === 'response' ? 'response' : 'aborted',
+      usage_unavailable: 'aborted',
+      timestamp_ms: fault === 'overlap' ? 121 : 110,
+    };
+    const result = reconcileAssessmentAccounting({
+      runJsonl: lines([request(), request(2), response(2), end(1)]),
+      attemptsJsonl: lines([
+        admission(),
+        ...(fault === 'unsettled' ? [] : [abandoned]),
+        { ...admission('002', '002'), timestamp_ms: 120 },
+        { ...settlement('002', '002'), timestamp_ms: 130 },
+      ]),
+      usageJsonl: lines([usage('002', '002')]),
+    });
+    expect(result.reportEligible).toBe(false);
+    expect(result.error).not.toBeNull();
+  });
+
+test('recorded physical response discarded at cancellation retains price before a valid final report', () => {
+  const result = reconcileAssessmentAccounting({
+    runJsonl: lines([request(), request(2), response(2), end(1)]),
+    attemptsJsonl: lines([
+      admission(),
+      { ...settlement(), aborted_at_ms: 105 },
+      { ...admission('002', '002'), timestamp_ms: 120 },
+      { ...settlement('002', '002'), timestamp_ms: 130 },
+    ]),
+    usageJsonl: lines([usage(), usage('002', '002')]),
+  });
+  expect(result.error).toBeNull();
+  expect(result.reportEligible).toBe(true);
+  expect(result.complete).toBe(true);
+  expect(result.accounting).toEqual({
+    logicalResponses: 1,
+    physicalAttempts: 2,
+    unknownUsageAttemptIds: [],
+  });
+  expect(result.knownUsageJsonl.trim().split('\n')).toHaveLength(2);
+});

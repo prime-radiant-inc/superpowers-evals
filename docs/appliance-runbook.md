@@ -736,3 +736,23 @@ condition on usable determinate outcomes, while arm accounting retains every
 attempt. Campaign elapsed is the frozen start claim through execution end, with
 missing endpoints explicit. See [Campaign comparisons](campaign-comparisons.md)
 for denominators, host preflight and shared-key alias limits.
+
+## Repeatable validation acceptance
+
+The [validation operator path](../examples/campaigns/validation/README.md#ordinary-operator-path)
+contains the pinned focused registration command and the release variant.
+Register first, inspect its receipt, then use its explicit identity with the
+existing `campaign run`, `status`, `cancel`, `costs` and `report` commands.
+Registration output must not be substituted directly into a paid launch.
+Deployment and live acceptance remain separately authorized operations.
+
+Retain completed subject evidence when an assessment times out or pricing is
+unavailable. These faults do not alone cancel measurement; authentication,
+billing, ownership, host and operator stop policies still apply. Validation
+admits no automatic replacements. Any necessary fresh comparison gets a new
+identity and keeps the failed acceptance receipt visible.
+
+The telemetry stream's `admission_wait` records explain changes in limiting
+pool, launch spacing or host state without changing journal authority or host
+sampling coverage. They describe reserved attempt capacity, not active provider
+request counts. Use the journal for overlap and role files for role durations.
