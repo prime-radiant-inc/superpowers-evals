@@ -21,6 +21,7 @@ export function mockGauntletDir(
     captureEnvKeys?: readonly string[];
     traceDir?: string;
     qaCapture?: boolean;
+    qaCriteriaCount?: number;
   } = {},
 ): string {
   const dir = mkdtempSync(join(tmpdir(), 'mock-gauntlet-'));
@@ -42,6 +43,9 @@ export function mockGauntletDir(
     '#!/usr/bin/env bash\n' +
       `export MOCK_GAUNTLET_FIXTURE=${shellSingleQuote(fixture)}\n` +
       (opts.qaCapture ? 'export MOCK_GAUNTLET_QA_CAPTURE=1\n' : '') +
+      (opts.qaCriteriaCount !== undefined
+        ? `export MOCK_GAUNTLET_QA_CRITERIA_COUNT=${opts.qaCriteriaCount}\n`
+        : '') +
       captureLine +
       traceLine +
       `exec bun ${shellSingleQuote(mock)} "$@"\n`,

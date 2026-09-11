@@ -114,13 +114,14 @@ if (fixture === 'hang') {
   if (process.env['MOCK_GAUNTLET_QA_CAPTURE'] === '1') {
     const resultPath = join(resultsDir, 'result.json');
     const result = JSON.parse(readFileSync(resultPath, 'utf8'));
-    result.criteria = [
-      {
-        criterion: 'Observed the subject',
+    result.criteria = Array.from(
+      { length: Number(process.env['MOCK_GAUNTLET_QA_CRITERIA_COUNT'] ?? 1) },
+      () => ({
+        criterion: 'Subject observed',
         verdict: 'pass',
         evidence: 'The retained terminal contains fixture output.',
-      },
-    ];
+      }),
+    );
     writeFileSync(resultPath, JSON.stringify(result));
     mkdirSync(join(resultsDir, 'captures'));
     writeFileSync(join(resultsDir, 'captures/000.ansi'), 'fixture output');

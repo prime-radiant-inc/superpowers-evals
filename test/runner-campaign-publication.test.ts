@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { publishAttempt } from '../src/campaign/attempt-publish.ts';
+import { deliverComparisonReport } from '../src/campaign/report-delivery.ts';
 import {
   measureAttempt,
   readAttemptEvidence,
@@ -27,6 +29,11 @@ import {
   parseAttemptManifest,
   writeAttemptManifest,
 } from '../src/runner/manifest.ts';
+import { twoArmExperiment } from './fixtures/core-comparison/factory.ts';
+import {
+  completedPublicationFixture,
+  finishPublicationFixture,
+} from './fixtures/core-comparison/publication.ts';
 import { mockGauntletDir } from './mock-gauntlet/shim.ts';
 
 const REPO = resolve(import.meta.dir, '..');
@@ -43,6 +50,8 @@ const identity: CampaignIdentity = {
 
 for (const fault of [
   'none',
+  'missing-row',
+  'extra-row',
   'native-alias',
   'trace-alias',
   'corrupt-trace',
@@ -63,7 +72,11 @@ for (const fault of [
     const subjectHome = join(campaignAttemptDir, 'home');
     const resultsRoot = join(root, 'results');
     const superpowersRoot = join(root, 'superpowers');
-    const shimDir = mockGauntletDir('pass', { qaCapture: true });
+    const shimDir = mockGauntletDir('pass', {
+      qaCapture: true,
+      qaCriteriaCount:
+        fault === 'missing-row' ? 0 : fault === 'extra-row' ? 2 : 1,
+    });
     mkdirSync(scenarioDir, { recursive: true });
     mkdirSync(resultsRoot);
     mkdirSync(superpowersRoot);
@@ -251,6 +264,62 @@ for (const fault of [
       expect(measured.criteria[0]!.verdict).toBe(
         fault === 'none' ? 'pass' : null,
       );
+      if (['none', 'missing-row', 'extra-row'].includes(fault)) {
+        const expectedRows =
+          fault === 'missing-row'
+            ? undefined
+            : Array.from({ length: fault === 'extra-row' ? 2 : 1 }, () => ({
+                criterion: 'Subject observed',
+                verdict: 'pass',
+                evidence: 'The retained terminal contains fixture output.',
+              }));
+        expect(evidence.gauntlet?.criteria).toEqual(expectedRows);
+        const experiment = twoArmExperiment();
+        experiment.measurement_requirements = {
+          scenario: {
+            ...requirements,
+            criteria: requirements.criteria.map((c) => ({
+              ...c,
+              required_artifact_classes: [...c.required_artifact_classes],
+            })),
+          },
+        };
+        const f = completedPublicationFixture(
+          'primary',
+          experiment,
+          undefined,
+          (target, campaign) => {
+            cpSync(publishedDir, target, { recursive: true });
+            writeFileSync(
+              join(target, 'verdict.json'),
+              JSON.stringify({ ...runResult.verdict, campaign }),
+            );
+          },
+        );
+        try {
+          finishPublicationFixture(f);
+          const delivered = deliverComparisonReport({
+            ...f,
+            processes: { observe: () => 'dead' as const },
+            now: Date.now,
+          });
+          for (const arm of delivered.report.report.comparisons[0]!.arms) {
+            expect(arm.measurements.interaction.unavailable).toBe(1);
+            expect(arm.measurements.criteria[0]).toMatchObject({
+              planned: 1,
+              pass: fault === 'none' ? 1 : 0,
+              unavailable: fault === 'none' ? 0 : 1,
+            });
+          }
+          for (const row of delivered.delivery.measurement_readiness) {
+            if (row.kind === 'interaction') expect(row.complete).toBe(false);
+            if (row.kind === 'criterion')
+              expect(row.complete).toBe(fault === 'none');
+          }
+        } finally {
+          rmSync(f.root, { recursive: true, force: true });
+        }
+      }
       const link = join(
         publishedDir,
         'coding-agent-workdir',
