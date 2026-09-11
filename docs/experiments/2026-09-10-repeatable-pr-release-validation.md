@@ -34,7 +34,59 @@ independent assessments, 24 total, at concurrency eight. Record every outcome
 and cost; no selection of successful repetitions. A changed model receives a
 separate result identity. The roughly $500 overall allowance is unchanged.
 
-Live retry results are pending. F28/R118 and alternate-candidate registration
+### Sonnet prompt retry
+
+Gauntlet PR #22 merged at `aa08b72989fe59c57362c42f5d1bfe2c26417253`;
+Evals PR #64 froze the corrected control at
+`ec6bdbb74e6c2238bd5a7d23a88403c63ec17b12`. Scoped source review approved;
+Gauntlet's full check passed 1,601 tests with two skips, plus typechecks and
+UI build. Evals fixture/fence checks passed nine tests; both PRs passed CI.
+Prepare job `job-20260911T073155Z-417a` built these exact revisions after a
+separate doctor operation released the shared spend lock. Installed-source
+inventory SHA-256 was
+`d7f5305522f15cad15b94878981687040548252dcf70aae9ca8ad5c76dc8e136`.
+
+The Sonnet retry completed all **24 sessions in 491.345 seconds**, for
+**$2.2147657 estimated**, with complete accounting for 116 physical and
+116 logical requests. Every event stream contains the exact committed prompt.
+All 24 eventually published accepted native reports, without XML repair,
+deadline or grace events. Only 13 were accepted on their first submission:
+47 submissions included 17 empty-criteria arrays and six unread-citation
+rejections. The empty arrays are valid JSON that the report validator rejects;
+none was truncation or the earlier XML-inside-reasoning failure.
+
+**Qualification still fails:** 16/24 complete vectors have supported required
+reasons, seven grounding judgments are false passes, and one is unjustifiably
+unclear. No false failures or disputed controls remain. Of the 12 expected
+grounding failures, four fail correctly, seven pass and one is unclear; all
+12 expected grounding passes pass. The omission control correctly fails
+criteria 3 and 5 in every repetition. Minor wording/citation inaccuracies in
+matching reports are retained in the private reason audit.
+
+| Case | Sonnet grounding, repetitions 1 / 2 / 3 |
+| --- | --- |
+| query-full | unclear / pass / pass; expected fail |
+| storage-full | pass / pass / pass; expected fail |
+| query-full-corrected | pass / pass / pass |
+| storage-full-corrected, new control | pass / pass / pass |
+| supported-complete | pass / pass / pass |
+| unsupported-query | pass / pass / fail; expected fail |
+| unsupported-storage | fail / fail / fail |
+| missing-credential | pass / pass / pass |
+
+The new prompt elicited more explicit claim lists but did not reliably prevent
+the faulty lookup-implies-authentication inference or crediting unrelated
+caveats against unsupported full-review claims. One unclear report had decisive
+counterevidence in the delivery it had already read. This is not evidence of
+a time-budget failure. The prior control was defective, so the whole 24-case
+total must not be treated as an unchanged-input before/after accuracy estimate.
+
+Private Sonnet receipt ID: `assessment-qualification-IgBqjg`; exact receipt
+SHA-256: `0f8f0450864d0973fb7874af761a5ea4eed3b7be5ee5fa3dcf8d080914691842`.
+The finite invocation now sets the frozen pricing directory through obol's
+native API before pricing; all costs carry the September 10 pricing date.
+
+Opus comparison is in progress. F28/R118 and alternate-candidate registration
 remain held behind the grading gate.
 
 ## Current reduced execution amendment — 2026-09-10
