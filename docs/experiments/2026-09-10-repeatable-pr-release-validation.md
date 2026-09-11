@@ -36,7 +36,7 @@ eight full deliveries with the full six-row rubric, three assessments each:
 criteria 3 and 5 in its three assessments. No disputed label is counted as gold.
 
 Case-manifest SHA-256: `11b273a535f878a12ed1b075949b4e4f353b625636144b533b7f12a351782459`.
-Requirements SHA-256: `a20bf214658b6dc646f4cf9e6b362c7543019c82a72148ce307aa82b966c444a`.
+Requirements SHA-256: `26f9a96ad285dc307f7e38c5dc088b5dfe0d13bdf00a6075f6bc8594ab206247`.
 Focused-template SHA-256: `f81f46f1862933d007e5e6321892597d195722b53120b45b576bef980cc23393`.
 Release-template SHA-256: `c833bc18b0bd49fd8ad957b6a24ec975cddb4c817dbe2d20c3297acace08c648`.
 

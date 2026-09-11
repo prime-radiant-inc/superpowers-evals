@@ -163,6 +163,7 @@ test.each([
     },
     scenarios: intake.scenarios,
     capability: superpowersCapability,
+    agentMaxTime: (agent) => intakeAgentConfig(intake, agent).max_time,
     agentOsSupport: (agent) => intakeAgentConfig(intake, agent).os_support,
     agentFamily: (agent) =>
       agentRuntimeFamily(intakeAgentConfig(intake, agent)),

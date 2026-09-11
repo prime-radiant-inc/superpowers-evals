@@ -4,6 +4,8 @@ title: Evaluate and address mixed rate limiter feedback
 status: ready
 quorum_tier: adhoc
 quorum_mode: conversation
+quorum_assessment_max_time: 10m
+quorum_assessment_report_grace: 60s
 quorum_max_time: 10m
 ---
 

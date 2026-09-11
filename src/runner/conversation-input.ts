@@ -36,8 +36,22 @@ export function projectConversationStory(story: string): {
     throw new StoryMetaError('conversation acceptance criteria are empty');
   }
 
+  // Allowances configure the caller; retaining them here would change the
+  // frozen grading rubric despite identical acceptance criteria.
+  const rubricFrontmatter = frontmatter.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: preserve the metadata parser's full Unicode line-boundary set
+    /[^\n\r\v\f\x1c-\x1e\x85\u2028\u2029]*(?:\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]|$)/g,
+    (line) => {
+      const colon = line.indexOf(':');
+      const key = colon < 0 ? '' : line.slice(0, colon).trim();
+      return key === 'quorum_assessment_max_time' ||
+        key === 'quorum_assessment_report_grace'
+        ? ''
+        : line;
+    },
+  );
   return {
     brief: `${brief}\n`,
-    rubric: `${frontmatter}\n${ASSESSMENT_DESCRIPTION}\n\n${criteria}\n`,
+    rubric: `${rubricFrontmatter}\n${ASSESSMENT_DESCRIPTION}\n\n${criteria}\n`,
   };
 }

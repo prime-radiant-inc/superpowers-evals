@@ -1119,7 +1119,7 @@
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
-      "story_sha256": "6a9e61e922ec4d66b69d729f776fc3ddff277ebd6d091b1fb47c248accdc9cc2",
+      "story_sha256": "d70e0b998285772f8cf7d1d791597cbf82a9f0123f986fc9a6d631f180ab137b",
       "rubric_sha256": "b90b888e2b4f3fd172786711a113f6d66eb689ea4766f33a36bc1851aba32573",
       "checks": [
         {
@@ -3463,7 +3463,7 @@
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "conversation",
-      "story_sha256": "4fe9ee459f403cafaaa59e9cfafe5bbd28030229d272643ae94680356993c67a",
+      "story_sha256": "54008a0a330bdda4632ce05afef3e0d7de1f131411c1b595842e4aaa885f28cc",
       "rubric_sha256": "cff542ea9a2bf627a8675dceb8997683eed5ead7af751823e4f1c1ea5efe6871",
       "checks": [
         {
@@ -3672,7 +3672,7 @@
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
-      "story_sha256": "5bc6b1da48159a5b4cdddb26f9e3834d60df7ad9770397e59a1b8a43a15ed242",
+      "story_sha256": "8c6611e361bed0a3194c8547dafad8486f31e779fb6db6351c8ea2fe71f36b95",
       "rubric_sha256": "2bdc6a2f4a92ef96f0b355e9c45352f88c09393b28b227aef35ba90a4e14f06a",
       "checks": [
         {
@@ -3812,7 +3812,7 @@
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
-      "story_sha256": "1626b2272fa69d8257c7fdafc55055e71fa4562d149115be41fc1eac02c25aef",
+      "story_sha256": "d8ac421322d03e6a9a07cb439a4f3aea5fab3350ab733b87e39b22b5c8392efa",
       "rubric_sha256": "fecbd80d7c568492e713ea809d1f745b71c949099b96132e122c67b782cac06a",
       "checks": [
         {
@@ -3936,7 +3936,7 @@
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "conversation",
-      "story_sha256": "ca7e07832df48ebc438e40c3836a86de602eab4c2ddf3b28f161d3276586e094",
+      "story_sha256": "8f8c83bdff16cc003fa260ed4149b0fb7411ac3d69352d8e6b6216fc3d0ff3e7",
       "rubric_sha256": "06b68e86dfe119f69422056629022fdb9c1cd304ce5f60a5c816b4604fc8a648",
       "checks": [
         {
@@ -4154,7 +4154,7 @@
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
-      "story_sha256": "ff6d1f5b868319a6a3791e9288cb980a869e2f540b41a66a4c4fde4badfe5f16",
+      "story_sha256": "9c3af0d185be43e4dd3441f167cc2625eca08dfa3dd43540c4007eb4c876210e",
       "rubric_sha256": "6b9071027dd408555db6e9a0d051a865c65343a4458d66e4711bce56e43220f2",
       "checks": [
         {

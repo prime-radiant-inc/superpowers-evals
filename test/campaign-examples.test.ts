@@ -71,6 +71,7 @@ test('all active finite suites compile against the real registry and supported a
       campaignOs: 'linux',
       capability: superpowersCapability,
       agentFamily: (a) => agentRuntimeFamily(intakeAgentConfig(intake, a)),
+      agentMaxTime: (agent) => intakeAgentConfig(intake, agent).max_time,
       agentOsSupport: (a) => intakeAgentConfig(intake, a).os_support,
       registeredAt: '2026-09-04T12:00:00.000Z',
       registeredBy: 'test',

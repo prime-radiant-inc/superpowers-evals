@@ -54,7 +54,10 @@ import { effortRefusal } from '../contracts/effort.ts';
 import { getEnv } from '../env.ts';
 import type { Clock } from '../scheduler/clock.ts';
 import {
+  assessmentBudgetFromStory,
   couplingFromStory,
+  durationMs,
+  quorumMaxTimeFromStory,
   quorumTierFromStory,
   requiresSuperpowersFromStory,
 } from '../story-meta.ts';
@@ -208,6 +211,7 @@ export function attemptIdOf(sampleId: string, seq: number): string {
 }
 
 export interface ScenarioIntake {
+  readonly story: string;
   readonly name: string;
   readonly tier: 'sentinel' | 'full' | 'adhoc';
   readonly requires_superpowers: boolean;
@@ -231,6 +235,7 @@ export interface RegistrationInput {
   readonly scenarios: readonly ScenarioIntake[];
   readonly capability: (family: string) => { ref: boolean; none: boolean };
   readonly agentOsSupport: (agent: string) => readonly string[] | undefined;
+  readonly agentMaxTime: (agent: string) => string | undefined;
   readonly agentFamily: (agent: string) => string;
   readonly campaignOs: string;
   readonly globalCap: number;
@@ -242,8 +247,12 @@ export interface RegistrationInput {
 
 export type PreparedRegistration = Omit<
   Experiment,
-  'campaign_id' | 'input_digest' | 'registered_at' | 'registered_by'
->;
+  | 'campaign_id'
+  | 'input_digest'
+  | 'registered_at'
+  | 'registered_by'
+  | 'role_budgets'
+> & { role_budgets: NonNullable<Experiment['role_budgets']> };
 
 interface CredentialAuthorityProjection {
   readonly schema: 'quorum.credential-authority/v1';
@@ -429,6 +438,7 @@ export function prepareRegistration(
   );
   const normalizedComparisons: ExperimentSuite['comparisons'] = [];
   const comparisons: Experiment['comparisons'] = [];
+  const roleBudgets: Experiment['role_budgets'] = {};
   const cells: Experiment['cells'] = [];
   const excludedCells: Experiment['excluded_cells'] = [];
   const plannedSlots: Experiment['planned_slots'] = [];
@@ -562,6 +572,34 @@ export function prepareRegistration(
         continue;
       }
 
+      const budget = assessmentBudgetFromStory(scenario.story);
+      const budgets: NonNullable<Experiment['role_budgets']>[string] = {};
+      for (const armName of armNames) {
+        const arm = input.arms[armName];
+        if (arm === undefined)
+          throw new RegistrationError(`arm ${armName} is absent from arms/`);
+        const subjectMs = durationMs(
+          quorumMaxTimeFromStory(scenario.story) ??
+            input.agentMaxTime(arm.agent) ??
+            '10m',
+        );
+        // Setup, capture, checks, publication, cleanup and legacy finalReportTurn
+        // share this headroom. The outer process deadline bounds provider latency.
+        const overheadMs = 900000;
+        const assessmentMs = budget?.totalMs ?? 0;
+        const neededMs = subjectMs + assessmentMs + overheadMs;
+        if (suite.attempt_bounds.max_time_s * 1000 < neededMs)
+          throw new RegistrationError(
+            `attempt bound cannot accommodate ${scenario.name}'s role budgets and overhead`,
+          );
+        budgets[armName] = {
+          subject_ms: subjectMs,
+          assessment_ms: budget?.totalMs ?? null,
+          assessment_report_grace_ms: budget?.reportGraceMs ?? null,
+          overhead_ms: overheadMs,
+        };
+      }
+      roleBudgets[cellKey] = budgets;
       const n = comparison.cells?.[scenarioName]?.n ?? comparison.n;
       cells.push({
         scenario: scenarioName,
@@ -641,6 +679,7 @@ export function prepareRegistration(
     planned_slots: plannedSlots,
     reserve_slots: reserveSlots,
     execution_surface: executionSurface,
+    role_budgets: roleBudgets,
     credential_authority_digest: credentialAuthorityDigest(
       input.credentials,
       activeCredentialNames,
@@ -667,7 +706,7 @@ export function prepareRegistration(
     registered_by: _registeredBy,
     ...result
   } = validated;
-  return result;
+  return { ...result, role_budgets: roleBudgets };
 }
 
 /** Decision D-4 defaults (drafted for gate challenge; the parent pins the
@@ -767,6 +806,7 @@ function scenarioIntakeOf(
 ): ScenarioIntake {
   return {
     name,
+    story,
     tier: quorumTierFromStory(story),
     requires_superpowers: requiresSuperpowersFromStory(story) ?? false,
     coupling:
@@ -1192,6 +1232,7 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       },
       scenarios: intake.scenarios,
       capability: (family) => superpowersCapability(family),
+      agentMaxTime: (agent) => intakeAgentConfig(intake, agent).max_time,
       agentOsSupport: (agent) => intakeAgentConfig(intake, agent).os_support,
       agentFamily: (agent) =>
         agentRuntimeFamily(intakeAgentConfig(intake, agent)),

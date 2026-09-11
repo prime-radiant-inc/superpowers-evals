@@ -20,4 +20,4 @@ reserve: 2
 max_exposure_skew: 60
 attempt_bounds:
   max_attempts: 2
-  max_time_s: 1800
+  max_time_s: 3600

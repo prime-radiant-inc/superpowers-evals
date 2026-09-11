@@ -29,7 +29,7 @@ const out = get('--out');
 mkdirSync(out, { recursive: true });
 appendFileSync(
   join(runDir, 'invocations.jsonl'),
-  `${JSON.stringify({ role, input: readFileSync(input as string, 'utf8'), flags, env: { home: getEnv('QUORUM_AGENT_HOME'), cwd: getEnv('QUORUM_AGENT_CWD'), modelKey: getEnv('ANTHROPIC_API_KEY') === 'offline' ? 'offline' : undefined } })}\n`,
+  `${JSON.stringify({ role, input: readFileSync(input as string, 'utf8'), flags, arguments: Object.fromEntries(flags.flatMap((flag, index) => (flag.startsWith('--') ? [[flag.slice(2), flags[index + 1]]] : []))), env: { home: getEnv('QUORUM_AGENT_HOME'), cwd: getEnv('QUORUM_AGENT_CWD'), modelKey: getEnv('ANTHROPIC_API_KEY') === 'offline' ? 'offline' : undefined } })}\n`,
 );
 if (role === 'converse') {
   if (mode === 'full-run' && spawnSync(get('--launcher')).status !== 0)
