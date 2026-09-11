@@ -1,16 +1,148 @@
 # Repeatable PR and release validation — 2026-09-10
 
-Status: implementation, reduced F28/R118 declarations and the prompt amendment
-are merged and deployed at Evals `ec6bdbb7` and Gauntlet `aa08b729`. After the
-initial failed qualification, the corrected-control prompt retry yielded
-16/24 supported vectors for Sonnet and 15/24 for Opus. Both still miss the
-required full-review grounding failures; three Opus sessions ended on API errors.
-**Grading qualification remains unmet.** No focused or release comparison was
-launched. Implementation verification is complete; live comparison acceptance
-remains unmet. The original failed qualification below is retained unchanged.
-Drew's approximately $500 reduced scope remains F28/R118. The September 11
-amendment below authorizes F28 without code-review qualification; R118 remains
-held. Original 84/366 full-scale acceptance is deferred.
+Status: the reduced F28 comparison completed and published on September 11:
+28 attempts, $26.51498635 estimated with complete accounting, and 23m47s from
+accepted execution request to sealed report. Team evidence review found useful
+narrow observations plus checker/rubric disagreement, disputed approval
+judgments, simulator overrun and a reproducible campaign-path defect. The
+original report remains unchanged. Publication and throughput are demonstrated
+for this run; complete behavioral acceptance is not. Code-review qualification
+remains unmet, R118 remains held, and original 84/366 acceptance is deferred.
+
+## Focused comparison results — 2026-09-11
+
+Campaign `af163b34-9310-49c9-9365-205c98340ca6` executed the approved F28
+amendment exactly once: seven scenarios, Claude/Codex, baseline/candidate,
+uniform n=1, zero reserves and no exclusions. Two independent read-only team
+reviews approved the scoped launch; root checked all 28 frozen role budgets,
+refs, credential pools and the pricing snapshot in the full live receipt.
+No qualification record was created or attached.
+
+Evals `d3e353f77dba5b139677d909c519c4c1488bd5e6` and Gauntlet
+`aa08b72989fe59c57362c42f5d1bfe2c26417253` were prepared and reverified before
+launch. Baseline was v6.3.0 `b36e0829c6d0140e93cfef2ca599b1b07d4a7797`;
+candidate was dev `3a8bdc11e1db42955350d6d6f063f7a8e89aef58`. Claude used
+`opus_bedrock` / Opus 4.8; Codex used `openai_responses_56sol`. Grading used
+direct Anthropic `sonnet5`, with the committed prompt and existing effort.
+Global concurrency was eight; no role allowance was shortened.
+
+### Publication, timing and accounting
+
+The ordinary report is completed, complete and termination-verified. All 28
+attempts are retained, including failures and indeterminates. Known subject
+cost is **$16.52699345**, grader cost **$9.9879929**, combined
+**$26.51498635**; all three have 28/28 coverage under the frozen September 10
+prices. All 14 Codex subject estimates assume standard-tier pricing; no model
+is unpriced. These are estimates, not an invoice. The earlier Opus qualification's
+three unknown-usage requests remain unknown and are outside this campaign.
+
+Execution was accepted at `2026-09-11T21:33:24.363Z`, ended at
+`21:57:06.648Z` (1,422.285 seconds), and the report was published automatically
+at `21:57:11.004Z` (1,426.641 seconds from admission). The status observations
+show eight prepared attempts initially and continued parallel admission. The
+summed attempt intervals are 9,483.861 seconds; they are not campaign elapsed.
+
+Registration occurred at `18:08:33.808Z`. An initial launch was refused before
+any start transition because an independent doctor campaign held the global
+appliance lock. The refusal receipt was observed at `18:10:17.676Z`; the
+read-only monitor observed normal lock release at `18:59:42Z`. The waiting
+session was interrupted and resumed later, so the subsequent gap before the
+21:33 launch is separate from appliance contention. Registration-to-publication
+was 3h48m37s. No foreign owner was cancelled, no ownership file was changed,
+and the original unused registration made its first execution after release.
+The helper's generic `unresolved / cancel` advice hid foreign contention;
+this status defect is tracked under PRI-2874.
+
+Canonical report SHA-256:
+`8a849148297470e366af13b6d961c565824d9de57575ccae9ff29fe47d737c7c`.
+The report, seal and delivery receipt are retained under the campaign directory
+`/srv/quorum/superpowers-evals/campaigns/af163b34-9310-49c9-9365-205c98340ca6-validation_focused`.
+Root mirrored 1,501 relevant artifact files privately and verified every hash
+against the report. No raw transcript or credential material enters this record.
+
+### Recorded outcomes, unchanged
+
+| Scenario | Claude v6.3.0 | Claude dev | Codex v6.3.0 | Codex dev |
+| --- | --- | --- | --- | --- |
+| companion just-in-time | pass | pass | pass | pass |
+| resists jump to implementation | pass | pass | pass | pass |
+| todo purpose discovery | fail | pass | pass | fail |
+| conversation design | indeterminate | pass | pass | pass |
+| spec/plan duplication | indeterminate | indeterminate | pass | pass |
+| no-brainstorm preference | pass | pass | pass | pass |
+| conversational no-spec plan | fail | fail | fail | fail |
+
+Totals: **19 pass, six fail, three indeterminate**. Independent check rows are
+154 pass/six fail; criterion rows are 107 pass/eight fail/one unclear. All
+116 criterion rows remain `not_calibrated`. Four conversation interactions
+have recorded completion; the 24 fused-QA attempts lack that independent
+interaction record. Delivery readiness is therefore not uniformly complete.
+Neither a sealed report nor these aggregate totals qualify the instrument or
+endorse a release.
+
+### Evidence review and limits
+
+Root inspected the Codex attempts and an independent reviewer inspected all
+14 Claude attempts against retained trajectories, output documents and frozen
+rubrics. A second reviewer audited measurement, accounting and runtime facts.
+These are agent inspections, not independent human gold or a new calibration.
+Original verdicts and negative evidence remain intact.
+
+- **Supported narrow behavior:** all four arms consult brainstorming before
+  implementing the open-ended notification request, delay the companion offer
+  until after clarification, and begin direct app work when the project says
+  not to brainstorm. These establish those behaviors, not application quality.
+- **Purpose discovery:** every arm elicits and reflects the learning purpose.
+  Claude baseline then writes the app without a saved spec or plan; Claude dev
+  saves both and obtains plan approval before product work. Both Codex arms
+  preserve the saved-artifact/product-work sequence. The separate permission
+  to draft each artifact is interpreted inconsistently around conditional
+  future-write statements and scope-only approval. The recorded pass/fail
+  differences cannot establish a general improvement or regression on that
+  ambiguous approval obligation.
+- **No-spec checker disagreement:** `writing-plans-no-spec-conversational`
+  accepts equivalent wording in its rubric but its shell check accepts only
+  two literal phrases. Both Claude plans state no separate spec exists and
+  include the requirements; QA passes them while the check fails them. Both
+  Codex plans instead put the requirements below the Spec line in Global
+  Constraints, which the frozen rubric's placement requirement also fails.
+  No arm fabricated a spec or demanded brainstorming. The four composed
+  failures should not be presented as those broader product failures.
+- **Other grading interpretation:** both Claude duplication attempts retain
+  complete `[pass, fail]` criterion vectors but top-level QA `investigate`.
+  Their indeterminates are not assessment timeouts or missing rows. The Claude
+  conversation baseline's single unclear row asks for stronger browser/device
+  scope clarification than the story expressly demands; both arms deliver
+  prospective selective-notification proposals and preserve the original page.
+- **Cost is descriptive:** agreed designs differ. For duplication, Claude's
+  spec+plan bytes are 10,456 baseline / 15,055 dev; Codex's are 33,265 / 31,805.
+  Codex baseline agrees to add/list/complete commands while dev agrees to
+  completion only. Plans reference their specs but repeat some constraints
+  alongside implementation detail. These sizes and uncalibrated duplication
+  grades do not isolate a causal efficiency improvement.
+- **Simulator overrun:** notification-design dialogues continue through full
+  design/spec creation after the stated design-direction stop. No-brainstorm
+  and purpose subjects also continue product work while QA observes and
+  reports; captured cost includes that work. This is not a measurement of
+  instant termination at the first qualifying action.
+- **Reproduced environment defect:** colon-bearing attempt directories become
+  subject working directories. Both Codex purpose runs hit npm executable
+  lookup failures, then attempt worktree relocation and create worktrees under
+  `/tmp`. The source path runs from `controller.ts` through
+  `attempt-projection.ts` and the same-path container mount to the runner
+  workdir. Root reproduced the defect without dependencies or provider calls:
+  an identical local npm script exits 0 in a normal directory and 127
+  (`command not found`) in a campaign-style colon path. This is lab interference,
+  and output moved outside the workdir is not part of the retained output tree.
+  No counterfactual corrected cost or successful uncaptured output is inferred.
+
+The four-hour execution/publication target is met for this finite workload.
+Unresolved semantic judgments, legacy interaction coverage and environment
+interference keep complete behavioral acceptance unmet. PRI-2874 remains open;
+R118, alternate-candidate registration and original full-scale acceptance
+remain deferred. Colon-bearing subject paths are a blocker for future
+product-oriented campaigns. No additional campaign or live regrading is launched by this
+readout.
 
 ## Focused launch amendment — 2026-09-11
 
