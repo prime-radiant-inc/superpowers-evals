@@ -9,6 +9,34 @@ Implementation verification is complete; live comparison acceptance remains unme
 Drew's approximately $500 reduced scope remains F28/R118, conditional on grading
 qualification; original 84/366 full-scale acceptance is deferred.
 
+## Prompt-first retry — 2026-09-11
+
+Drew authorized correcting the assessor prompt, retrying Sonnet, then trying
+Opus if needed. The bounded Gauntlet amendment directs source facts first,
+material-claim coverage at the claim's stated scope, then criterion verdicts.
+It changes prompt and tool descriptions only. Sonnet remains on the direct
+Anthropic API at medium effort, with ten minutes total including 60 seconds
+of report grace. Schema, validation, tools and runtime flow are unchanged.
+
+Before retrying, a new synthetic `storage-full-corrected` copy corrects two
+unqualified consequences left in 22 wrapped terminal capture artifacts. Its
+complete delivery was separately reviewed against the unchanged six-row
+rubric. All eight evidence indexes, hashes and label isolation pass the real
+Gauntlet validator; all 261 retained original bundle files remain unchanged.
+The other seven cases and all expected labels are unchanged.
+
+Retry case-manifest SHA-256:
+`908e70cba4fb1bc7c575f8c6ff4bff1017b3884d4938bdf6a74733652f5e1b4b`.
+The prior manifest and failed results below remain intact. This is a regression
+retry on observed cases, not fresh held-out qualification; the manifest's
+partition labels describe the original split. Each case again gets three
+independent assessments, 24 total, at concurrency eight. Record every outcome
+and cost; no selection of successful repetitions. A changed model receives a
+separate result identity. The roughly $500 overall allowance is unchanged.
+
+Live retry results are pending. F28/R118 and alternate-candidate registration
+remain held behind the grading gate.
+
 ## Current reduced execution amendment — 2026-09-10
 
 The current templates use F28/R118 (seven focused scenarios and 22 release
