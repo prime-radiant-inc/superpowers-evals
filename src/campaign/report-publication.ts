@@ -330,11 +330,12 @@ export function renderReportMd(value: Report): string {
 export function publishReportSnapshot(args: {
   campaignDir: string;
   report: Report;
-}): { digest: string } {
+}): { digest: string; directory: string } {
   return publishAt(args, true);
 }
 export function publishReport(args: { campaignDir: string; report: Report }): {
   digest: string;
+  directory: string;
 } {
   return publishAt(args, false);
 }
@@ -343,6 +344,7 @@ function publishAt(
   snapshot: boolean,
 ): {
   digest: string;
+  directory: string;
 } {
   if (args.report.anchor.roots.campaign !== args.campaignDir)
     throw new Error('report publication directory differs from anchor');
@@ -365,11 +367,15 @@ function publishAt(
   }
   publishReportFile(directory, 'report.json', json.toString());
   publishReportFile(directory, 'report.md', md);
-  return { digest };
+  return { digest, directory };
 }
 export function publishReportFile(
   campaignDir: string,
-  name: 'report.json' | 'report.md' | 'report-seal.json',
+  name:
+    | 'report.json'
+    | 'report.md'
+    | 'report-seal.json'
+    | 'report-delivery.json',
   body: string,
 ): void {
   const path = join(campaignDir, name);

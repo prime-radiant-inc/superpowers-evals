@@ -28,6 +28,7 @@ import {
   readCancelIntent,
   readHostClaim,
 } from '../campaign/ownership.ts';
+import { deliverComparisonReport } from '../campaign/report-delivery.ts';
 import { resolveCampaignResultsRoot } from '../campaign/results-root.ts';
 import { jcsCanonicalize } from '../contracts/campaign/digest.ts';
 import type {
@@ -100,6 +101,7 @@ export async function startCampaignOnce(
   status: CampaignStatus;
   reason?: string;
 }> {
+  const requestedAt = new Date().toISOString();
   let run: LockHandle | undefined,
     lease: LiveSpendLock | undefined,
     writer: ExecutionJournalWriter | undefined;
@@ -143,6 +145,7 @@ export async function startCampaignOnce(
       start_id: randomUUID(),
       launcher: currentProcessIdentity(),
       claimed_at: new Date().toISOString(),
+      requested_at: requestedAt,
     };
     writer.commitTransition({
       type: 'started',
@@ -262,6 +265,7 @@ export async function runGatedCampaignController(input: {
   let run: LockHandle | undefined,
     lease: LiveSpendLock | undefined,
     writer: ExecutionJournalWriter | undefined;
+  const failures: unknown[] = [];
   try {
     run = acquireLock({
       loaded,
@@ -313,9 +317,45 @@ export async function runGatedCampaignController(input: {
     };
     await controller(context);
     // An unsettled return loses this session permanently; it never elects a replacement.
+  } catch (error) {
+    failures.push(error);
   } finally {
-    writer?.release();
-    lease?.release();
-    run?.release();
+    try {
+      writer?.release();
+      // Keep the host ownership fences until delivery has settled. A terminal
+      // journal remains authoritative even when artifact publication fails.
+      if (writer && run && lease && readProjection(args.campaignDir).ended) {
+        run.assertCurrentOwner();
+        lease.heartbeat();
+        try {
+          deliverComparisonReport({
+            ...args,
+            resultsRoot: resolveCampaignResultsRoot(
+              loaded.config.container.results_root,
+            ),
+            processes: undefined,
+            now: Date.now,
+          });
+        } catch (error) {
+          failures.push(
+            new Error(
+              'report_pending: campaign execution ended but report delivery failed',
+              { cause: error },
+            ),
+          );
+        }
+      }
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      lease?.release();
+      run?.release();
+    }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      'campaign controller and report delivery failed',
+    );
 }

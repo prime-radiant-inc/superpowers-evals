@@ -70,6 +70,7 @@ export const ExecutionStartSchema = ExperimentIdentitySchema.extend({
   start_id: IdSchema,
   launcher: ProcessIdentitySchema,
   claimed_at: TimestampSchema,
+  requested_at: TimestampSchema.optional(),
 }).strict();
 export type ExecutionStart = z.infer<typeof ExecutionStartSchema>;
 export const HostCampaignClaimSchema = ExecutionStartSchema.extend({

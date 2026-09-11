@@ -1,4 +1,8 @@
 import { isAbsolute, join } from 'node:path';
+import {
+  type ReportDelivery,
+  ReportDeliverySchema,
+} from '../campaign/report-delivery.ts';
 import type { ArtifactRef } from '../contracts/campaign/execution.ts';
 import { type Report, ReportSchema } from '../contracts/campaign/report.ts';
 import { ID_COMPONENT_RE } from '../contracts/campaign/suite.ts';
@@ -118,8 +122,13 @@ function scenarioForAttempt(
 }
 
 /** Human-only terminal presentation over the authenticated report envelope. */
-export function renderCampaignReport(input: Report): string {
-  const value = ReportSchema.parse(input);
+export function renderCampaignReport(
+  input: Report & { delivery?: ReportDelivery },
+): string {
+  const value = ReportSchema.parse({
+    report: input.report,
+    anchor: input.anchor,
+  });
   const { report } = value;
   const lines = [
     `Campaign report: ${plain(report.campaign_id)}`,
@@ -269,5 +278,45 @@ export function renderCampaignReport(input: Report): string {
 
   for (const caveat of report.caveats)
     lines.push('', `Caveat: ${plain(caveat)}`);
+  if (input.delivery) lines.push('', renderReportDelivery(input.delivery));
   return `${lines.join('\n')}\n`;
+}
+
+export function renderReportDelivery(input: ReportDelivery): string {
+  const receipt = ReportDeliverySchema.parse(input);
+  const interval = (start: string | null, end: string | null) =>
+    start === null || end === null
+      ? 'unavailable'
+      : `${Date.parse(end) - Date.parse(start)} ms`;
+  return [
+    `Report delivery: ${receipt.artifacts_published_at}; SHA-256 ${receipt.report_digest}`,
+    `Request → publication: ${interval(receipt.requested_at, receipt.artifacts_published_at)}`,
+    `Request → acceptance: ${interval(receipt.requested_at, receipt.request_accepted_at)}`,
+    `Acceptance → first attempt preparation: ${interval(receipt.request_accepted_at, receipt.execution_started_at)}`,
+    `Acceptance → publication: ${interval(receipt.request_accepted_at, receipt.artifacts_published_at)}`,
+    ...receipt.measurement_readiness.map(
+      (o) =>
+        `${plain(o.scenario)} / ${plain(o.arm)} / ${o.kind} ${plain(o.id)}: ${o.complete ? 'complete' : 'incomplete'}; qualification ${o.qualification ?? 'not required'}; usable publication endpoint ${o.artifacts_published_at ?? 'unavailable'}`,
+    ),
+    'Measurement readiness is not a release verdict.',
+  ].join('\n');
+}
+
+export function renderCampaignStatus(input: {
+  state: string;
+  next_action: string;
+  delivery?: ReportDelivery | null;
+  report_pending?: boolean;
+}): string {
+  return `${[
+    `Campaign status: ${plain(input.state)}; next action ${plain(input.next_action)}`,
+    input.report_pending
+      ? 'report_pending: run campaign report to complete artifact delivery.'
+      : '',
+    input.delivery
+      ? renderReportDelivery(input.delivery)
+      : 'Report delivery: unavailable',
+  ]
+    .filter(Boolean)
+    .join('\n')}\n`;
 }

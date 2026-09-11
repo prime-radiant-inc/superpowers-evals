@@ -26,7 +26,10 @@ import {
   RunAllArgvError,
 } from '../run-all/options.ts';
 import { type CampaignRegisterArgs, campaignCommands } from './campaign.ts';
-import { renderCampaignReport } from './campaign-render.ts';
+import {
+  renderCampaignReport,
+  renderCampaignStatus,
+} from './campaign-render.ts';
 import {
   type LoadConfigOptions,
   loadCredentialConfig,
@@ -1165,6 +1168,12 @@ export function createApplianceProgram(deps: ApplianceCliDeps = {}): Command {
           resolvedDeps,
           () => action(args),
           campaignResultFailed,
+          verb === 'status'
+            ? (value) =>
+                renderCampaignStatus(
+                  value as Parameters<typeof renderCampaignStatus>[0],
+                )
+            : undefined,
         );
       });
   }
