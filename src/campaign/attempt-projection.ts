@@ -29,8 +29,7 @@ import {
   sharesMantleCredentialSource,
 } from '../credentials/scope.ts';
 
-// passwd fields cannot contain the colons carried in campaign attempt paths.
-// The container binds this home alias to the existing private attempt home.
+// The container binds this fixed home alias to each attempt's private home.
 export const ATTEMPT_PASSWD_HOME = '/home/quorum';
 
 export class AttemptProjectionError extends Error {
@@ -126,6 +125,7 @@ export function prepareAttemptStage(
   args: PrepareAttemptStageArgs,
 ): PreparedAttemptStage {
   assertAttemptId(args.attemptId);
+  const attemptPathComponent = encodeURIComponent(args.attemptId);
 
   const registry =
     args.grader === undefined
@@ -285,7 +285,7 @@ export function prepareAttemptStage(
       safeEnvValue(line.slice(eq + 1), 'grader env value', args.attemptId);
     }
 
-    const attemptDir = join(args.campaignDir, 'attempts', args.attemptId);
+    const attemptDir = join(args.campaignDir, 'attempts', attemptPathComponent);
     const stageDir = join(attemptDir, '.stage');
     const homeDir = join(attemptDir, 'home');
     const stagingDir = join(attemptDir, 'staging');
@@ -306,7 +306,7 @@ export function prepareAttemptStage(
       );
       attemptPin = createAndPinChild(
         attemptsPin,
-        args.attemptId,
+        attemptPathComponent,
         'attempt directory',
       );
       homePin = createAndPinChild(attemptPin, 'home', 'attempt home');
