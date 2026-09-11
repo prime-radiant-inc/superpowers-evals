@@ -1,11 +1,13 @@
 # Repeatable PR and release validation — 2026-09-10
 
-Status: implementation is merged at Evals `1aca1214` and Gauntlet `9e5511e7`.
-Drew amended live validation to one repetition per declared cell: focused F28 and
-release R118, with qualification24 unchanged and an approximately $500 planning
-budget. Final implementation verification, grading qualification and live
-acceptance **pending**. No model calls, deployment or live workload was performed
-by this data preflight.
+Status: implementation and the reduced F28/R118 declarations are merged and
+deployed at Evals `c024c27d` and Gauntlet `9e5511e7`. The authorized qualification24
+finished for an estimated **$1.6580323**, but **qualification failed**: nine
+confirmed grounding false passes and a defective positive control affecting
+three further assessments. No focused or release comparison was launched.
+Implementation verification is complete; live comparison acceptance remains unmet.
+Drew's approximately $500 reduced scope remains F28/R118, conditional on grading
+qualification; original 84/366 full-scale acceptance is deferred.
 
 ## Current reduced execution amendment — 2026-09-10
 
@@ -25,6 +27,93 @@ deferred and is not satisfied by this reduced workflow validation; n=1 supplies
 initial behavioral observations and cannot establish equivalence or run-to-run
 variability. The current templates and this amendment are data-only; no Gauntlet
 or product behavior changed.
+
+## Live qualification — 2026-09-10 Pacific
+
+Drew authorized the reduced sequence after the final heads and spending estimate
+were presented. [Evals PR #62](https://github.com/prime-radiant-inc/superpowers-evals/pull/62)
+merged after its full local check and CI. Tailscale `prepare` job
+`job-20260911T064252Z-0ed1` deployed Evals
+`c024c27da2ff2eb2bf18f09fdf40be2c6c18a978` and Gauntlet
+`9e5511e719f06cca42f7a7a93fa872ac2ddc46a8`. Container image:
+`sha256:a89305b4784bf0fa88247601da4a467ab28f3ad32b364a36d8cbc8e50dd3b360`.
+Installed Gauntlet source was checked against that managed revision before any
+model call. The case-manifest and rubric/evidence bytes stayed frozen.
+
+All 24 sessions used the installed production `gauntlet assess`, direct
+Anthropic `sonnet5` / `claude-sonnet-5`, ten minutes including 60 seconds of
+report grace, and batches of eight under the existing live-spend lease. There
+were no Coding-Agent sessions. Start/end: `2026-09-11T06:45:09.303Z` /
+`2026-09-11T06:50:36.240Z`, **326.937 seconds** elapsed. Individual assessments
+lasted 35.109–122.211 seconds. All 24 published accepted native reports; 23 were
+accepted on the first submission. One unread citation was rejected, read, and
+resubmitted successfully: **25 submissions**, no XML repair or deadline decision.
+This proves this assessment path completed, not campaign throughput or release
+validation.
+
+| Case, three repetitions each | Expected grounding | Observed grounding | Reason audit |
+| --- | --- | --- | --- |
+| query-full | fail | pass ×3 | Confirmed false passes |
+| storage-full | fail | pass ×3 | Confirmed false passes |
+| query-full-corrected | pass | pass ×3 | Required reasons supported |
+| storage-full-corrected | pass | pass ×3 | Disputed positive control; exclude from semantic qualification |
+| supported-complete | pass | pass ×3 | Required reasons supported |
+| unsupported-query | fail | pass ×3 | Confirmed false passes |
+| unsupported-storage | fail | fail ×3 | Unsupported persistence assertion detected |
+| missing-credential | pass | pass ×3 | Grounding supported; criteria 3 and 5 correctly fail |
+
+**15/24 complete vectors match the original manifest; only 12 have supported
+complete vectors and reasons after the audit.** Nine confirmed false passes are
+all grounding judgments. A separate read-only reviewer and Bot checked the
+required bases against the full delivered reviews and supplied source. On the
+21 sessions with nondisputed controls, grounding has **9 false passes among 12
+expected failures**, **0 false failures among 9 expected passes**, and **0
+unavailable judgments**. Repetitions of eight cases do not estimate general
+judge accuracy; the raw 135/144 row agreement must not be used to obscure the
+nine decisive errors or count disputed controls as correct.
+
+The public [unsupported-query review](../../test/fixtures/assessment-validation/constructed/unsupported-query/review.md)
+asserts that a successful lookup unconditionally authenticates any supplied
+password. The [actual login body](../../test/fixtures/assessment-validation/constructed/unsupported-query/db.js)
+still requires password equality. All three assessors read the entire review
+and source without truncation. One explicitly treated the false deduction as
+necessary; the others overlooked or excused it. The existing executable
+counterexample again passes: a successful lookup still returns no login for a
+mismatching password. Additional time and inspection tools did not resolve
+this semantic error; these observations do not isolate a general root cause.
+
+**Our positive-control preparation was also defective.** In
+`storage-full-corrected`, structured report text qualifies caller exposure and
+timing claims, but visible terminal captures retain unconditional versions. The
+final delivery incorporates that visible report. These three vector matches
+cannot qualify the instrument under the unchanged whole-delivery rubric. Keep
+the original control, manifest and outputs intact and record the disagreement;
+no label or input was silently changed after seeing results. The other nine
+false passes are independently supported and remain failures. Held-out cases
+have now been observed; tuning on them would consume their held-out status.
+
+Usage accounting reconciles **90 physical requests and 90 logical responses**,
+with complete coverage for all 24 sessions. The original private invocation
+incorrectly changed `OBOL_PRICING_DIR` at runtime under Bun, which does not reach
+obol's native environment; its cost provenance therefore named August 5.
+Offline reconciliation used obol's `setPricingDir` with the frozen September 10
+snapshot and the same retained usage: **every per-case cost and the total
+$1.6580323 are unchanged**. The separate reconciliation retains the corrected
+pricing provenance without overwriting the original receipt or making more
+model calls. Dollars are rate-based estimates, not billing receipts.
+
+Private receipt ID: `assessment-qualification-hSQC7O`; exact original receipt
+SHA-256: `193c49ab8deb4ed1adfa0e9f2289f4f613529456bcc91d47b169349b3975937a`.
+All inputs, 24 result/event/completion/usage records, the reason audit and pricing
+reconciliation remain in private local storage and on the appliance. No raw
+private transcript or successful qualification artifact is published here.
+The spend lease was released and appliance doctor was healthy afterward.
+
+**Stop: qualification remains unmet.** F28, R118 and the alternate-candidate
+registration demonstration have not started. No prompt/model change, replacement
+case, extra live repetition or additional comparison spend follows this result.
+Both turnaround demonstrations remain pending; PRI-2874 stays open. The reduced
+spend declaration is complete, but the intended live validation is not.
 
 ## Questions and frozen declarations
 
@@ -94,9 +183,9 @@ qualification scope, actor-specific known costs and missingness, full turnaround
 and coverage. Cost unknown is not zero and does not discard behavioral evidence.
 The superseded n=3/5 proposal's “no detected difference” condition would not
 establish equivalence. The current n=1 amendment supplies initial observations
-only. No automatic release decision follows. Model assessments, paid runs,
-operational capacity, four-hour and 24-hour targets, and live comparison results
-remain pending.
+only. No automatic release decision follows. Qualification assessments are recorded above. Coding-Agent campaigns,
+operational campaign capacity, four-hour and 24-hour targets, and live comparison
+results remain pending.
 
 ## Independent-measurement integration boundary
 
