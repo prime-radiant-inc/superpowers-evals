@@ -90,3 +90,10 @@ each measurement. Capture presence does not establish complete delivery or the
 correctness of an interpretation. A report receipt does not imply that every
 release obligation is complete, and these offline gates do not establish the
 84/366-sample live acceptance coverage or instrument accuracy.
+
+Task 8's cross-task review also found that current Gauntlet QA reports deliberately
+use ordered short criterion labels. The Evals mapping now requires the complete
+frozen row count and attributes by ordinal, preserving native labels/evidence.
+Missing or extra rows cannot shift attribution. Conversation assessment continues
+to require canonical full text and authenticated acceptance. This changes neither
+criterion judgments nor their uncalibrated provenance or evidence dependencies.

@@ -590,10 +590,17 @@ export function measureAttempt(
       const accepted =
         requirements?.mode !== 'conversation' ||
         (e?.assessment_report !== null && e?.assessment_report !== undefined);
+      // Native QA rows are ordered short restatements. Their complete count
+      // binds ordinals; conversation assessment supplies canonical full text.
+      const criterionBound =
+        requirements?.mode === 'qa'
+          ? e?.gauntlet?.criteria?.length === requirements.criteria.length
+          : row?.criterion === c.text;
       const verdict =
         accepted &&
         checkDependenciesAvailable &&
-        row?.criterion === c.text &&
+        row !== undefined &&
+        criterionBound &&
         ['pass', 'fail', 'unclear'].includes(row.verdict) &&
         row.evidence.trim().length > 0 &&
         dependencies.every((r) => r.length > 0)

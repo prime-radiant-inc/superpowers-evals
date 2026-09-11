@@ -817,3 +817,25 @@ test('criterion check dependencies require the declared checker records without 
       .criteria[0]!.verdict,
   ).toBe('pass');
 });
+
+test('conversation assessment still refuses shortened labels despite a valid accepted marker', () => {
+  const { p, requirements } = conversationPublication(
+    true,
+    {},
+    {
+      criteria: [
+        { criterion: 'Trace', verdict: 'pass', evidence: 'native invocation' },
+        {
+          criterion: 'Delivery',
+          verdict: 'pass',
+          evidence: 'supplied source and delivered review',
+        },
+      ],
+    },
+  );
+  const evidence = readAttemptEvidence(p);
+  expect(evidence.assessment_report).not.toBeNull();
+  expect(
+    measureAttempt(evidence, requirements).criteria.map((c) => c.verdict),
+  ).toEqual([null, null]);
+});

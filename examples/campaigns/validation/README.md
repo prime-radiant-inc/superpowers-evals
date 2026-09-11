@@ -208,3 +208,10 @@ unavailable independent QA endpoint record does not gate otherwise supported
 check/criterion comparisons. Inspect the readiness of each conclusion; the mere
 presence of a delivery receipt never establishes that every release obligation
 is complete.
+
+Native QA reports supply one criterion row per frozen criterion, in order, with
+short labels. Evals attributes them by frozen ordinal only when the complete row
+count matches; missing or extra rows leave all affected criterion judgments
+unavailable. Retained labels and evidence remain verbatim native report data,
+without claiming label or interpretation accuracy. Conversation assessment keeps
+its exact canonical criterion text and accepted-report digest checks.
