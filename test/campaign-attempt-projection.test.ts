@@ -165,11 +165,19 @@ test('colon-bearing attempt paths run local npm binaries and preserve logical id
         scripts: { probe: 'f28-local-probe' },
       }),
     );
+    writeFileSync(
+      join(codingAgentWorkdir, 'fixture.mjs'),
+      "export const value = 'local ESM fixture imported';\n",
+    );
+    writeFileSync(
+      join(codingAgentWorkdir, 'probe.mjs'),
+      'const fixture = await import(`file://${process.cwd()}/fixture.mjs`);\nconsole.log(fixture.value);\n',
+    );
     const sentinel = join(codingAgentWorkdir, 'npm-sentinel');
     const localCommand = join(binDir, 'f28-local-probe');
     writeFileSync(
       localCommand,
-      '#!/bin/sh\nprintf "local executable ran\\n" > "$PWD/npm-sentinel"\n',
+      '#!/bin/sh\nset -e\nnode "$PWD/probe.mjs"\nprintf "local executable ran\\n" > "$PWD/npm-sentinel"\n',
     );
     chmodSync(localCommand, 0o755);
 
@@ -194,10 +202,17 @@ test('colon-bearing attempt paths run local npm binaries and preserve logical id
       encoding: 'utf8',
     });
     expect(npm.status).toBe(0);
+    expect(npm.stdout).toBe('local ESM fixture imported\n');
     expect(readFileSync(sentinel, 'utf8')).toBe('local executable ran\n');
     expect(prepared.attemptId).toBe(attemptIds[0]);
-    expect(prepared.attemptDir).toBe(
-      join(fx.campaignDir, 'attempts', encodeURIComponent(attemptIds[0])),
+    const physicalAttemptNames = preparedStages.map(({ attemptDir }) =>
+      attemptDir.slice(join(fx.campaignDir, 'attempts').length + 1),
+    );
+    expect(
+      physicalAttemptNames.every((name) => /^[A-Za-z0-9_-]+$/.test(name)),
+    ).toBe(true);
+    expect(new Set(physicalAttemptNames.map((name) => name.length)).size).toBe(
+      1,
     );
     expect(mounts).toContainEqual({
       source: prepared.attemptDir,
@@ -208,7 +223,7 @@ test('colon-bearing attempt paths run local npm binaries and preserve logical id
       new Set(preparedStages.map(({ attemptDir }) => attemptDir)).size,
     ).toBe(2);
     expect(readdirSync(join(fx.campaignDir, 'attempts')).sort()).toEqual(
-      attemptIds.map(encodeURIComponent).sort(),
+      physicalAttemptNames.sort(),
     );
   } finally {
     for (const path of [fx.corpus, fx.campaignDir, fx.bundleDir]) {
@@ -240,9 +255,7 @@ test('passwd home resolves to each attempt private home through a writable bind'
       expect(homeMounts).toEqual([
         { source: prepared.homeDir, target: '/home/quorum', mode: 'rw' },
       ]);
-      expect(prepared.homeDir).toBe(
-        join(fx.campaignDir, 'attempts', encodeURIComponent(attemptId), 'home'),
-      );
+      expect(prepared.homeDir).toBe(join(prepared.attemptDir, 'home'));
       expect(mounts).toContainEqual({
         source: prepared.attemptDir,
         target: prepared.attemptDir,
@@ -266,9 +279,7 @@ test('projection refuses subject and grader equality before creating the stage',
   }
   expect(caught).toBeInstanceOf(AttemptProjectionError);
   expect((caught as Error).message).not.toContain(fx.subject);
-  expect(existsSync(join(fx.campaignDir, 'attempts', 'a', '.stage'))).toBe(
-    false,
-  );
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
 });
 
 test('projection refuses an OAuth or unsupported credential before writes', () => {
@@ -465,10 +476,11 @@ test('projection refuses missing subject material and unsafe line content before
 
 test('projection refuses a staged symlink without touching its target', () => {
   const fx = projectionFixture();
-  const attemptDir = join(fx.campaignDir, 'attempts', 'symlink');
+  const prepared = stage(fx, 'symlink');
+  const attemptDir = prepared.attemptDir;
   const outside = join(fx.campaignDir, 'outside');
   mkdirSync(outside, { recursive: true });
-  mkdirSync(join(fx.campaignDir, 'attempts'), { recursive: true });
+  rmSync(attemptDir, { recursive: true, force: true });
   symlinkSync(outside, attemptDir);
   expect(() => stage(fx, 'symlink')).toThrow(AttemptProjectionError);
   expect(existsSync(join(outside, '.stage'))).toBe(false);
@@ -476,10 +488,11 @@ test('projection refuses a staged symlink without touching its target', () => {
 
 test('projection cleans a partial stage after an allowlisted special entry blocks a write', () => {
   const fx = projectionFixture();
-  const attemptDir = join(fx.campaignDir, 'attempts', 'partial');
-  const stageDir = join(attemptDir, '.stage');
+  const prepared = stage(fx, 'partial');
+  const { stageDir } = prepared;
   const target = join(fx.campaignDir, 'untouched');
-  mkdirSync(stageDir, { recursive: true });
+  rmSync(stageDir, { recursive: true, force: true });
+  mkdirSync(stageDir);
   writeFileSync(target, 'untouched\n');
   symlinkSync(target, join(stageDir, 'grader.env'));
   expect(() => stage(fx, 'partial')).toThrow(AttemptProjectionError);
@@ -489,9 +502,10 @@ test('projection cleans a partial stage after an allowlisted special entry block
 
 test('projection refuses an allowlisted FIFO and cleans the pinned stage', () => {
   const fx = projectionFixture();
-  const attemptDir = join(fx.campaignDir, 'attempts', 'fifo');
-  const stageDir = join(attemptDir, '.stage');
-  mkdirSync(stageDir, { recursive: true });
+  const prepared = stage(fx, 'fifo');
+  const { stageDir } = prepared;
+  rmSync(stageDir, { recursive: true, force: true });
+  mkdirSync(stageDir);
   expect(spawnSync('mkfifo', [join(stageDir, 'subject.env')]).status).toBe(0);
   expect(() => stage(fx, 'fifo')).toThrow(AttemptProjectionError);
   expect(existsSync(stageDir)).toBe(false);
@@ -500,16 +514,18 @@ test('projection refuses an allowlisted FIFO and cleans the pinned stage', () =>
 test('projection refuses a stage displaced during pinned writes', () => {
   const fx = projectionFixture();
   const attacker = join(fx.campaignDir, 'attacker-stage');
-  const stolen = join(fx.campaignDir, 'attempts', 'displaced', '.stage-stolen');
+  const prepared = stage(fx, 'displaced');
+  const stolen = join(prepared.attemptDir, '.stage-stolen');
+  rmSync(prepared.stageDir, { recursive: true, force: true });
+  mkdirSync(prepared.stageDir);
   mkdirSync(attacker);
   const realOpen = fs.openSync;
   let swapped = false;
   const spy = spyOn(fs, 'openSync').mockImplementation(((path, flags, mode) => {
     if (!swapped && String(path).endsWith('/subject.env')) {
       swapped = true;
-      const stageDir = join(fx.campaignDir, 'attempts', 'displaced', '.stage');
-      fs.renameSync(stageDir, stolen);
-      fs.symlinkSync(attacker, stageDir);
+      fs.renameSync(prepared.stageDir, stolen);
+      fs.symlinkSync(attacker, prepared.stageDir);
     }
     return realOpen(path, flags, mode);
   }) as typeof fs.openSync);
@@ -517,9 +533,7 @@ test('projection refuses a stage displaced during pinned writes', () => {
     expect(() => stage(fx, 'displaced')).toThrow(AttemptProjectionError);
   } finally {
     spy.mockRestore();
-    rmSync(join(fx.campaignDir, 'attempts', 'displaced', '.stage'), {
-      force: true,
-    });
+    rmSync(prepared.stageDir, { force: true });
   }
   expect(swapped).toBe(true);
   expect(existsSync(stolen)).toBe(false);
@@ -668,9 +682,7 @@ test('V2 preparation verifies selected pricing before staging and exports its ex
       },
     ),
   ).toThrow(/digest/i);
-  expect(
-    existsSync(join(fx.campaignDir, 'attempts', 'attempt', '.stage')),
-  ).toBe(false);
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
 
   const prepared = prepareV2(fx, 'claude-grader', {}, pricing.snapshot);
   expect(prepared.intent.runtime_spec.public_env.OBOL_PRICING_DIR).toBe(
@@ -690,19 +702,11 @@ test('real entrypoint refuses credential delivery that overrides prepared select
   const prepared = prepareV2(fx, 'claude-grader', {}, pricing.snapshot);
   const spec = prepared.intent.runtime_spec;
   const subjectFile = join(
-    fx.campaignDir,
-    'attempts',
-    'attempt',
+    prepared.intent.output_root,
     '.stage',
     'subject.env',
   );
-  const graderFile = join(
-    fx.campaignDir,
-    'attempts',
-    'attempt',
-    '.stage',
-    'grader.env',
-  );
+  const graderFile = join(prepared.intent.output_root, '.stage', 'grader.env');
   fs.chmodSync(subjectFile, 0o600);
   writeFileSync(subjectFile, 'OBOL_PRICING_DIR=/unverified/pricing\n');
   const launched = join(prepared.intent.output_root, 'worker-launched');
@@ -770,9 +774,7 @@ test.each([
   else writeFileSync(pricing.file, '{}\n');
 
   expect(() => prepareV2(fx, 'claude-grader', {}, pricing.snapshot)).toThrow();
-  expect(
-    existsSync(join(fx.campaignDir, 'attempts', 'attempt', '.stage')),
-  ).toBe(false);
+  expect(existsSync(join(fx.campaignDir, 'attempts'))).toBe(false);
 });
 
 test('prepared public environment selects exact pricing for real ATIF and grader accounting in a clean HOME', () => {
@@ -1173,10 +1175,8 @@ test('V2 prepares the explicitly shared Mantle source for both consumers', () =>
   });
   expect(gauntletEnvBase(grader)['ANTHROPIC_API_KEY']).toBe(SUBJECT);
   expect(JSON.stringify(prepared)).not.toContain(SUBJECT);
-  removeAttemptStage(join(fx.campaignDir, 'attempts', 'attempt'));
-  expect(
-    existsSync(join(fx.campaignDir, 'attempts', 'attempt', '.stage')),
-  ).toBe(false);
+  removeAttemptStage(prepared.intent.output_root);
+  expect(existsSync(join(prepared.intent.output_root, '.stage'))).toBe(false);
 });
 
 test('V2 refuses equal Mantle values under different source names', () => {
