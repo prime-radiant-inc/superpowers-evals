@@ -41,6 +41,8 @@ import {
   prepareContainerExecution,
 } from './container-spawner.ts';
 import {
+  type AdmissionWait,
+  appendSidecarLine,
   type BlockInterval,
   ContentionSampler,
   evaluateContention,
@@ -729,7 +731,10 @@ export async function runCampaignDispatch(
           exposures,
           contention: results.get(id),
           intervals,
-          telemetry: sidecar,
+          telemetry: {
+            lines: sidecar.lines,
+            truncatedTail: sidecar.truncatedTail,
+          },
         });
         commit('block_invalidated', {
           block_id: id,
@@ -754,7 +759,10 @@ export async function runCampaignDispatch(
           exposures,
           contention: 'clean',
           intervals,
-          telemetry: sidecar,
+          telemetry: {
+            lines: sidecar.lines,
+            truncatedTail: sidecar.truncatedTail,
+          },
         });
         commit('block_validated', { block_id: id, evidence_refs: [ref] });
       }
@@ -804,7 +812,28 @@ export async function runCampaignDispatch(
    *  the session guard each cadence so halts and the abort signal stay
    *  immediate and a published cancel intent is honoured within one cadence,
    *  then applies the fatal guard. */
-  const admit = async () => {
+  const lastWait = new Map<string, string>();
+  const observeWait = (
+    blockId: string,
+    reason: AdmissionWait['reason'],
+    pool: string,
+    reserved: number,
+    capacity: number,
+  ) => {
+    const key = `${reason}:${pool}`;
+    if (lastWait.get(blockId) === key) return;
+    appendSidecarLine(context.campaignDir, {
+      kind: 'admission_wait',
+      at: now(),
+      block_id: blockId,
+      reason,
+      pool_id: pool,
+      reserved,
+      capacity,
+    });
+    lastWait.set(blockId, key);
+  };
+  const admit = async (blockId?: string) => {
     const deadline =
       clock.now() +
       (STALE_TELEMETRY_WAIT_CADENCES * experiment.contention.cadence_ms) / 1000;
@@ -815,6 +844,7 @@ export async function runCampaignDispatch(
         clock.now() >= deadline
       )
         break;
+      if (blockId) observeWait(blockId, 'host', 'host', 0, 0);
       await sleep(
         Math.min(
           clock.now() + experiment.contention.cadence_ms / 1000,
@@ -1043,30 +1073,43 @@ export async function runCampaignDispatch(
           )
         );
       });
-      const candidate = breach
-        ? undefined
-        : candidates.find((c) =>
-            [
-              ...demand(
-                experiment.planned_slots
-                  .filter((s) => s.primary_block_id === c.primary)
-                  .map((s) => s.sample_id),
-              ),
-            ].every(
-              ([pool, amount]) =>
-                (usage.get(pool) ?? 0) + amount <=
-                  (pool === GLOBAL_POOL
-                    ? experiment.contention.global_run_cap
-                    : required(policy.get(pool)).max_concurrency) &&
-                nextStart(pool) <= clock.now(),
-            ),
-          );
+      const eligible = candidates.filter((c) => {
+        const id = c.reserve ?? c.primary;
+        if (breach) {
+          observeWait(id, 'host', 'host', 0, 0);
+          return false;
+        }
+        for (const [pool, amount] of demand(
+          experiment.planned_slots
+            .filter((s) => s.primary_block_id === c.primary)
+            .map((s) => s.sample_id),
+        )) {
+          const reserved = usage.get(pool) ?? 0;
+          const capacity =
+            pool === GLOBAL_POOL
+              ? experiment.contention.global_run_cap
+              : required(policy.get(pool)).max_concurrency;
+          const reason =
+            reserved + amount > capacity
+              ? 'pool_capacity'
+              : nextStart(pool) > clock.now()
+                ? 'launch_spacing'
+                : null;
+          if (reason) {
+            observeWait(id, reason, pool, reserved, capacity);
+            return false;
+          }
+        }
+        lastWait.delete(id);
+        return true;
+      });
+      const candidate = eligible[0];
       if (!candidate) {
         await sleep(clock.now() + experiment.contention.cadence_ms / 1000);
         continue;
       }
       deps.verifySnapshot();
-      await admit();
+      await admit(candidate.reserve ?? candidate.primary);
       // The sample that releases the wait can be the one that opens a breach,
       // and a live breach halts admission: re-select instead of activating a
       // block the audit would then invalidate for contention.
@@ -1132,7 +1175,7 @@ export async function runCampaignDispatch(
           ...(graderKeyEnv ? { graderKeyEnv } : {}),
         });
         guard();
-        await admit();
+        await admit(activation.block_id);
         activation.attempts.push(prepared.intent);
         keyGrants.set(prepared.intent.identity.execution_attempt_id, [
           ...(subjectKeyEnv
@@ -1141,7 +1184,7 @@ export async function runCampaignDispatch(
           ...(graderKeyEnv ? [{ pool: graderPool, env: graderKeyEnv }] : []),
         ]);
       }
-      await admit();
+      await admit(activation.block_id);
       commit(
         candidate.reason ? 'block_replaced' : 'block_activated',
         candidate.reason
@@ -1156,7 +1199,7 @@ export async function runCampaignDispatch(
         )
           continue;
         guard();
-        await admit();
+        await admit(activation.block_id);
         const bound = await runtime.create({ intent });
         guard();
         commit('runtime_bound', {
@@ -1170,6 +1213,21 @@ export async function runCampaignDispatch(
             nextStart(graderPool),
           ) > clock.now()
         ) {
+          const subject = subjectPool(intent.identity.sample_id);
+          const pool =
+            nextStart(subject) >= nextStart(graderPool) ? subject : graderPool;
+          const reservations = demand(
+            [...projection().attempts.values()]
+              .filter((a) => !a.stopped)
+              .map((a) => a.intent.identity.sample_id),
+          );
+          observeWait(
+            activation.block_id,
+            'launch_spacing',
+            pool,
+            reservations.get(pool) ?? 0,
+            required(policy.get(pool)).max_concurrency,
+          );
           await sleep(
             Math.max(
               nextStart(subjectPool(intent.identity.sample_id)),
@@ -1190,7 +1248,7 @@ export async function runCampaignDispatch(
         )
           continue;
         guard();
-        await admit();
+        await admit(activation.block_id);
         const monitor = await runtime.start(bound);
         writer.assertCurrentOwner();
         const receiptAttempt = projection().attempts.get(
