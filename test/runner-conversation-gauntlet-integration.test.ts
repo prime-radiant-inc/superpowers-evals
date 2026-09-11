@@ -777,6 +777,8 @@ for (const mode of [
   'parent-cancel',
   'parent-deadline',
   'retry',
+  'retry-abort',
+  'retry-backoff',
   'checker-missing',
   'checker-crash',
   'check-fail',
@@ -835,6 +837,28 @@ if (['reserve','late','parent-cancel','parent-deadline','writer-failure','double
     return response;
   };
 }
+// Exercise the real work-expiry callback after a settled error, either during
+// SDK backoff or its pending retry. 600s minus 60s grace and 5s publication.
+if (['retry-abort', 'retry-backoff'].includes(mode)) {
+  spyOn(Date,'now').mockImplementation(()=>anchor);
+  spyOn(performance,'now').mockImplementation(()=>time);
+  const schedule = globalThis.setTimeout;
+  let expireWork;
+  spyOn(globalThis,'setTimeout').mockImplementation((callback, delay, ...args)=>{
+    if (delay === 535000 && expireWork === undefined) expireWork = callback;
+    return schedule(callback, delay, ...args);
+  });
+  const fetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (...args) => {
+    const call = ++calls;
+    const expire = () => { time = 540000; expireWork(); };
+    if (mode === 'retry-abort' && call === 3) schedule(expire, 30);
+    const response = await fetch(...args);
+    if (mode === 'retry-backoff' && call === 2) schedule(expire, 30);
+    return response;
+  };
+}
 if (mode === 'forced-kill') {
   const on = process.on.bind(process);
   process.on = (signal, listener) => on(signal, signal === 'SIGTERM' ? ()=>{} : listener);
@@ -882,27 +906,40 @@ if (mode === 'double-fault') {
           evidence.phase('assessment-request-received');
           if (['timeout', 'cancel', 'forced-kill'].includes(mode))
             return deferred.response();
-          if (mode === 'retry' && index === 0)
+          if (mode === 'retry-abort' && index === 2) return deferred.response();
+          if (
+            (mode === 'retry' && index === 0) ||
+            (['retry-abort', 'retry-backoff'].includes(mode) && index === 1)
+          )
             return Response.json(
               {
                 type: 'error',
                 error: { type: 'rate_limit_error', message: 'fixture retry' },
               },
-              { status: 429, headers: { 'retry-after-ms': '1' } },
+              {
+                status: 429,
+                headers: {
+                  'retry-after-ms': mode === 'retry-backoff' ? '100' : '1',
+                },
+              },
             );
           const report =
             index >=
-            ([
-              'reserve',
-              'late',
-              'parent-cancel',
-              'parent-deadline',
-              'writer-failure',
-              'double-fault',
-              'retry',
-            ].includes(mode)
-              ? 2
-              : 1);
+            (mode === 'retry-abort'
+              ? 3
+              : mode === 'retry-backoff'
+                ? 2
+                : [
+                      'reserve',
+                      'late',
+                      'parent-cancel',
+                      'parent-deadline',
+                      'writer-failure',
+                      'double-fault',
+                      'retry',
+                    ].includes(mode)
+                  ? 2
+                  : 1);
           await Bun.sleep(20);
           return Response.json(
             {
@@ -1038,6 +1075,8 @@ if (mode === 'double-fault') {
           [
             'reserve',
             'retry',
+            'retry-abort',
+            'retry-backoff',
             'trace-unavailable',
             'source-mismatch',
             'check-fail',
@@ -1115,18 +1154,49 @@ if (mode === 'double-fault') {
             mode === 'parent-cancel' ? 'cancelled' : 'timed_out',
           );
         }
-        if (mode === 'retry') {
+        if (['retry', 'retry-abort', 'retry-backoff'].includes(mode)) {
           expect(verdict.gauntlet?.status).toBe('pass');
           expect(role.process_exit.code).toBe(0);
           expect(economics.partial).toBe(true);
           expect(economics.total_est_cost_usd).toBeNull();
           expect(verdict.economics?.['assessment_accounting']).toMatchObject({
             logicalResponses: 2,
-            physicalAttempts: 3,
-            unknownUsageAttemptIds: ['001'],
+            physicalAttempts: mode === 'retry-abort' ? 4 : 3,
+            unknownUsageAttemptIds:
+              mode === 'retry'
+                ? ['001']
+                : mode === 'retry-abort'
+                  ? ['002', '003']
+                  : ['002'],
             complete: false,
             error: null,
           });
+        }
+        if (['retry-abort', 'retry-backoff'].includes(mode)) {
+          const attempts = read(join(out, 'assessment-attempts.jsonl'), 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line));
+          const error = attempts.find(
+            (row) =>
+              row.event === 'settlement' && row.assessment_attempt_id === '002',
+          );
+          expect(error).toMatchObject({
+            outcome: 'response',
+            usage: 'not_returned',
+            usage_unavailable: 'api_error',
+            accounting_failure: false,
+          });
+          expect(error.aborted_at_ms).toBeUndefined();
+          expect(requests).toBe(mode === 'retry-abort' ? 4 : 3);
+          if (mode === 'retry-abort')
+            expect(
+              attempts.find(
+                (row) =>
+                  row.event === 'settlement' &&
+                  row.assessment_attempt_id === '003',
+              ).outcome,
+            ).toBe('aborted');
         }
         evidence.phase('assertions-completed');
         passed = true;

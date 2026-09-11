@@ -436,11 +436,11 @@ for (const finalResponse of [false, true])
     expect(result.complete).toBe(false);
   });
 
-for (const fault of ['unsettled', 'response', 'overlap'])
-  test(`an abandoned request without settled abort authority is refused: ${fault}`, () => {
+for (const fault of ['unsettled', 'overlap'])
+  test(`an abandoned request without settlement before successor admission is refused: ${fault}`, () => {
     const abandoned = {
       ...settlement('001', '001', false),
-      outcome: fault === 'response' ? 'response' : 'aborted',
+      outcome: 'aborted',
       usage_unavailable: 'aborted',
       timestamp_ms: fault === 'overlap' ? 121 : 110,
     };
@@ -479,3 +479,53 @@ test('recorded physical response discarded at cancellation retains price before 
   });
   expect(result.knownUsageJsonl.trim().split('\n')).toHaveLength(2);
 });
+
+for (const retryAborted of [false, true])
+  test(`settled API error before report grace preserves unknown usage: aborted retry ${retryAborted}`, () => {
+    const finalId = retryAborted ? '004' : '003';
+    const result = reconcileAssessmentAccounting({
+      runJsonl: lines([
+        request(),
+        response(),
+        request(2),
+        request(3),
+        response(3),
+        end(2),
+      ]),
+      attemptsJsonl: lines([
+        admission(),
+        settlement(),
+        { ...admission('002', '002'), timestamp_ms: 120 },
+        { ...settlement('002', '002', false), timestamp_ms: 130 },
+        ...(retryAborted
+          ? [
+              { ...admission('003', '002'), timestamp_ms: 140 },
+              {
+                ...settlement('003', '002', false),
+                timestamp_ms: 150,
+                outcome: 'aborted',
+                usage_unavailable: 'aborted',
+                capture: 'incomplete',
+                aborted_at_ms: 150,
+              },
+            ]
+          : []),
+        { ...admission(finalId, '003'), timestamp_ms: 160 },
+        { ...settlement(finalId, '003'), timestamp_ms: 170 },
+      ]),
+      usageJsonl: lines([usage(), usage(finalId, '003')]),
+    });
+    expect(result).toMatchObject({
+      reportEligible: true,
+      complete: false,
+      error: null,
+      accounting: {
+        logicalResponses: 2,
+        physicalAttempts: retryAborted ? 4 : 3,
+        unknownUsageAttemptIds: retryAborted ? ['002', '003'] : ['002'],
+      },
+    });
+    expect(result.knownUsageJsonl).toBe(
+      lines([usage(), usage(finalId, '003')]),
+    );
+  });
