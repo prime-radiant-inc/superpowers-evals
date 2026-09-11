@@ -124,7 +124,7 @@
       "id": "storage-full-corrected",
       "partition": "regression",
       "rubric_sha256": "cff542ea9a2bf627a8675dceb8997683eed5ead7af751823e4f1c1ea5efe6871",
-      "evidence_sha256": "2f6c990e41c5b8acb284ee58cab009e780f27ba4f6fcf4743a28474a2bb1079d",
+      "evidence_sha256": "fec22c6dcf75902ae85d162bbf55845c86990315ad70998cdaea5abcac29c0cb",
       "expected": [
         {
           "criterion": 1,

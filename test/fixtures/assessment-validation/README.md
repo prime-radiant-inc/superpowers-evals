@@ -6,6 +6,11 @@ Grounding has **12 positive and 12 negative observations**. Report the three
 missing-credential observations for criteria 3 and 5 separately from grounding.
 No model accuracy or successful live qualification is claimed by fixture tests.
 
+For the September 11 prompt retry, all eight cases have been observed and are
+regression cases. The manifest's `partition` records the original split; its
+`held-out` values no longer indicate unseen cases. A successful retry would
+establish performance on these cases, not fresh held-out accuracy.
+
 `manifest.json` contains expected labels for verification only. Never index it
 or pass it to the assessor. Each case uses the complete, unchanged six-row
 conversation-code-review rubric. The four unsupported-claim cases have vector
@@ -81,3 +86,20 @@ verification, without a committed sibling-repository dependency. That receipt
 covers all eight indexes, all case hashes, label isolation and unchanged
 originals. Missing private data does not make a public CI run claim private
 validation; that separate receipt is required for the private cases.
+
+## Corrected control version for the prompt retry
+
+The first live run exposed two unqualified consequences still present in
+wrapped terminal summaries of `storage-full-corrected`. A new private copy
+corrects caller-exposure and timing statements in 22 capture artifacts
+(ANSI/JSON pairs 086–096), preserving their full text and all findings. Its
+native and structured delivered reports already carried the qualifications.
+The other seven inputs, sources, rubric and expected labels are unchanged.
+A separate review of the complete control supports its six-pass label.
+
+The original manifest SHA-256 is
+`11b273a535f878a12ed1b075949b4e4f353b625636144b533b7f12a351782459`;
+the retry manifest is
+`908e70cba4fb1bc7c575f8c6ff4bff1017b3884d4938bdf6a74733652f5e1b4b`.
+The original private inputs and results are retained unchanged. Both control
+versions are synthetic; this correction is separate from the prompt change.
