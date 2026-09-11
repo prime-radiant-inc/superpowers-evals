@@ -946,3 +946,32 @@ test('runPhase roots its sink at scratchRoot when given', async () => {
     removeTree(workdir);
   }
 });
+
+test('a genuine false record before a broken checker retains its completed disposition', async () => {
+  const workdir = mkdtempSync(join(tmpdir(), 'checker-status-'));
+  const checksSh = join(workdir, 'checks.sh');
+  writeFileSync(
+    checksSh,
+    'pre() {\n file-exists absent\n file-exists\n}\npost() { :; }\n',
+  );
+  try {
+    const result = await runPhase({
+      checksSh,
+      phase: 'pre',
+      workdir,
+      repoRoot: REPO,
+    });
+    expect(result.exitCode).toBe(127);
+    expect(
+      result.records.map((r) => ({
+        passed: r.passed,
+        status: r.checker_status,
+      })),
+    ).toEqual([
+      { passed: false, status: 'completed' },
+      { passed: false, status: 'errored' },
+    ]);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
+});

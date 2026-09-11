@@ -15,6 +15,7 @@ interface RecordLine {
   negated: boolean;
   passed: boolean;
   detail: string | null;
+  checker_status: 'completed' | 'errored';
 }
 
 function emit(
@@ -23,6 +24,7 @@ function emit(
   passed: boolean,
   detail: string | undefined,
   negated: boolean,
+  checker_status: 'completed' | 'errored' = 'completed',
 ): void {
   const sink = getEnv('QUORUM_RECORD_SINK');
   if (!sink) return;
@@ -32,6 +34,7 @@ function emit(
     args,
     negated,
     passed,
+    checker_status,
     detail: detail !== undefined && detail !== '' ? detail : null,
   };
   appendFileSync(sink, `${JSON.stringify(line)}\n`);
@@ -64,6 +67,15 @@ export function recordWith(
   passed: boolean,
   negated: boolean,
   detail?: string,
+  checker_status: 'completed' | 'errored' = 'completed',
 ): void {
-  emit(check, args, passed, detail, negated);
+  emit(check, args, passed, detail, negated, checker_status);
+}
+
+export function recordError(
+  check: string,
+  args: string[],
+  detail?: string,
+): void {
+  emit(check, args, false, detail, false, 'errored');
 }

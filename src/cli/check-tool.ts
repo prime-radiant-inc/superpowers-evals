@@ -24,7 +24,7 @@
 
 import { negate, runVerb } from '../check/dispatch.ts';
 import { defaultContext } from '../check/fs-verbs.ts';
-import { recordFail, recordWith } from '../check/record.ts';
+import { recordError, recordWith } from '../check/record.ts';
 
 const [, , verb, ...args] = Bun.argv;
 
@@ -36,7 +36,7 @@ function brokenExit(
   checkArgs: string[],
 ): never {
   console.error(message);
-  recordFail(check, checkArgs, message);
+  recordError(check, checkArgs, message);
   process.exit(NONINVERTIBLE_EXIT);
 }
 
@@ -50,7 +50,14 @@ const ctx = defaultContext();
 // `not` is its own verb: run the inner verb in-process, emit a single record.
 if (verbName === 'not') {
   const r = negate(args, ctx);
-  recordWith(r.check, r.args, r.passed, r.negated, r.detail);
+  recordWith(
+    r.check,
+    r.args,
+    r.passed,
+    r.negated,
+    r.detail,
+    r.refused ? 'errored' : 'completed',
+  );
   if (r.refused) process.exit(NONINVERTIBLE_EXIT);
   process.exit(r.passed ? 0 : 1);
 }

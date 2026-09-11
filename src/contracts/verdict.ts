@@ -42,6 +42,7 @@ export const CheckRecordSchema = z.object({
   args: z.array(z.string()),
   negated: z.boolean(),
   passed: z.boolean(),
+  checker_status: z.enum(['completed', 'errored']).optional(),
   detail: z.string().nullable(),
   phase: z.enum(CHECK_PHASES),
   // smevals-style check-result extensions (parent Checks): optional runtime
