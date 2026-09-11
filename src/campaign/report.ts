@@ -7,7 +7,9 @@ import {
 import type { CampaignProjection } from './execution-state.ts';
 import {
   type AttemptEvidence,
+  measureAttempt,
   missingAttemptEvidence,
+  type ObligationObservation,
   type ValidityEvidence,
 } from './report-evidence.ts';
 
@@ -23,6 +25,7 @@ type Quantity = (typeof QUANTITIES)[number];
 // the final arithmetic boundary, without introducing a pricing operation.
 const stable = (n: number) => Number(n.toPrecision(15));
 function measured(e: AttemptEvidence, q: Quantity): number | null {
+  if (e.missingness.some((m) => m.field === q)) return null;
   if (q === 'subject_cost_usd' && !e.subject_cost_complete) return null;
   if (q === 'grader_cost_usd' && !e.grader_cost_complete) return null;
   return e[q];
@@ -92,6 +95,7 @@ export function foldComparisonReport(args: {
   const status =
     state.ended?.outcome ?? (args.interrupted ? 'interrupted' : 'active');
   const attempts: ComparisonReport['attempts'] = [];
+  const measurementEligible = new Set<string>();
   for (const [id, a] of state.attempts) {
     const slot = experiment.planned_slots.find(
       (s) => s.sample_id === a.intent.identity.sample_id,
@@ -128,18 +132,23 @@ export function foldComparisonReport(args: {
         evidence.observed_outcome === a.observation.outcome);
     if (!supported)
       reasons.push('accepted behavior lacks authenticated supporting verdict');
-    const usable =
-      supported &&
+    const sourceValid =
       behavior &&
       selected &&
       !block.excluded &&
       Boolean(validity?.available) &&
       Boolean(a.observation) &&
       evidence.publication_valid;
+    const usable = supported && sourceValid;
+    if (sourceValid) measurementEligible.add(id);
     if (!behavior) {
       evidence.observed_outcome = null;
       evidence.gauntlet = null;
       evidence.checks = null;
+      evidence.check_execution_complete = false;
+      evidence.conversation = null;
+      evidence.roles = null;
+      evidence.assessment_report = null;
     }
     attempts.push({
       execution_attempt_id: id,
@@ -172,6 +181,31 @@ export function foldComparisonReport(args: {
       );
       const selected = (sampleId: string) =>
         attempts.find((a) => a.sample_id === sampleId && a.analysis_usable);
+      const measuredAttempt = (sampleId: string) =>
+        attempts.find(
+          (a) =>
+            a.sample_id === sampleId &&
+            measurementEligible.has(a.execution_attempt_id),
+        );
+      const qualification = (
+        id: string,
+      ): 'qualified' | 'unverified' | 'not_calibrated' => {
+        const requirements =
+          experiment.measurement_requirements?.[cell.scenario];
+        const criterion = requirements?.criteria.find(
+          (c) => `${requirements.rubric_sha256}:${c.ordinal}` === id,
+        );
+        if (!criterion?.requires_assessment_qualification)
+          return 'not_calibrated';
+        return experiment.assessment_qualification?.scopes.some(
+          (s) =>
+            s.scenario === cell.scenario &&
+            s.criterion_ids.includes(criterion.id) &&
+            s.status === 'qualified',
+        )
+          ? 'qualified'
+          : 'unverified';
+      };
       const arms = cell.arms.map((arm) => {
         const armSlots = slots.filter((s) => s.arm === arm);
         const members = armSlots.map((s) => selected(s.sample_id));
@@ -182,18 +216,82 @@ export function foldComparisonReport(args: {
             a?.accepted_outcome === 'pass' || a?.accepted_outcome === 'fail',
         );
         const values = (q: Quantity) =>
-          determinate.flatMap((a) => {
-            const value = a ? measured(a.evidence, q) : null;
-            return value === null ? [] : [value];
-          });
+          armSlots
+            .map((s) => measuredAttempt(s.sample_id))
+            .flatMap((a) => {
+              const value = a ? measured(a.evidence, q) : null;
+              return value === null ? [] : [value];
+            });
         const mean = (q: Quantity) => {
           const data = values(q);
           return data.length
             ? stable(data.reduce((a, b) => a + b, 0) / data.length)
             : null;
         };
+        const requirements =
+          experiment.measurement_requirements?.[cell.scenario];
+        const observations = armSlots.map((s) =>
+          measureAttempt(measuredAttempt(s.sample_id)?.evidence, requirements),
+        );
+        const countObligation = (
+          id: string,
+          data: ObligationObservation[],
+        ) => ({
+          id,
+          planned: data.length,
+          pass: data.filter((o) => o.verdict === 'pass').length,
+          fail: data.filter((o) => o.verdict === 'fail').length,
+          unclear: data.filter((o) => o.verdict === 'unclear').length,
+          unavailable: data.filter((o) => o.verdict === null).length,
+          evidence: [
+            ...new Map(
+              data.flatMap((o) => o.evidence).map((r) => [r.path, r]),
+            ).values(),
+          ],
+        });
+        const countKind = (kind: 'checks' | 'criteria') =>
+          [
+            ...new Set(observations.flatMap((o) => o[kind].map((c) => c.id))),
+          ].map((id) =>
+            countObligation(
+              id,
+              observations.flatMap((o) => o[kind].filter((c) => c.id === id)),
+            ),
+          );
         return {
           arm,
+          label: experiment.comparison_request
+            ? 'baseline' in comparison && arm === comparison.baseline
+              ? experiment.comparison_request.baseline.label
+              : experiment.comparison_request.candidate.label
+            : arm,
+          source_sha: experiment.refs.superpowers_by_arm[arm] ?? null,
+          measurements: {
+            detail_available: requirements !== undefined,
+            interaction: countObligation(
+              'interaction',
+              observations.map((o) => o.interaction),
+            ),
+            checks: countKind('checks').map((c) => {
+              const expected = requirements?.checks.find(
+                (r) => `check:${r.ordinal}` === c.id,
+              );
+              return {
+                ...c,
+                label: expected
+                  ? `${expected.phase}: ${expected.negated ? 'not ' : ''}${expected.check} ${expected.args?.join(' ') ?? '(dynamic arguments)'}`
+                  : c.id,
+              };
+            }),
+            criteria: countKind('criteria').map((c) => ({
+              ...c,
+              label:
+                requirements?.criteria.find(
+                  (r) => `${requirements.rubric_sha256}:${r.ordinal}` === c.id,
+                )?.text ?? c.id,
+              qualification: qualification(c.id),
+            })),
+          },
           pass_rate: {
             n: determinate.length,
             rate: determinate.length
@@ -227,21 +325,14 @@ export function foldComparisonReport(args: {
       ][] = [];
       if ('baseline' in comparison)
         for (const slot of slots.filter((s) => s.arm === comparison.baseline)) {
-          const b = selected(slot.sample_id);
+          const b = measuredAttempt(slot.sample_id);
           const tSlot = slots.find(
             (s) =>
               s.primary_block_id === slot.primary_block_id &&
               s.arm === comparison.treatment,
           );
-          const t = tSlot ? selected(tSlot.sample_id) : undefined;
-          if (
-            b &&
-            t &&
-            b.block_id === t.block_id &&
-            (b.accepted_outcome === 'pass' || b.accepted_outcome === 'fail') &&
-            (t.accepted_outcome === 'pass' || t.accepted_outcome === 'fail')
-          )
-            cohort.push([b, t]);
+          const t = tSlot ? measuredAttempt(tSlot.sample_id) : undefined;
+          if (b && t && b.block_id === t.block_id) cohort.push([b, t]);
         }
       const q = (quantity: Quantity) =>
         paired(
@@ -250,6 +341,28 @@ export function foldComparisonReport(args: {
             measured(t.evidence, quantity),
           ]),
         );
+      const requirements = experiment.measurement_requirements?.[cell.scenario];
+      const pairedObligations = (kind: 'checks' | 'criteria') => {
+        const expected = measureAttempt(undefined, requirements)[kind];
+        return [...new Set(expected.map((o) => o.id))].map((id) => {
+          const pairs = cohort.flatMap(([b, t]) => {
+            const left = measureAttempt(b.evidence, requirements)[kind].filter(
+              (o) => o.id === id,
+            );
+            const right = measureAttempt(t.evidence, requirements)[kind].filter(
+              (o) => o.id === id,
+            );
+            const value = (o: ObligationObservation | undefined) =>
+              o?.verdict === 'pass' ? 1 : o?.verdict === 'fail' ? 0 : null;
+            return left.map((o, i) => [value(o), value(right[i])] as const);
+          });
+          return {
+            id,
+            planned: cell.n * expected.filter((o) => o.id === id).length,
+            quantity: paired(pairs),
+          };
+        });
+      };
       comparisons.push({
         comparison_id: cell.comparison_id,
         scenario: cell.scenario,
@@ -261,12 +374,27 @@ export function foldComparisonReport(args: {
                 treatment: comparison.treatment,
               },
         arms,
+        paired_criteria: pairedObligations('criteria').map((q) => ({
+          ...q,
+          qualification: qualification(q.id),
+        })),
+        paired_checks: pairedObligations('checks'),
         paired: {
           pass_rate: paired(
-            cohort.map(([b, t]) => [
-              b.accepted_outcome === 'pass' ? 1 : 0,
-              t.accepted_outcome === 'pass' ? 1 : 0,
-            ]),
+            cohort
+              .filter(
+                ([b, t]) =>
+                  b.analysis_usable &&
+                  t.analysis_usable &&
+                  (b.accepted_outcome === 'pass' ||
+                    b.accepted_outcome === 'fail') &&
+                  (t.accepted_outcome === 'pass' ||
+                    t.accepted_outcome === 'fail'),
+              )
+              .map(([b, t]) => [
+                b.accepted_outcome === 'pass' ? 1 : 0,
+                t.accepted_outcome === 'pass' ? 1 : 0,
+              ]),
           ),
           subject_cost_usd: q('subject_cost_usd'),
           grader_cost_usd: q('grader_cost_usd'),
@@ -291,11 +419,17 @@ export function foldComparisonReport(args: {
   const startedAt = state.start?.claimed_at ?? null;
   return ComparisonReportSchema.parse({
     schema_version: 'quorum.comparison-report/v1',
-    fold_version: 1,
+    fold_version: 2,
     campaign_id: experiment.campaign_id,
     input_digest: experiment.input_digest,
     status,
     behavior_available: behavior,
+    source_refs: behavior
+      ? { evals: experiment.refs.evals, gauntlet: experiment.refs.gauntlet }
+      : null,
+    qualification: behavior
+      ? (experiment.assessment_qualification ?? null)
+      : null,
     complete,
     termination_verified: state.termination !== null,
     comparisons,
@@ -346,7 +480,7 @@ export function foldComparisonReport(args: {
           ]
         : []),
       'Run wall seconds sum frozen run intervals; campaign elapsed is start claimed_at through the ended transition, excluding later termination work. Missing endpoints remain missing.',
-      'Per-arm means and pass rates use selected usable determinate outcomes; each quantity has independent availability.',
+      'Pass rates require determinate outcomes; quantities use independently available authenticated measurements from selected valid observations.',
       'Excluded accounting categories overlap; do not add them to total accounting.',
       'Unsupported subject lifecycle/error claims remain conservative accepted indeterminate outcomes.',
     ],

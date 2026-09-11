@@ -64,6 +64,8 @@ export const SuiteSchema = z
       })
       .strict(),
     pricing_snapshot: PricingSnapshotSchema.optional(),
+    measurement_requirements: PricingSnapshotSchema.optional(),
+    assessment_qualification: PricingSnapshotSchema.optional(),
   })
   .strict()
   .superRefine((suite, ctx) => {

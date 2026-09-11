@@ -8,6 +8,10 @@ import {
   EstimateSchema,
   ExecutionSurfaceArmSchema,
 } from './campaign.ts';
+import {
+  MeasurementRequirementsSchema,
+  QualificationCoverageSchema,
+} from './measurement.ts';
 import { ID_COMPONENT_RE, SuiteSchema } from './suite.ts';
 
 export type { Suite } from './suite.ts';
@@ -163,6 +167,8 @@ export const ExperimentSchema = z
       })
       .strict(),
     grader: GraderSchema,
+    measurement_requirements: MeasurementRequirementsSchema.optional(),
+    assessment_qualification: QualificationCoverageSchema.optional(),
     cells: z.array(ExperimentCellSchema).min(1),
     role_budgets: z
       .record(IdSchema, z.record(NameSchema, RoleBudgetSchema))

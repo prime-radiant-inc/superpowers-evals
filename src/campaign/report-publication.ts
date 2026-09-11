@@ -158,6 +158,23 @@ export function renderReportMd(value: Report): string {
     `Input SHA-256: \`${anchor.input_digest}\`.`,
     '',
   ];
+  if (r.source_refs)
+    lines.push(
+      `Evals SHA: \`${r.source_refs.evals}\`; Gauntlet SHA: \`${r.source_refs.gauntlet}\`.`,
+      '',
+    );
+  if (r.behavior_available) {
+    if (r.qualification) {
+      const ref = r.qualification.reference;
+      lines.push(
+        `Assessment qualification record: [${escapeMarkdown(ref.path)}](${encodeURI(`${anchor.roots.campaign}/evals/${ref.path}`)}), SHA-256 \`${ref.sha256}\`.`,
+      );
+      for (const scope of r.qualification.scopes)
+        lines.push(
+          `Qualification scope ${escapeMarkdown(scope.scenario)} (${scope.criterion_ids.map(escapeMarkdown).join(', ')}): ${scope.status}; ${escapeMarkdown(scope.reason)}`,
+        );
+    } else lines.push('Assessment qualification: no verified scope attached.');
+  }
   for (const c of r.comparisons) {
     lines.push(
       `## ${escapeMarkdown(c.comparison_id)} / ${escapeMarkdown(c.scenario)}`,
@@ -173,6 +190,59 @@ export function renderReportMd(value: Report): string {
       lines.push(
         `| ${escapeMarkdown(a.arm)} | ${'arm' in c.roles ? 'single' : a.arm === c.roles.baseline ? 'baseline' : 'treatment'} | ${a.denominator} | ${a.pass} | ${a.fail} | ${a.indeterminate} | ${a.no_usable_result} | ${a.available.subject_cost_usd} | ${a.available.grader_cost_usd} | ${a.available.wall_seconds} | ${a.available.subject_tokens} | ${a.available.grader_tokens} |`,
       );
+    for (const a of c.arms) {
+      lines.push(
+        '',
+        `Source ${escapeMarkdown(a.arm)}: **${escapeMarkdown(a.label)}**, SHA \`${a.source_sha ?? 'none'}\`.`,
+      );
+      if (!a.measurements.detail_available)
+        lines.push(
+          'Legacy detail unavailable: criterion and check obligations were not frozen.',
+        );
+      lines.push(
+        '',
+        '| Arm | Obligation | Planned | Available | Pass | Fail | Unclear | Unavailable | Qualification | Evidence |',
+        '|---|---|---:|---:|---:|---:|---:|---:|---|---|',
+      );
+      for (const o of [
+        a.measurements.interaction,
+        ...a.measurements.checks,
+        ...a.measurements.criteria,
+      ]) {
+        const links = o.evidence
+          .map(
+            (ref) =>
+              `[${escapeMarkdown(ref.path)}](${encodeURI(`${anchor.roots.results}/${ref.path}`)})`,
+          )
+          .join(', ');
+        lines.push(
+          `| ${escapeMarkdown(a.arm)} | ${escapeMarkdown(o.label ?? o.id)} | ${o.planned} | ${o.pass + o.fail + o.unclear} | ${o.pass} | ${o.fail} | ${o.unclear} | ${o.unavailable} | ${o.qualification ?? 'executable or interaction evidence'} | ${links || 'unavailable'} |`,
+        );
+      }
+      if (a.measurements.criteria.some((o) => o.qualification === 'unverified'))
+        lines.push(
+          'Unverified assessment qualification: these scoped judgments cannot support a quality conclusion.',
+        );
+      if (
+        a.measurements.criteria.some(
+          (o) => o.qualification === 'not_calibrated',
+        )
+      )
+        lines.push(
+          'Other assessment judgments retain their own evidence provenance; accuracy not calibrated by this qualification pack.',
+        );
+    }
+    if ('baseline' in c.roles) {
+      lines.push(
+        '',
+        '| Paired obligation | Planned | Available pairs | Baseline | Candidate | Delta | Qualification |',
+        '|---|---:|---:|---:|---:|---:|---|',
+      );
+      for (const o of [...c.paired_criteria, ...c.paired_checks])
+        lines.push(
+          `| ${escapeMarkdown(o.id)} | ${o.planned} | ${o.quantity.n} | ${number(o.quantity.baseline_mean)} | ${number(o.quantity.treatment_mean)} | ${number(o.quantity.mean_delta)} | ${'qualification' in o ? o.qualification : 'executable check'} |`,
+        );
+    }
     lines.push('', '| Arm | Determinate n | Pass rate |', '|---|---:|---:|');
     for (const a of c.arms)
       lines.push(
@@ -180,7 +250,7 @@ export function renderReportMd(value: Report): string {
       );
     lines.push(
       '',
-      'Per-arm quantities: selected usable determinate outcomes only; independent available n.',
+      'Per-arm quantities: selected authenticated valid observations; independent available n.',
       '',
       '| Arm | Quantity | Available n | Mean |',
       '|---|---|---:|---:|',
@@ -196,7 +266,7 @@ export function renderReportMd(value: Report): string {
     }
     lines.push(
       '',
-      'Complete determinate pairs only; each quantity uses its own matched cohort.',
+      'Pass-rate pairs require determinate outcomes; other quantities use independently available matched pairs.',
       '',
       `| Quantity | Pairs n | Baseline mean (${escapeMarkdown(c.roles.baseline)}) | Treatment mean (${escapeMarkdown(c.roles.treatment)}) | Mean paired delta (${escapeMarkdown(c.roles.treatment)} − ${escapeMarkdown(c.roles.baseline)}) |`,
       '|---|---:|---:|---:|---:|',

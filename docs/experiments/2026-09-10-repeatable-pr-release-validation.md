@@ -36,9 +36,14 @@ eight full deliveries with the full six-row rubric, three assessments each:
 criteria 3 and 5 in its three assessments. No disputed label is counted as gold.
 
 Case-manifest SHA-256: `11b273a535f878a12ed1b075949b4e4f353b625636144b533b7f12a351782459`.
-Requirements SHA-256: `26f9a96ad285dc307f7e38c5dc088b5dfe0d13bdf00a6075f6bc8594ab206247`.
-Focused-template SHA-256: `f81f46f1862933d007e5e6321892597d195722b53120b45b576bef980cc23393`.
-Release-template SHA-256: `c833bc18b0bd49fd8ad957b6a24ec975cddb4c817dbe2d20c3297acace08c648`.
+Requirements SHA-256: `4bef2871b9890dbc5246bdb2e30607522975ff00b4631ea17daf25af0a856af1`.
+Focused-template SHA-256: `b51ba2c8e3bf66c12bbfdd083bc3fda485253d15394e303c48f05931d2dbe91f`.
+Release-template SHA-256: `bf932e993c0b77680b7b62145ce7d2d94ff7a3d62c47be6517db7290ece37db3`.
+
+The requirements digest includes explicit assessment-qualification scope metadata
+for the six conversation-code-review obligations; the rubric and case-manifest
+bytes are unchanged. Templates now bind that requirements file. No completed
+qualification record is attached before Task 9 produces its evidence.
 
 Private originals and corrected complete copies remain private. All 261
 original files were hash-verified before copying. Additional unsupported
@@ -67,3 +72,18 @@ and coverage. Cost unknown is not zero and does not discard behavioral evidence.
 No detected difference at n=3/5 establishes equivalence. No automatic release
 decision follows. Model assessments, paid runs, operational capacity, four-hour
 and 24-hour targets, and live comparison results remain pending.
+
+## Independent-measurement integration boundary
+
+Task 6 preserves independent interaction, check, criterion and quantity
+observations, and labels unverified assessment scope. It does not establish
+live acceptance or instrument accuracy. Legacy QA capture currently retains
+its normalized trajectory but leaves native source logs under the campaign's
+excluded home; it also has no authenticated conversation-completion record.
+Consequently, QA obligations requiring native session or complete visible
+delivery evidence remain unavailable even where legacy grader rows and the
+aggregate verdict are retained. This is an integration gap, not proof that
+those obligations failed. Task 8 must exercise a real QA publication and
+resolve the narrow producer/mapping gap before claiming the 84/366-sample
+acceptance coverage. No normalized trace or summary is relabeled as native or
+complete delivery evidence.

@@ -3395,7 +3395,8 @@
             "visible_delivery",
             "output"
           ],
-          "check_refs": []
+          "check_refs": [],
+          "requires_assessment_qualification": true
         },
         {
           "id": "conversation-code-review:2",
@@ -3404,7 +3405,8 @@
           "required_artifact_classes": [
             "visible_delivery"
           ],
-          "check_refs": []
+          "check_refs": [],
+          "requires_assessment_qualification": true
         },
         {
           "id": "conversation-code-review:3",
@@ -3414,7 +3416,8 @@
             "visible_delivery",
             "output"
           ],
-          "check_refs": []
+          "check_refs": [],
+          "requires_assessment_qualification": true
         },
         {
           "id": "conversation-code-review:4",
@@ -3423,7 +3426,8 @@
           "required_artifact_classes": [
             "visible_delivery"
           ],
-          "check_refs": []
+          "check_refs": [],
+          "requires_assessment_qualification": true
         },
         {
           "id": "conversation-code-review:5",
@@ -3433,7 +3437,8 @@
             "visible_delivery",
             "output"
           ],
-          "check_refs": []
+          "check_refs": [],
+          "requires_assessment_qualification": true
         },
         {
           "id": "conversation-code-review:6",
@@ -3443,7 +3448,8 @@
             "visible_delivery",
             "output"
           ],
-          "check_refs": []
+          "check_refs": [],
+          "requires_assessment_qualification": true
         }
       ],
       "required_artifact_classes": [

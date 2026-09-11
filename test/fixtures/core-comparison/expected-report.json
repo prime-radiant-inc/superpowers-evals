@@ -12,9 +12,9 @@
           "indeterminate": 1,
           "no_usable_result": 1,
           "available": {
-            "subject_cost_usd": 2,
-            "grader_cost_usd": 2,
-            "wall_seconds": 2,
+            "subject_cost_usd": 3,
+            "grader_cost_usd": 3,
+            "wall_seconds": 3,
             "subject_tokens": 0,
             "grader_tokens": 0
           },
@@ -23,12 +23,28 @@
             "rate": 0.5
           },
           "means": {
-            "subject_cost_usd": 50.5,
-            "grader_cost_usd": 0.55,
-            "wall_seconds": 55,
+            "subject_cost_usd": 35.3333333333333,
+            "grader_cost_usd": 0.533333333333333,
+            "wall_seconds": 53.3333333333333,
             "subject_tokens": null,
             "grader_tokens": null
-          }
+          },
+          "measurements": {
+            "detail_available": false,
+            "interaction": {
+              "id": "interaction",
+              "planned": 4,
+              "pass": 0,
+              "fail": 0,
+              "unclear": 0,
+              "unavailable": 4,
+              "evidence": []
+            },
+            "checks": [],
+            "criteria": []
+          },
+          "label": "b",
+          "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         },
         {
           "arm": "t1",
@@ -54,7 +70,23 @@
             "wall_seconds": 40,
             "subject_tokens": null,
             "grader_tokens": null
-          }
+          },
+          "measurements": {
+            "detail_available": false,
+            "interaction": {
+              "id": "interaction",
+              "planned": 4,
+              "pass": 0,
+              "fail": 0,
+              "unclear": 0,
+              "unavailable": 4,
+              "evidence": []
+            },
+            "checks": [],
+            "criteria": []
+          },
+          "label": "t1",
+          "source_sha": "cccccccccccccccccccccccccccccccccccccccc"
         }
       ],
       "paired": {
@@ -65,22 +97,22 @@
           "mean_delta": 0.5
         },
         "subject_cost_usd": {
-          "n": 1,
-          "baseline_mean": 1,
-          "treatment_mean": 2,
+          "n": 2,
+          "baseline_mean": 3,
+          "treatment_mean": 4,
           "mean_delta": 1
         },
         "grader_cost_usd": {
-          "n": 2,
-          "baseline_mean": 0.55,
-          "treatment_mean": 0.3,
-          "mean_delta": -0.25
+          "n": 3,
+          "baseline_mean": 0.533333333333333,
+          "treatment_mean": 0.4,
+          "mean_delta": -0.133333333333333
         },
         "wall_seconds": {
-          "n": 2,
-          "baseline_mean": 55,
-          "treatment_mean": 30,
-          "mean_delta": -25
+          "n": 3,
+          "baseline_mean": 53.3333333333333,
+          "treatment_mean": 40,
+          "mean_delta": -13.3333333333333
         },
         "subject_tokens": {
           "n": 0,
@@ -98,7 +130,9 @@
       "roles": {
         "baseline": "b",
         "treatment": "t1"
-      }
+      },
+      "paired_criteria": [],
+      "paired_checks": []
     },
     {
       "comparison_id": "c2",
@@ -128,7 +162,23 @@
             "wall_seconds": 70,
             "subject_tokens": null,
             "grader_tokens": null
-          }
+          },
+          "measurements": {
+            "detail_available": false,
+            "interaction": {
+              "id": "interaction",
+              "planned": 2,
+              "pass": 0,
+              "fail": 0,
+              "unclear": 0,
+              "unavailable": 2,
+              "evidence": []
+            },
+            "checks": [],
+            "criteria": []
+          },
+          "label": "b",
+          "source_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         },
         {
           "arm": "t2",
@@ -154,7 +204,23 @@
             "wall_seconds": 80,
             "subject_tokens": null,
             "grader_tokens": null
-          }
+          },
+          "measurements": {
+            "detail_available": false,
+            "interaction": {
+              "id": "interaction",
+              "planned": 2,
+              "pass": 0,
+              "fail": 0,
+              "unclear": 0,
+              "unavailable": 2,
+              "evidence": []
+            },
+            "checks": [],
+            "criteria": []
+          },
+          "label": "t2",
+          "source_sha": "cccccccccccccccccccccccccccccccccccccccc"
         }
       ],
       "paired": {
@@ -198,7 +264,9 @@
       "roles": {
         "baseline": "b",
         "treatment": "t2"
-      }
+      },
+      "paired_criteria": [],
+      "paired_checks": []
     }
   ],
   "accounting": {

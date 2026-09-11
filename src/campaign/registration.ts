@@ -1,5 +1,6 @@
 // Registration authenticates object-store inputs against the materialized snapshot,
 // freezes finite work and resource policy, and publishes the document after its journal anchor.
+
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
@@ -61,6 +62,10 @@ import {
   quorumTierFromStory,
   requiresSuperpowersFromStory,
 } from '../story-meta.ts';
+import {
+  consumeQualificationInputs,
+  evaluateQualification,
+} from './assessment-qualification.ts';
 import { publishFrozenCampaign } from './campaign-document.ts';
 import {
   type ComparisonInput,
@@ -84,6 +89,7 @@ import {
   type JournalFsOps,
 } from './journal.ts';
 import { acquireLease, type ProcessIdentityProbe } from './locks.ts';
+import { resolveMeasurementRequirements } from './measurement-requirements.ts';
 import { verifyPricingSnapshot } from './pricing-snapshot.ts';
 import {
   assertFeasible,
@@ -825,7 +831,11 @@ function scenarioIntakeOf(
  *  via plain file reads, parsed by the same string-based readers the
  *  object-store intake uses. Records every consumed file's bytes so callers
  *  can cross-check provenance. */
-export function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
+export function readIntakeFromEvalsTree(
+  evalsRoot: string,
+  extraPaths: string[] = [],
+  qualification?: ExperimentSuite['assessment_qualification'],
+): SnapshotIntake {
   const arms: Record<string, Arm> = {};
   const files: Record<string, string> = {};
   const armsDir = join(evalsRoot, 'arms');
@@ -856,6 +866,12 @@ export function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
       const storyPath = join(scenarioDir, 'story.md');
       if (!existsSync(storyPath)) continue;
       files[`scenarios/${entry}/story.md`] = readFileSync(storyPath, 'utf8');
+      const manifestPath = `scenarios/${entry}/checks-manifest.json`;
+      if (existsSync(join(evalsRoot, manifestPath)))
+        files[manifestPath] = readFileSync(
+          join(evalsRoot, manifestPath),
+          'utf8',
+        );
       const setupPath = join(scenarioDir, 'setup.sh');
       if (existsSync(setupPath)) {
         files[`scenarios/${entry}/setup.sh`] = readFileSync(setupPath, 'utf8');
@@ -890,6 +906,23 @@ export function readIntakeFromEvalsTree(evalsRoot: string): SnapshotIntake {
       );
     }
   }
+  for (const path of extraPaths)
+    files[path] = readFileSync(join(evalsRoot, path), 'utf8');
+  if (qualification) {
+    const paths = [
+      'package.json',
+      'bun.lock',
+      ...readdirSync(join(evalsRoot, 'src'), { recursive: true })
+        .map((p) => `src/${p}`)
+        .filter((p) => statSync(join(evalsRoot, p)).isFile()),
+    ];
+    consumeQualificationInputs({
+      files,
+      reference: qualification,
+      paths,
+      read: (path) => readFileSync(join(evalsRoot, path), 'utf8'),
+    });
+  }
   return { arms, credentials, scenarios, files };
 }
 
@@ -915,6 +948,8 @@ export function readSnapshotIntake(
   evalsCheckout: string,
   evalsSha: string,
   runner: CommandRunner,
+  extraPaths: string[] = [],
+  qualification?: ExperimentSuite['assessment_qualification'],
 ): SnapshotIntake {
   const listing = gitOutText(runner, [
     '-C',
@@ -956,6 +991,8 @@ export function readSnapshotIntake(
     const name = p.split('/')[1] ?? '';
     if (name === '') continue; // unreachable by the path regex; keeps the type sound
     const story = readAt(p);
+    const manifestPath = `scenarios/${name}/checks-manifest.json`;
+    if (paths.includes(manifestPath)) readAt(manifestPath);
     const setup = `scenarios/${name}/setup.sh`;
     const checksPath = `scenarios/${name}/checks.sh`;
     const checks = paths.includes(checksPath) ? readAt(checksPath) : undefined;
@@ -971,6 +1008,14 @@ export function readSnapshotIntake(
   for (const p of paths.filter((x) => /^coding-agents\/[^/]+\.yaml$/.test(x))) {
     readAt(p);
   }
+  for (const path of extraPaths) readAt(path);
+  if (qualification)
+    consumeQualificationInputs({
+      files,
+      reference: qualification,
+      paths,
+      read: readAt,
+    });
   return { arms, credentials, scenarios, files };
 }
 
@@ -1243,8 +1288,16 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       registeredBy: args.registeredBy,
       ...(args.estimates === undefined ? {} : { estimates: args.estimates }),
     });
+    const measurement_requirements = resolveMeasurementRequirements({
+      files: intake.files,
+      scenarios: prepared.cells.map((c) => c.scenario),
+      ...(compiledSuite.measurement_requirements
+        ? { reference: compiledSuite.measurement_requirements }
+        : {}),
+    });
     const draft = {
       ...prepared,
+      measurement_requirements,
       ...(comparisonRequest === undefined
         ? {}
         : { comparison_request: comparisonRequest }),
@@ -1253,13 +1306,32 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       registered_at: now,
       registered_by: args.registeredBy,
     };
-    return ExperimentSchema.parse({
+    const qualification = evaluateQualification({
+      experiment: draft,
+      files: intake.files,
+      credential: intake.credentials[grader.credential],
+    });
+    const bound = {
       ...draft,
-      input_digest: experimentDigest(draft),
+      ...(qualification ? { assessment_qualification: qualification } : {}),
+    };
+    return ExperimentSchema.parse({
+      ...bound,
+      input_digest: experimentDigest(bound),
     });
   };
 
-  const intake = readSnapshotIntake(args.evalsCheckout, evalsSha, args.runner);
+  const extraPaths = [
+    suite.measurement_requirements?.path,
+    suite.assessment_qualification?.path,
+  ].filter((p): p is string => p !== undefined);
+  const intake = readSnapshotIntake(
+    args.evalsCheckout,
+    evalsSha,
+    args.runner,
+    extraPaths,
+    suite.assessment_qualification,
+  );
   if (comparisonRequest !== undefined)
     intake.files[comparisonRequest.suite_path] = args.suiteRaw;
   const staged = compile(intake);
@@ -1287,7 +1359,13 @@ export function registerCampaign(args: RegisterArgs): RegisterResult {
       runner: args.runner,
     });
     verifyIntakeMatch(intake, handle.evalsRoot);
-    const experiment = compile(readIntakeFromEvalsTree(handle.evalsRoot));
+    const experiment = compile(
+      readIntakeFromEvalsTree(
+        handle.evalsRoot,
+        extraPaths,
+        suite.assessment_qualification,
+      ),
+    );
     if (experiment.input_digest !== staged.input_digest) {
       throw new RegistrationError(
         `materialized snapshot input digest ${experiment.input_digest} differs from object-store intake ${staged.input_digest}`,

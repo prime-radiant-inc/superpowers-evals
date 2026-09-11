@@ -11,6 +11,9 @@ grader:
 pricing_snapshot:
   path: docs/experiments/2026-09-06-pr2258-pricing/current.json
   sha256: 6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b
+measurement_requirements:
+  path: examples/campaigns/validation/requirements.json
+  sha256: 4bef2871b9890dbc5246bdb2e30607522975ff00b4631ea17daf25af0a856af1
 comparisons:
   - baseline: baseline
     treatment: candidate
