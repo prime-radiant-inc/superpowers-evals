@@ -179,7 +179,7 @@ test('human rendering names actual delivery endpoint and keeps missing request c
 });
 
 for (const required of [false, true])
-  test(`readiness honors required qualification=${required} and keeps missing criteria incomplete`, () => {
+  test(`readiness honors required qualification=${required} and keeps unresolved criteria incomplete`, () => {
     const experiment = twoArmExperiment();
     experiment.measurement_requirements = {
       scenario: {
@@ -198,9 +198,9 @@ for (const required of [false, true])
             requires_assessment_qualification: required,
           },
           {
-            id: 'missing',
+            id: 'unresolved',
             ordinal: 2,
-            text: 'Missing criterion',
+            text: 'Unresolved criterion',
             required_artifact_classes: [],
             check_refs: [],
           },
@@ -212,6 +212,11 @@ for (const required of [false, true])
         criterion: 'Grounded review',
         verdict: 'fail',
         evidence: 'Observed failure',
+      },
+      {
+        criterion: 'Unresolved criterion',
+        verdict: 'unclear',
+        evidence: 'Retained evidence cannot resolve this criterion',
       },
     ]);
     roots.push(f.root);

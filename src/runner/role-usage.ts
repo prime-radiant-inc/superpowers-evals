@@ -295,8 +295,9 @@ export function reconcileAssessmentAccounting(
       )
         throw new Error('logical response missing recorded physical response');
     });
-  // A phase change may abandon an SDK response. Its settled physical work
-  // must precede successor admission; logical IDs alone cannot prove that.
+  // A phase change may abandon an SDK request, including retry backoff after
+  // a settled error. Physical work must settle before successor admission;
+  // cancellation need not leave a marker after the physical response settles.
   for (const [predecessor, successor] of abandoned)
     check(() => {
       const before = [...admissions.values()].filter(
@@ -314,20 +315,12 @@ export function reconcileAssessmentAccounting(
           return (
             !settled ||
             settled.timestamp_ms < a.timestamp_ms ||
-            settled.timestamp_ms > nextAt ||
-            !(
-              settled.outcome === 'aborted' ||
-              (settled.outcome === 'response' &&
-                known.has(a.assessment_attempt_id) &&
-                settled.aborted_at_ms !== undefined &&
-                settled.aborted_at_ms >= a.timestamp_ms &&
-                settled.aborted_at_ms <= settled.timestamp_ms)
-            )
+            settled.timestamp_ms > nextAt
           );
         })
       )
         throw new Error(
-          'abandoned assessment request lacks settled cancellation before successor admission',
+          'abandoned assessment request lacks settlement before successor admission',
         );
     });
   const unknownUsageAttemptIds = [...admissions.keys()].filter(
