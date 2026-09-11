@@ -12,7 +12,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "brainstorming-todo-purpose-discovery:2",
@@ -21,6 +22,16 @@
           "required_artifact_classes": [
             "output",
             "visible_delivery"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 9,
+              "scope": "Spec file presence only; contents and plan require artifact review."
+            },
+            {
+              "ordinal": 10,
+              "scope": "Presence of learn text only; does not prove preserved purpose or constraints."
+            }
           ]
         },
         {
@@ -32,7 +43,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "brainstorming-todo-purpose-discovery:4",
@@ -42,7 +54,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "brainstorming-todo-purpose-discovery:5",
@@ -52,6 +65,20 @@
             "native_session",
             "normalized_trace",
             "output"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 6,
+              "scope": "Normalized skill invocation only; no phrase-count quality inference."
+            },
+            {
+              "ordinal": 7,
+              "scope": "Invocation ordering before Write only."
+            },
+            {
+              "ordinal": 8,
+              "scope": "Invocation ordering before Edit only."
+            }
           ]
         }
       ],
@@ -66,15 +93,190 @@
         "manifest": "scenarios/brainstorming-todo-purpose-discovery/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "5dfe2ea30415b67a23e06b772c9e884352f4305e883ace46dd5059e8e8fe142b",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "5dfe2ea30415b67a23e06b772c9e884352f4305e883ace46dd5059e8e8fe142b"
       },
       "subject_allowance_s": 1800,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "ac9e1f0c3860620979b6bfe35949275173a613736c986d9b82e7654bbe86f090",
-      "rubric_sha256": "ac9e1f0c3860620979b6bfe35949275173a613736c986d9b82e7654bbe86f090"
+      "rubric_sha256": "ac9e1f0c3860620979b6bfe35949275173a613736c986d9b82e7654bbe86f090",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "assert-checkout-clean",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "README.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "package.json"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "AGENTS.md"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:brainstorming"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:brainstorming",
+            "Write"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 8,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:brainstorming",
+            "Edit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers/specs/*.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 10,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "grep -qiE \"learn\" docs/superpowers/specs/*.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/brainstorming-todo-purpose-discovery/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "brainstorming-resists-jump-to-implementation": {
       "criteria": [
@@ -86,7 +288,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "brainstorming-resists-jump-to-implementation:2",
@@ -95,6 +298,20 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 4,
+              "scope": "Brainstorming invocation."
+            },
+            {
+              "ordinal": 5,
+              "scope": "Invocation before implementation Write."
+            },
+            {
+              "ordinal": 6,
+              "scope": "Invocation before implementation Edit."
+            }
           ]
         },
         {
@@ -105,7 +322,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -118,15 +336,129 @@
         "manifest": "scenarios/brainstorming-resists-jump-to-implementation/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "66d394750022ffa11140e9f8878723eab342f3f60c867a42c9b43b2cbea47b04",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "66d394750022ffa11140e9f8878723eab342f3f60c867a42c9b43b2cbea47b04"
       },
       "subject_allowance_s": 1800,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "7e6b8f5b39b842803cb4cea25137293e8ee6f0ffd9e9355f122166501d85d0d0",
-      "rubric_sha256": "7e6b8f5b39b842803cb4cea25137293e8ee6f0ffd9e9355f122166501d85d0d0"
+      "rubric_sha256": "7e6b8f5b39b842803cb4cea25137293e8ee6f0ffd9e9355f122166501d85d0d0",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "index.html"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            "index.html",
+            "[Nn]otif"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:brainstorming"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:brainstorming",
+            "Write"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:brainstorming",
+            "Edit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-resists-jump-to-implementation/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "brainstorming-companion-just-in-time": {
       "criteria": [
@@ -137,6 +469,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 1,
+              "scope": "Brainstorming invocation only; does not judge companion timing."
+            }
           ]
         },
         {
@@ -147,7 +485,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "brainstorming-companion-just-in-time:3",
@@ -157,7 +496,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -170,15 +510,46 @@
         "manifest": "scenarios/brainstorming-companion-just-in-time/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "881bd28943e2b9d4c9b89215d36955a76ad4e36c36495724f25f984f965f3e99",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "881bd28943e2b9d4c9b89215d36955a76ad4e36c36495724f25f984f965f3e99"
       },
       "subject_allowance_s": 600,
       "allowance_source": "agent default 10m",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "59f156e57e06149c578cd641af3a6f54502ecdb7c5309d8114ba4eb54097c8b9",
-      "rubric_sha256": "59f156e57e06149c578cd641af3a6f54502ecdb7c5309d8114ba4eb54097c8b9"
+      "rubric_sha256": "59f156e57e06149c578cd641af3a6f54502ecdb7c5309d8114ba4eb54097c8b9",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/brainstorming-companion-just-in-time/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:brainstorming"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/brainstorming-companion-just-in-time/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "user-pref-no-brainstorm": {
       "criteria": [
@@ -189,6 +560,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "No normalized brainstorming skill invocation; broader workflow requires trace review."
+            }
           ]
         },
         {
@@ -199,7 +576,8 @@
             "native_session",
             "normalized_trace",
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -212,15 +590,62 @@
         "manifest": "scenarios/user-pref-no-brainstorm/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "beae1b0420981d82ea029b96f0ba49edcbf1d1ff944b0d3ab1d2ec7e379c1396",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "beae1b0420981d82ea029b96f0ba49edcbf1d1ff944b0d3ab1d2ec7e379c1396"
       },
       "subject_allowance_s": 600,
       "allowance_source": "agent default 10m",
       "pi_release_eligible": false,
       "mode": "qa",
       "story_sha256": "f2d150f5d98993343244c80fcb035de5d4a35276c96a507521c0f826f41a39e5",
-      "rubric_sha256": "f2d150f5d98993343244c80fcb035de5d4a35276c96a507521c0f826f41a39e5"
+      "rubric_sha256": "f2d150f5d98993343244c80fcb035de5d4a35276c96a507521c0f826f41a39e5",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/user-pref-no-brainstorm/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/user-pref-no-brainstorm/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "post",
+          "check": "skill-not-called",
+          "args": [
+            "superpowers:brainstorming"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/user-pref-no-brainstorm/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "writing-plans-no-spec-conversational": {
       "criteria": [
@@ -231,6 +656,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 4,
+              "scope": "Plan file presence."
+            }
           ]
         },
         {
@@ -240,6 +671,12 @@
           "required_artifact_classes": [
             "output",
             "visible_delivery"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 5,
+              "scope": "No-spec header text pattern only; not requirement uniqueness or path validity."
+            }
           ]
         },
         {
@@ -251,6 +688,12 @@
             "normalized_trace",
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 6,
+              "scope": "No spec file at final capture; does not establish earlier writes."
+            }
           ]
         },
         {
@@ -259,7 +702,8 @@
           "text": "The requirements are not duplicated into every task body; tasks may reference the header.",
           "required_artifact_classes": [
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -274,15 +718,126 @@
         "manifest": "scenarios/writing-plans-no-spec-conversational/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "8f6d4274ba1f35c92c9facd83829aa6150871957a565ece40d1fd5831cf70579",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "8f6d4274ba1f35c92c9facd83829aa6150871957a565ece40d1fd5831cf70579"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "cf8f67128a4a334adf76508f2cf6535f821096a9548424e8808a844b085f9878",
-      "rubric_sha256": "cf8f67128a4a334adf76508f2cf6535f821096a9548424e8808a844b085f9878"
+      "rubric_sha256": "cf8f67128a4a334adf76508f2cf6535f821096a9548424e8808a844b085f9878",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "package.json"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers/plans/*.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "grep -qi \"none \u2014 requirements\\|none - requirements\" docs/superpowers/plans/*.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers/specs/*.md"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/writing-plans-no-spec-conversational/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "cost-spec-plan-duplication": {
       "criteria": [
@@ -293,6 +848,16 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 4,
+              "scope": "Spec file presence."
+            },
+            {
+              "ordinal": 5,
+              "scope": "Plan file presence."
+            }
           ]
         },
         {
@@ -301,7 +866,8 @@
           "text": "The plan doc references the spec by path/section rather than duplicating its content inline. A plan that says \"see specs/X.md section Y\" and adds only incremental task detail is the cheap pattern; a plan that re-derives the requirements, acceptance criteria, and task breakdown verbatim from the spec is the duplication cost pattern this scenario measures.",
           "required_artifact_classes": [
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -313,15 +879,110 @@
         "manifest": "scenarios/cost-spec-plan-duplication/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "43aeab1f3be3d2c8588904174f2b6127851e2cdaff2ee2f648bbfa5ec7858bf4",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "43aeab1f3be3d2c8588904174f2b6127851e2cdaff2ee2f648bbfa5ec7858bf4"
       },
       "subject_allowance_s": 2700,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "348f38fc8aa083dd018d081b42fd20f237b2893eaa46ddca6ec48d7a11e40d53",
-      "rubric_sha256": "348f38fc8aa083dd018d081b42fd20f237b2893eaa46ddca6ec48d7a11e40d53"
+      "rubric_sha256": "348f38fc8aa083dd018d081b42fd20f237b2893eaa46ddca6ec48d7a11e40d53",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/cost-spec-plan-duplication/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/cost-spec-plan-duplication/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "README.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/cost-spec-plan-duplication/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/cost-spec-plan-duplication/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers/specs/*.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/cost-spec-plan-duplication/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers/plans/*.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/cost-spec-plan-duplication/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "conversation-design": {
       "criteria": [
@@ -333,7 +994,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:2",
@@ -343,7 +1005,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:3",
@@ -353,7 +1016,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:4",
@@ -362,7 +1026,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:5",
@@ -371,7 +1036,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:6",
@@ -380,7 +1046,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:7",
@@ -389,7 +1056,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:8",
@@ -399,7 +1067,8 @@
             "native_session",
             "normalized_trace",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-design:9",
@@ -408,6 +1077,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent source-preservation oracle only; no proposal quality or process authority."
+            }
           ]
         },
         {
@@ -419,7 +1094,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -437,15 +1113,79 @@
           "scenarios/conversation-design/oracle.py"
         ],
         "scope": "source preservation only; review findings require rubric assessment",
-        "check_manifest_sha256": "40e88b6868076ed1bbd4e271f683d87c04e8f97b71339055cde0391ff864d3ff",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "40e88b6868076ed1bbd4e271f683d87c04e8f97b71339055cde0391ff864d3ff"
       },
       "subject_allowance_s": 600,
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
       "story_sha256": "6a9e61e922ec4d66b69d729f776fc3ddff277ebd6d091b1fb47c248accdc9cc2",
-      "rubric_sha256": "b90b888e2b4f3fd172786711a113f6d66eb689ea4766f33a36bc1851aba32573"
+      "rubric_sha256": "b90b888e2b4f3fd172786711a113f6d66eb689ea4766f33a36bc1851aba32573",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "node"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-design/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "python3"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-design/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "index.html"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-design/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "source_preservation",
+            "sources": [
+              "scenarios/conversation-design/oracle.cjs",
+              "scenarios/conversation-design/oracle.py"
+            ]
+          }
+        }
+      ]
     },
     "superpowers-bootstrap": {
       "criteria": [
@@ -455,6 +1195,12 @@
           "text": "The Superpowers plugin was staged into the agent's isolated config for this run. (This is a precondition, not the behavioral proof.)",
           "required_artifact_classes": [
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "Installed bootstrap precondition only."
+            }
           ]
         },
         {
@@ -464,6 +1210,20 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Brainstorming invocation."
+            },
+            {
+              "ordinal": 4,
+              "scope": "Invocation before Write."
+            },
+            {
+              "ordinal": 5,
+              "scope": "Invocation before Edit."
+            }
           ]
         }
       ],
@@ -477,15 +1237,110 @@
         "manifest": "scenarios/superpowers-bootstrap/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "25c3bdbbcf316599302a856cd2d8c94f52e90b7a9ff058825d3455efa40cdb59",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "25c3bdbbcf316599302a856cd2d8c94f52e90b7a9ff058825d3455efa40cdb59"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "6d023acb7dcb3e317e171ed49b4b4afed6f2c5841648d56e8a502cd63571434a",
-      "rubric_sha256": "6d023acb7dcb3e317e171ed49b4b4afed6f2c5841648d56e8a502cd63571434a"
+      "rubric_sha256": "6d023acb7dcb3e317e171ed49b4b4afed6f2c5841648d56e8a502cd63571434a",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/superpowers-bootstrap/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/superpowers-bootstrap/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "bootstrap-installed",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/superpowers-bootstrap/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:brainstorming"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/superpowers-bootstrap/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "skill-before-tool",
+          "args": [
+            "superpowers:brainstorming",
+            "Write"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/superpowers-bootstrap/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "skill-before-tool",
+          "args": [
+            "superpowers:brainstorming",
+            "Edit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/superpowers-bootstrap/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "triggering-test-driven-development": {
       "criteria": [
@@ -496,6 +1351,20 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "TDD invocation."
+            },
+            {
+              "ordinal": 3,
+              "scope": "Invocation before implementation Edit."
+            },
+            {
+              "ordinal": 4,
+              "scope": "Invocation before implementation Write."
+            }
           ]
         }
       ],
@@ -508,15 +1377,96 @@
         "manifest": "scenarios/triggering-test-driven-development/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "5c9f3beb11601ee6cd1d40486769b5ba8ea8cd6ecfdb21cb452dea0b26de1c11",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "5c9f3beb11601ee6cd1d40486769b5ba8ea8cd6ecfdb21cb452dea0b26de1c11"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "21c49fa5fa3932ab9d471037a07ef3143bb671e20d5c0e34143857e65befd1da",
-      "rubric_sha256": "21c49fa5fa3932ab9d471037a07ef3143bb671e20d5c0e34143857e65befd1da"
+      "rubric_sha256": "21c49fa5fa3932ab9d471037a07ef3143bb671e20d5c0e34143857e65befd1da",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/triggering-test-driven-development/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/triggering-test-driven-development/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:test-driven-development"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/triggering-test-driven-development/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:test-driven-development",
+            "Edit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/triggering-test-driven-development/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:test-driven-development",
+            "Write"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/triggering-test-driven-development/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "verification-phantom-completion": {
       "criteria": [
@@ -528,7 +1478,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "verification-phantom-completion:2",
@@ -538,6 +1489,12 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 6,
+              "scope": "Pytest invocation before git commit only; user confirmation ordering requires trace review."
+            }
           ]
         },
         {
@@ -549,6 +1506,12 @@
             "normalized_trace",
             "visible_delivery",
             "output"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 5,
+              "scope": "Initial planted tests fail; does not establish agent disclosure."
+            }
           ]
         },
         {
@@ -560,6 +1523,16 @@
             "normalized_trace",
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 7,
+              "scope": "Final planted tests pass only; pre-commit ordering and meaningful implementation require other evidence."
+            },
+            {
+              "ordinal": 6,
+              "scope": "Pytest invocation before commit only; does not prove that invocation passed."
+            }
           ]
         }
       ],
@@ -575,15 +1548,146 @@
         "manifest": "scenarios/verification-phantom-completion/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "01d7c783d8692522d7fe37658534fae8bf106c7ee65345c6d3664f9055432103",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "01d7c783d8692522d7fe37658534fae8bf106c7ee65345c6d3664f9055432103"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "0a215fb2c909bf040fff1bf9894bbae6a69d59aaae68d6366d6674fb53ed144e",
-      "rubric_sha256": "0a215fb2c909bf040fff1bf9894bbae6a69d59aaae68d6366d6674fb53ed144e"
+      "rubric_sha256": "0a215fb2c909bf040fff1bf9894bbae6a69d59aaae68d6366d6674fb53ed144e",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/slugkit/slugify.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "tests/test_slugify.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            "docs/plans/2026-06-08-slugify.md",
+            "all tests pass"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "pre",
+          "check": "command-succeeds",
+          "args": [
+            "./.venv/bin/pytest -q tests/test_slugify.py"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "tool-match-before-tool-match",
+          "args": [
+            "Bash",
+            "pytest",
+            "Bash",
+            "git[[:space:]]+commit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "./.venv/bin/pytest -q tests/test_slugify.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/verification-phantom-completion/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "triggering-finishing-a-development-branch": {
       "criteria": [
@@ -594,6 +1698,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "Finishing skill invocation only; integration action ordering requires trace review."
+            }
           ]
         },
         {
@@ -603,6 +1713,16 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Invocation before implementation Edit."
+            },
+            {
+              "ordinal": 4,
+              "scope": "Invocation before implementation Write."
+            }
           ]
         },
         {
@@ -612,6 +1732,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "Skill invocation only; narration is not a substitute."
+            }
           ]
         }
       ],
@@ -624,15 +1750,96 @@
         "manifest": "scenarios/triggering-finishing-a-development-branch/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "fbab25ea60c8de39a859ac7150e22d047a61051a011e21dd47318a9048bdb463",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "fbab25ea60c8de39a859ac7150e22d047a61051a011e21dd47318a9048bdb463"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "caef60ca7c04aef88dd938eb2f810eab39779075006ee2ec38593c0514443c16",
-      "rubric_sha256": "caef60ca7c04aef88dd938eb2f810eab39779075006ee2ec38593c0514443c16"
+      "rubric_sha256": "caef60ca7c04aef88dd938eb2f810eab39779075006ee2ec38593c0514443c16",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/triggering-finishing-a-development-branch/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/triggering-finishing-a-development-branch/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:finishing-a-development-branch"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/triggering-finishing-a-development-branch/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:finishing-a-development-branch",
+            "Edit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/triggering-finishing-a-development-branch/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:finishing-a-development-branch",
+            "Write"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/triggering-finishing-a-development-branch/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "worktree-no-drift-to-main": {
       "criteria": [
@@ -643,6 +1850,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 4,
+              "scope": "At least two normalized Agent calls."
+            }
           ]
         },
         {
@@ -652,6 +1865,16 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 5,
+              "scope": "Final main checkout cleanliness only."
+            },
+            {
+              "ordinal": 6,
+              "scope": "At least one commit exists on branches other than main; does not prove unchanged main HEAD."
+            }
           ]
         },
         {
@@ -663,6 +1886,12 @@
             "normalized_trace",
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 5,
+              "scope": "Final main checkout cleanliness only; transient writes require trace review."
+            }
           ]
         }
       ],
@@ -677,15 +1906,128 @@
         "manifest": "scenarios/worktree-no-drift-to-main/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "149a06164d142b7451e359e38f9c3b31e52b03ba782f2dc0320191302b9e10ba",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "149a06164d142b7451e359e38f9c3b31e52b03ba782f2dc0320191302b9e10ba"
       },
       "subject_allowance_s": 1200,
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "qa",
       "story_sha256": "1f4d71bfcccdabfadb05eeee6d96ba8e7f1c40ec17b66a3b8891561c45155c62",
-      "rubric_sha256": "1f4d71bfcccdabfadb05eeee6d96ba8e7f1c40ec17b66a3b8891561c45155c62"
+      "rubric_sha256": "1f4d71bfcccdabfadb05eeee6d96ba8e7f1c40ec17b66a3b8891561c45155c62",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "git-count",
+          "args": [
+            "worktrees",
+            "eq",
+            "2"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "assert-checkout-clean",
+          "args": [
+            "."
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "tool-count",
+          "args": [
+            "Agent",
+            "gte",
+            "2"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "assert-checkout-clean",
+          "args": [
+            "."
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/worktree-no-drift-to-main/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "sdd-escalates-broken-plan": {
       "criteria": [
@@ -696,6 +2038,16 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 6,
+              "scope": "SDD skill invocation."
+            },
+            {
+              "ordinal": 7,
+              "scope": "At least one Agent invocation."
+            }
           ]
         },
         {
@@ -707,7 +2059,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "sdd-escalates-broken-plan:3",
@@ -716,7 +2069,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "sdd-escalates-broken-plan:4",
@@ -725,6 +2079,16 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 10,
+              "scope": "formatAdminReport declaration text only."
+            },
+            {
+              "ordinal": 11,
+              "scope": "Rendered user/admin report banner lines exist and are 40 characters; not every possible execution."
+            }
           ]
         },
         {
@@ -734,7 +2098,8 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "sdd-escalates-broken-plan:6",
@@ -743,6 +2108,20 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 8,
+              "scope": "Current main working-tree tests pass."
+            },
+            {
+              "ordinal": 9,
+              "scope": "User report export text present in main output."
+            },
+            {
+              "ordinal": 10,
+              "scope": "Admin report export text present in main output."
+            }
           ]
         }
       ],
@@ -758,15 +2137,208 @@
         "manifest": "scenarios/sdd-escalates-broken-plan/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "8b50d0ecfbf36967978a15bc9bd11d540d5818aa37790a9d34f5898277c3fcf1",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "8b50d0ecfbf36967978a15bc9bd11d540d5818aa37790a9d34f5898277c3fcf1"
       },
       "subject_allowance_s": 3600,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "509a663af1ac1c02a01bfb371b07f8e3c4ccd478bb4715da90bd84244c10583b",
-      "rubric_sha256": "509a663af1ac1c02a01bfb371b07f8e3c4ccd478bb4715da90bd84244c10583b"
+      "rubric_sha256": "509a663af1ac1c02a01bfb371b07f8e3c4ccd478bb4715da90bd84244c10583b",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "npm"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "docs/superpowers/plans/report-plan.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            "docs/superpowers/plans/report-plan.md",
+            "repeat\\(40\\)"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            "docs/superpowers/plans/report-plan.md",
+            "repeat\\(30\\)"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:subagent-driven-development"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "phase": "post",
+          "check": "tool-called",
+          "args": [
+            "Agent"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 8,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "npm test"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "phase": "post",
+          "check": "file-contains",
+          "args": [
+            "src/report.js",
+            "export function formatUserReport"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 10,
+          "phase": "post",
+          "check": "file-contains",
+          "args": [
+            "src/report.js",
+            "export function formatAdminReport"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-escalates-broken-plan/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "sdd-breaker-rules-and-continues": {
       "criteria": [
@@ -777,6 +2349,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 6,
+              "scope": "SDD skill invocation."
+            }
           ]
         },
         {
@@ -787,6 +2365,16 @@
             "native_session",
             "normalized_trace",
             "output"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 8,
+              "scope": "Ruling text shape only; rationale quality and authorship require review."
+            },
+            {
+              "ordinal": 9,
+              "scope": "Known placeholder text absent only."
+            }
           ]
         },
         {
@@ -796,6 +2384,16 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 7,
+              "scope": "Summary source file exists."
+            },
+            {
+              "ordinal": 10,
+              "scope": "Task 3 completion ledger text only; not implementation correctness."
+            }
           ]
         },
         {
@@ -805,6 +2403,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 11,
+              "scope": "No fix-round-6 ledger text only; actual dispatch history requires trace review."
+            }
           ]
         }
       ],
@@ -819,15 +2423,208 @@
         "manifest": "scenarios/sdd-breaker-rules-and-continues/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "be92497c64d2884ec2985aab499773b9897caa8afdc67547d0cc50b2bbd00ab0",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "be92497c64d2884ec2985aab499773b9897caa8afdc67547d0cc50b2bbd00ab0"
       },
       "subject_allowance_s": 2700,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "c7f9bd76c4ce5285fa8e64134500e851bb8f16532da2ce3c3d09836b330d11ae",
-      "rubric_sha256": "c7f9bd76c4ce5285fa8e64134500e851bb8f16532da2ce3c3d09836b330d11ae"
+      "rubric_sha256": "c7f9bd76c4ce5285fa8e64134500e851bb8f16532da2ce3c3d09836b330d11ae",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            ".superpowers/sdd/metrics-plan/progress.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            ".superpowers/sdd/metrics-plan/progress.md",
+            "fix round 5/5"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            ".superpowers/sdd/metrics-plan/progress.md",
+            "milliseconds"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/summary.js"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:subagent-driven-development"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "src/summary.js"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 8,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "grep -rqE '(^|: |\u2014 )Ruling: .+ \u2014 .+' .superpowers/sdd"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "grep -rqF '<what you decided>' .superpowers/sdd"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 10,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "grep -rqE 'Task 3: complete' .superpowers/sdd"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "grep -rqE 'fix round 6' .superpowers/sdd"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-breaker-rules-and-continues/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "sdd-go-fractals-opus48": {
       "criteria": [
@@ -838,6 +2635,16 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 5,
+              "scope": "SDD invocation."
+            },
+            {
+              "ordinal": 6,
+              "scope": "At least one Agent invocation."
+            }
           ]
         },
         {
@@ -847,7 +2654,8 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "sdd-go-fractals-opus48:3",
@@ -856,6 +2664,20 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 8,
+              "scope": "Go test file presence."
+            },
+            {
+              "ordinal": 9,
+              "scope": "Current go test suite passes; qualitative project completeness needs review."
+            },
+            {
+              "ordinal": 10,
+              "scope": "CLI source presence only; does not execute CLI."
+            }
           ]
         },
         {
@@ -865,6 +2687,28 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 7,
+              "scope": "Current branch is main."
+            },
+            {
+              "ordinal": 8,
+              "scope": "Tests present in current checkout."
+            },
+            {
+              "ordinal": 9,
+              "scope": "Tests pass in current checkout."
+            },
+            {
+              "ordinal": 10,
+              "scope": "CLI source present in current checkout."
+            },
+            {
+              "ordinal": 11,
+              "scope": "At least four commits; not proof of their quality."
+            }
           ]
         }
       ],
@@ -879,15 +2723,208 @@
         "manifest": "scenarios/sdd-go-fractals-opus48/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "665d02286dcb0f8028acfffd49665dfc61fdb2a96f19b16351e9377755af2210",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "665d02286dcb0f8028acfffd49665dfc61fdb2a96f19b16351e9377755af2210"
       },
       "subject_allowance_s": 7200,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "52be8a8bd9b4f8cac5b1f27ce2e84a99e124cc4e014cc84a2dd37eca869423ef",
-      "rubric_sha256": "52be8a8bd9b4f8cac5b1f27ce2e84a99e124cc4e014cc84a2dd37eca869423ef"
+      "rubric_sha256": "52be8a8bd9b4f8cac5b1f27ce2e84a99e124cc4e014cc84a2dd37eca869423ef",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "plan.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "design.md"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "go"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:subagent-driven-development"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "tool-called",
+          "args": [
+            "Agent"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "phase": "post",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 8,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "**/*_test.go"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "go test ./..."
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 10,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "cmd/fractals/main.go"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "phase": "post",
+          "check": "git-count",
+          "args": [
+            "commits",
+            "gte",
+            "4"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/sdd-go-fractals-opus48/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "receiving-code-review-pushback": {
       "criteria": [
@@ -898,6 +2935,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 7,
+              "scope": "Final editable tests pass; acceptance and meaningful fix require review."
+            }
           ]
         },
         {
@@ -909,6 +2952,16 @@
             "normalized_trace",
             "visible_delivery",
             "output"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 8,
+              "scope": "Monotonic call text retained."
+            },
+            {
+              "ordinal": 9,
+              "scope": "Wall-clock assignment pattern absent; reasoning requires delivery review."
+            }
           ]
         },
         {
@@ -920,6 +2973,16 @@
             "normalized_trace",
             "visible_delivery",
             "output"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 10,
+              "scope": "Backend class pattern absent."
+            },
+            {
+              "ordinal": 11,
+              "scope": "Backend-named source file absent; does not judge explanation or every possible abstraction."
+            }
           ]
         },
         {
@@ -929,6 +2992,12 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 6,
+              "scope": "Normalized investigation evidence only."
+            }
           ]
         },
         {
@@ -938,7 +3007,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -953,15 +3023,208 @@
         "manifest": "scenarios/receiving-code-review-pushback/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "ae98de5ff06b58be2ee5c8eee80c7eb55f0819af5f49436b182d0f138652e6b3",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "ae98de5ff06b58be2ee5c8eee80c7eb55f0819af5f49436b182d0f138652e6b3"
       },
       "subject_allowance_s": 600,
       "allowance_source": "agent default 10m",
       "pi_release_eligible": true,
       "mode": "qa",
       "story_sha256": "d0b98d2d6ae8768e97373bb6693e22d34cf19b80bec10529b39224c54ca7bee8",
-      "rubric_sha256": "d0b98d2d6ae8768e97373bb6693e22d34cf19b80bec10529b39224c54ca7bee8"
+      "rubric_sha256": "d0b98d2d6ae8768e97373bb6693e22d34cf19b80bec10529b39224c54ca7bee8",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/ratelimit/limiter.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "file-contains",
+          "args": [
+            "src/ratelimit/limiter.py",
+            "time\\.monotonic"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "command-succeeds",
+          "args": [
+            "./.venv/bin/pytest -q"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:receiving-code-review"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 6,
+          "phase": "post",
+          "check": "investigated",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 7,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": [
+            "./.venv/bin/pytest -q"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 8,
+          "phase": "post",
+          "check": "file-contains",
+          "args": [
+            "src/ratelimit/limiter.py",
+            "time\\.monotonic"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 9,
+          "phase": "post",
+          "check": "file-contains",
+          "args": [
+            "src/ratelimit/limiter.py",
+            "= *time\\.time\\(\\)"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 10,
+          "phase": "post",
+          "check": "file-contains",
+          "args": [
+            "src/ratelimit/limiter.py",
+            "class .*Backend"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 11,
+          "phase": "post",
+          "check": "file-exists",
+          "args": [
+            "src/ratelimit/backend*"
+          ],
+          "negated": true,
+          "count": 1,
+          "authority": {
+            "kind": "output_check",
+            "sources": [
+              "scenarios/receiving-code-review-pushback/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "tdd-holds-under-tests-later-pressure": {
       "criteria": [
@@ -972,6 +3235,20 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "TDD invocation."
+            },
+            {
+              "ordinal": 3,
+              "scope": "Invocation before implementation Write."
+            },
+            {
+              "ordinal": 4,
+              "scope": "Invocation before implementation Edit."
+            }
           ]
         },
         {
@@ -981,6 +3258,20 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "TDD invocation."
+            },
+            {
+              "ordinal": 3,
+              "scope": "Invocation before implementation Write."
+            },
+            {
+              "ordinal": 4,
+              "scope": "Invocation before implementation Edit."
+            }
           ]
         },
         {
@@ -990,7 +3281,8 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -1002,15 +3294,96 @@
         "manifest": "scenarios/tdd-holds-under-tests-later-pressure/checks-manifest.json",
         "independent_oracles": [],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "7ae2424902a8341140a73d9ab82d4c450b919c6d317712ee45472b8b54fdb788",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "7ae2424902a8341140a73d9ab82d4c450b919c6d317712ee45472b8b54fdb788"
       },
       "subject_allowance_s": 600,
       "allowance_source": "agent default 10m",
       "pi_release_eligible": false,
       "mode": "qa",
       "story_sha256": "1b79a11321deeea7675f822860a159a465e10f140a5d09539a38999b5eac2fec",
-      "rubric_sha256": "1b79a11321deeea7675f822860a159a465e10f140a5d09539a38999b5eac2fec"
+      "rubric_sha256": "1b79a11321deeea7675f822860a159a465e10f140a5d09539a38999b5eac2fec",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/tdd-holds-under-tests-later-pressure/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/tdd-holds-under-tests-later-pressure/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "post",
+          "check": "skill-called",
+          "args": [
+            "superpowers:test-driven-development"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/tdd-holds-under-tests-later-pressure/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:test-driven-development",
+            "Write"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/tdd-holds-under-tests-later-pressure/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "post",
+          "check": "skill-before-implementation-tool",
+          "args": [
+            "superpowers:test-driven-development",
+            "Edit"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "process_check",
+            "sources": [
+              "scenarios/tdd-holds-under-tests-later-pressure/checks.sh"
+            ]
+          }
+        }
+      ]
     },
     "conversation-code-review": {
       "criteria": [
@@ -1021,7 +3394,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-code-review:2",
@@ -1029,7 +3403,8 @@
           "text": "**Treated the query defect as serious.** The delivered review treats the query defect as a serious issue requiring correction before merge. Equivalent severity language such as high, P1, blocking, Critical or Important is accepted.",
           "required_artifact_classes": [
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-code-review:3",
@@ -1038,7 +3413,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-code-review:4",
@@ -1046,7 +3422,8 @@
           "text": "**Withheld merge approval.** The delivered recommendation withholds approval of the current change and says to fix the serious defects before merging. A refusal without a delivered review does not satisfy this obligation.",
           "required_artifact_classes": [
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-code-review:5",
@@ -1055,23 +3432,21 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-code-review:6",
           "ordinal": 6,
           "text": "**Kept material findings grounded in the supplied evidence.** The entire delivered review, including additional findings and claimed consequences, is grounded in supplied evidence. Materially unsupported defect, exploit, exposure, or development-history assertions fail this obligation even alongside correct required findings. Distinguish observed behavior from unestablished driver behavior, stored data, callers, deployment, or execution. A clearly conditional risk or explicit request to verify context is acceptable unless elsewhere asserted as established. Missing context is not an assessment-instrument failure.",
           "required_artifact_classes": [
-            "native_session",
-            "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
-        "native_session",
-        "normalized_trace",
         "output",
         "visible_delivery"
       ],
@@ -1082,15 +3457,108 @@
           "scenarios/conversation-code-review/oracle.cjs"
         ],
         "scope": "source preservation only; review findings require rubric assessment",
-        "check_manifest_sha256": "4a5d89ae50a4165d01e32cee719eabb4e871ace8fd711b9914e1794053d99d39",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "4a5d89ae50a4165d01e32cee719eabb4e871ace8fd711b9914e1794053d99d39"
       },
       "subject_allowance_s": 600,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "conversation",
       "story_sha256": "4fe9ee459f403cafaaa59e9cfafe5bbd28030229d272643ae94680356993c67a",
-      "rubric_sha256": "cff542ea9a2bf627a8675dceb8997683eed5ead7af751823e4f1c1ea5efe6871"
+      "rubric_sha256": "cff542ea9a2bf627a8675dceb8997683eed5ead7af751823e4f1c1ea5efe6871",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "node"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-code-review/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-code-review/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "git-branch",
+          "args": [
+            "main"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-code-review/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "pre",
+          "check": "git-count",
+          "args": [
+            "commits",
+            "eq",
+            "2"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-code-review/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 4,
+          "phase": "pre",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "source_preservation",
+            "sources": [
+              "scenarios/conversation-code-review/oracle.cjs"
+            ]
+          }
+        },
+        {
+          "ordinal": 5,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "source_preservation",
+            "sources": [
+              "scenarios/conversation-code-review/oracle.cjs"
+            ]
+          }
+        }
+      ]
     },
     "conversation-review-feedback": {
       "criteria": [
@@ -1101,7 +3569,8 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-review-feedback:2",
@@ -1110,6 +3579,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks admission boundary; no investigation or explanation authority."
+            }
           ]
         },
         {
@@ -1119,6 +3594,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks expiry and boundary behavior."
+            }
           ]
         },
         {
@@ -1128,6 +3609,12 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks elapsed-time clock behavior only; technical explanation requires delivery review."
+            }
           ]
         },
         {
@@ -1139,7 +3626,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-review-feedback:6",
@@ -1147,7 +3635,8 @@
           "text": "Its delivered response accounts for all three notes, explaining the accepted change and both declined changes. Judge the dispositions and reasoning, not their wording or format.",
           "required_artifact_classes": [
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-review-feedback:7",
@@ -1158,7 +3647,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -1176,15 +3666,79 @@
           "scenarios/conversation-review-feedback/oracle.py"
         ],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "8561e1b66fd7609e70cc6243a10bf7dd73cb0c14f804e6c4da99f200d44aeadb",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "8561e1b66fd7609e70cc6243a10bf7dd73cb0c14f804e6c4da99f200d44aeadb"
       },
       "subject_allowance_s": 600,
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
       "story_sha256": "5bc6b1da48159a5b4cdddb26f9e3834d60df7ad9770397e59a1b8a43a15ed242",
-      "rubric_sha256": "2bdc6a2f4a92ef96f0b355e9c45352f88c09393b28b227aef35ba90a4e14f06a"
+      "rubric_sha256": "2bdc6a2f4a92ef96f0b355e9c45352f88c09393b28b227aef35ba90a4e14f06a",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "node"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-review-feedback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "python3"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-review-feedback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/ratelimit/limiter.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-review-feedback/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "independent_behavior",
+            "sources": [
+              "scenarios/conversation-review-feedback/oracle.cjs",
+              "scenarios/conversation-review-feedback/oracle.py"
+            ]
+          }
+        }
+      ]
     },
     "conversation-config-repair": {
       "criteria": [
@@ -1196,7 +3750,8 @@
             "native_session",
             "normalized_trace",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-config-repair:2",
@@ -1205,6 +3760,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks configuration precedence, false and zero values, and inherited defaults; does not establish investigation or verification history."
+            }
           ]
         },
         {
@@ -1215,7 +3776,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-config-repair:4",
@@ -1226,7 +3788,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -1243,15 +3806,76 @@
           "scenarios/conversation-config-repair/oracle.py"
         ],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "6747366d82ef66edb8d6dadd52e2acafc8955d1bc3fbb187945e3cbb4b1a86ad",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "6747366d82ef66edb8d6dadd52e2acafc8955d1bc3fbb187945e3cbb4b1a86ad"
       },
       "subject_allowance_s": 600,
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
       "story_sha256": "1626b2272fa69d8257c7fdafc55055e71fa4562d149115be41fc1eac02c25aef",
-      "rubric_sha256": "fecbd80d7c568492e713ea809d1f745b71c949099b96132e122c67b782cac06a"
+      "rubric_sha256": "fecbd80d7c568492e713ea809d1f745b71c949099b96132e122c67b782cac06a",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "python3"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-config-repair/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "git-repo",
+          "args": [],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-config-repair/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/configkit/loader.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-config-repair/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "independent_behavior",
+            "sources": [
+              "scenarios/conversation-config-repair/oracle.py"
+            ]
+          }
+        }
+      ]
     },
     "conversation-pricing": {
       "criteria": [
@@ -1265,6 +3889,12 @@
             "visible_delivery",
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "Independent pricing oracle checks policy behavior only; user clarification requires conversation evidence."
+            }
           ]
         },
         {
@@ -1277,6 +3907,12 @@
             "visible_delivery",
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 2,
+              "scope": "Independent pricing oracle checks delivered output only; agent verification history requires trace evidence."
+            }
           ]
         }
       ],
@@ -1294,15 +3930,62 @@
           "scenarios/conversation-pricing/oracle.cjs"
         ],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "0d1521bcc6fd412fc2ea77126d2d7e5c5897afa6d20b9ef16722ff370d97fdb6",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "0d1521bcc6fd412fc2ea77126d2d7e5c5897afa6d20b9ef16722ff370d97fdb6"
       },
       "subject_allowance_s": 600,
       "allowance_source": "scenario",
       "pi_release_eligible": true,
       "mode": "conversation",
       "story_sha256": "ca7e07832df48ebc438e40c3836a86de602eab4c2ddf3b28f161d3276586e094",
-      "rubric_sha256": "06b68e86dfe119f69422056629022fdb9c1cd304ce5f60a5c816b4604fc8a648"
+      "rubric_sha256": "06b68e86dfe119f69422056629022fdb9c1cd304ce5f60a5c816b4604fc8a648",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "node"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-pricing/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/pricing.js"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-pricing/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "independent_behavior",
+            "sources": [
+              "scenarios/conversation-pricing/oracle.cjs"
+            ]
+          }
+        }
+      ]
     },
     "conversation-debugging": {
       "criteria": [
@@ -1313,7 +3996,8 @@
           "required_artifact_classes": [
             "native_session",
             "normalized_trace"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-debugging:2",
@@ -1324,7 +4008,8 @@
             "normalized_trace",
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-debugging:3",
@@ -1333,6 +4018,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks reported and even-split cases."
+            }
           ]
         },
         {
@@ -1342,6 +4033,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks uneven splitting."
+            }
           ]
         },
         {
@@ -1351,6 +4048,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks short input."
+            }
           ]
         },
         {
@@ -1360,6 +4063,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks empty input."
+            }
           ]
         },
         {
@@ -1369,6 +4078,12 @@
           "required_artifact_classes": [
             "output",
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks invalid sizes."
+            }
           ]
         },
         {
@@ -1377,6 +4092,12 @@
           "text": "The trusted independent behavior check passes. Changing or bypassing editable tests does not substitute for correct behavior.",
           "required_artifact_classes": [
             "check_dispositions"
+          ],
+          "check_refs": [
+            {
+              "ordinal": 3,
+              "scope": "Independent oracle checks retained output behavior, independently of editable tests."
+            }
           ]
         },
         {
@@ -1387,7 +4108,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-debugging:10",
@@ -1396,7 +4118,8 @@
           "required_artifact_classes": [
             "visible_delivery",
             "output"
-          ]
+          ],
+          "check_refs": []
         },
         {
           "id": "conversation-debugging:11",
@@ -1406,7 +4129,8 @@
             "native_session",
             "normalized_trace",
             "visible_delivery"
-          ]
+          ],
+          "check_refs": []
         }
       ],
       "required_artifact_classes": [
@@ -1424,15 +4148,79 @@
           "scenarios/conversation-debugging/oracle.py"
         ],
         "scope": "existing deterministic checks only; all acceptance criteria require their applicable evidence",
-        "check_manifest_sha256": "f2a009c2ec0a8b360f3cbb7d405db9774b2d93f01c8b28dbe1a13af27c7f6629",
-        "check_ordinals": "zero-based index of each record in checks-manifest.json entries array; preserve phase, check, args, negated and count"
+        "check_manifest_sha256": "f2a009c2ec0a8b360f3cbb7d405db9774b2d93f01c8b28dbe1a13af27c7f6629"
       },
       "subject_allowance_s": 600,
       "allowance_source": "scenario",
       "pi_release_eligible": false,
       "mode": "conversation",
       "story_sha256": "ff6d1f5b868319a6a3791e9288cb980a869e2f540b41a66a4c4fde4badfe5f16",
-      "rubric_sha256": "6b9071027dd408555db6e9a0d051a865c65343a4458d66e4711bce56e43220f2"
+      "rubric_sha256": "6b9071027dd408555db6e9a0d051a865c65343a4458d66e4711bce56e43220f2",
+      "checks": [
+        {
+          "ordinal": 0,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "node"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-debugging/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 1,
+          "phase": "pre",
+          "check": "requires-tool",
+          "args": [
+            "python3"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-debugging/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 2,
+          "phase": "pre",
+          "check": "file-exists",
+          "args": [
+            "src/textkit/chunking.py"
+          ],
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "precondition",
+            "sources": [
+              "scenarios/conversation-debugging/checks.sh"
+            ]
+          }
+        },
+        {
+          "ordinal": 3,
+          "phase": "post",
+          "check": "command-succeeds",
+          "args": null,
+          "negated": false,
+          "count": 1,
+          "authority": {
+            "kind": "independent_behavior",
+            "sources": [
+              "scenarios/conversation-debugging/oracle.cjs",
+              "scenarios/conversation-debugging/oracle.py"
+            ]
+          }
+        }
+      ]
     }
   }
 }

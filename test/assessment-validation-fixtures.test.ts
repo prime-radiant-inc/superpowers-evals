@@ -237,3 +237,88 @@ test('criterion obligations bind current story, rubric and check manifest bytes'
     }
   }
 });
+
+test('check references preserve exact manifest entries and limited oracle authority', () => {
+  const requirements = json(join(workloads, 'requirements.json'));
+  for (const raw of Object.values(requirements.scenarios)) {
+    const scenario = raw as {
+      checks: Array<{
+        ordinal: number;
+        authority: { kind: string; sources: string[] };
+        phase: string;
+        check: string;
+        args: string[] | null;
+        negated: boolean;
+        count: number;
+      }>;
+      criteria: Array<{
+        check_refs: Array<{ ordinal: number; scope: string }>;
+      }>;
+      oracle_authority: { manifest: string };
+    };
+    const manifest = json(scenario.oracle_authority.manifest);
+    expect(scenario.checks).toHaveLength(manifest.entries.length);
+    for (const [index, entry] of scenario.checks.entries()) {
+      const { ordinal, authority, ...identity } = entry;
+      expect(ordinal).toBe(index);
+      expect(identity).toEqual(manifest.entries[index]);
+      expect(authority.kind.length).toBeGreaterThan(0);
+      for (const source of authority.sources)
+        expect(readFileSync(source).length).toBeGreaterThan(0);
+    }
+    for (const criterion of scenario.criteria) {
+      expect(Array.isArray(criterion.check_refs)).toBe(true);
+      for (const reference of criterion.check_refs) {
+        expect(scenario.checks[reference.ordinal]?.ordinal).toBe(
+          reference.ordinal,
+        );
+        expect(reference.scope.length).toBeGreaterThan(0);
+      }
+    }
+  }
+  const repair = requirements.scenarios['conversation-config-repair'];
+  expect(
+    repair.criteria[1].check_refs.map(
+      (ref: { ordinal: number }) => ref.ordinal,
+    ),
+  ).toEqual([3]);
+  expect(repair.checks[3].authority).toEqual({
+    kind: 'independent_behavior',
+    sources: ['scenarios/conversation-config-repair/oracle.py'],
+  });
+  expect(repair.criteria[1].required_artifact_classes).toEqual([
+    'output',
+    'check_dispositions',
+  ]);
+});
+
+test('source-only grounding remains judgeable without process capture', () => {
+  const requirements = json(join(workloads, 'requirements.json'));
+  const review = requirements.scenarios['conversation-code-review'];
+  const grounding = review.criteria[5];
+  const available = new Set(['visible_delivery', 'output']);
+  expect(
+    grounding.required_artifact_classes.every((kind: string) =>
+      available.has(kind),
+    ),
+  ).toBe(true);
+  expect(grounding.required_artifact_classes).toEqual([
+    'visible_delivery',
+    'output',
+  ]);
+  expect(grounding.check_refs).toEqual([]);
+  expect(
+    review.criteria.every(
+      (criterion: { check_refs: unknown[] }) =>
+        criterion.check_refs.length === 0,
+    ),
+  ).toBe(true);
+  const process =
+    requirements.scenarios['triggering-test-driven-development'].criteria[0];
+  expect(process.required_artifact_classes).toContain('normalized_trace');
+  expect(
+    process.required_artifact_classes.every((kind: string) =>
+      available.has(kind),
+    ),
+  ).toBe(false);
+});

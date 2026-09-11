@@ -57,7 +57,8 @@ allowances, eligibility, oracle authority and `criteria` objects:
 - `id`: stable `<scenario>:<ordinal>` obligation ID.
 - `ordinal`: one-based acceptance-criterion position in the story.
 - `text`: the existing criterion text, joining its wrapped lines with spaces.
-- `required_artifact_classes`: the evidence needed to judge this obligation.
+- `required_artifact_classes`: unconditional evidence needed to judge this obligation.
+- `check_refs`: explicit `{ordinal, scope}` references into the scenario's `checks` array; an empty array means no executable check establishes the obligation.
 
 The scenario-wide `required_artifact_classes` is the union of its criterion
 requirements. The deliberately small vocabulary is:
@@ -71,14 +72,37 @@ requirements. The deliberately small vocabulary is:
 | `check_dispositions` | Structured executable-check records and their trusted oracle results |
 
 An executable output obligation uses check evidence independently of trajectory
-availability. Review grounding requires the complete delivery and supplied
-source; native/normalized evidence is also needed to assess any claimed
-execution or development history. Evidence presence is not a passing judgment.
-Check preservation does not prove review quality. `oracle_authority` points to
-the existing `checks.sh`, `checks-manifest.json`, and independent oracle files;
-no new oracle is introduced. Check ordinals are zero-based positions in the
-manifest's `entries` array, retaining `phase`, `check`, `args`, `negated`, and
-`count` rather than collapsing duplicate obligations.
+availability. Static code-review grounding unconditionally requires only complete
+`visible_delivery` and supplied `output` (including before/current source).
+Missing or corrupt process capture does not make a source-only grounding judgment
+unavailable. Supplied source can establish development history such as the query
+regression without a process trace. Claims of execution or other history not
+established by supplied source still require supporting context under the existing
+assessor grounding/limitations obligation. The consumer must not promote those
+conditional needs into unconditional capture dependencies: the assessor judges
+unsupported claims against the unchanged rubric. This declaration introduces no
+per-claim parser, condition evaluator or additional judge. Actual process criteria
+continue to require process evidence.
+
+Each scenario's `checks` array enumerates the exact manifest entries as
+`{ordinal, phase, check, args, negated, count, authority}`. Ordinals are zero-based
+positions in the existing manifest's `entries` array. Preserve `args: null` as the
+manifest's dynamic-argument identity; do not fabricate resolved commands. Keep
+multiplicity `count` intact. `authority` identifies a kind (`precondition`,
+`process_check`, `output_check`, `source_preservation`, or `independent_behavior`)
+and the existing source files implementing that check. `oracle_authority` retains
+the manifest identity/hash and source pointers; no new oracle is introduced.
+
+Criterion `check_refs` explicitly state the limited part of each obligation the
+referenced check supports. The consumer must not infer missing associations from
+text or treat a check as establishing more than its declared scope. For example,
+configuration repair criterion 2 references the independent behavior oracle;
+its process/history criteria do not. Code-review criteria have no check refs:
+source preservation does not prove prose findings or grounding. Composite oracle
+success supports its listed behavior checks; composite failure alone does not
+identify which individual behavior failed. Preserve the check disposition and
+let the existing assessment account for that limitation. Evidence presence is
+not a passing judgment.
 
 `story_sha256` hashes the exact story bytes. For conversation mode,
 `rubric_sha256` hashes the existing `projectConversationStory(story).rubric`;
