@@ -147,6 +147,7 @@ export function appendSidecarLine(
 export function isValidSidecarLine(x: unknown): x is SidecarLine {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
   const rec = x as Record<string, unknown>;
+  if (rec['kind'] === 'admission_wait') return false;
   const finite = (v: unknown): v is number =>
     typeof v === 'number' && Number.isFinite(v);
   const ts = rec['ts_ms'];

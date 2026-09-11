@@ -819,3 +819,16 @@ test('admission observations preserve host-only coverage and the valid stream pr
     repaired.lines.some((line) => 'missing' in line && line.ts_ms === 4000),
   ).toBe(true);
 });
+
+test('a malformed admission observation cannot fall back to host coverage', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wait-discriminator-'));
+  appendSidecarLine(root, { ...stats(1000), breach: [] });
+  appendFileSync(
+    join(root, SIDECAR_FILENAME),
+    `${JSON.stringify({ ...stats(9000), breach: [], kind: 'admission_wait', reason: 'not-a-reason' })}\n`,
+  );
+  const parsed = captureStderr(() => parseSidecar(root)).result;
+  expect(parsed.truncatedTail).toBe(true);
+  expect(parsed.lines).toHaveLength(1);
+  expect(samplerStaleMs(parsed.lines, 10000)).toBe(9000);
+});
