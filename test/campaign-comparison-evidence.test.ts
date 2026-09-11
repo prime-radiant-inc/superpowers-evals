@@ -459,6 +459,7 @@ function conversationPublication(
   completed: boolean,
   completionPatch: Record<string, unknown> = {},
   resultPatch: Record<string, unknown> = {},
+  additionalFiles: Record<string, unknown> = {},
 ) {
   const run = 'review_20260904T000000Z_abcd';
   const out = `assessment/${run}`;
@@ -534,7 +535,7 @@ function conversationPublication(
   const p = publication(
     { final: 'indeterminate', gauntlet: null, checks },
     undefined,
-    files,
+    { ...files, ...additionalFiles },
   );
   const requirements = {
     mode: 'conversation' as const,
@@ -685,6 +686,83 @@ test('the expected-check multiset never spends one literal record twice through 
   const rows = measureAttempt(readAttemptEvidence(p), obligations).checks;
   expect(rows.find((r) => r.id === 'check:0')!.verdict).toBeNull();
   expect(rows.find((r) => r.id === 'check:1')!.verdict).toBe('pass');
+});
+
+test.each([
+  'missing',
+  'corrupt',
+] as const)('%s visible evidence cannot be replaced by an authenticated same-suffix workdir file', (damage) => {
+  const { p, requirements } = conversationPublication(
+    true,
+    {},
+    {},
+    {
+      'coding-agent-workdir/visible.json': { text: 'candidate alias' },
+    },
+  );
+  const visible = p.artifacts.find(
+    (r) => r.path.split('/').length === 2 && r.path.endsWith('/visible.json'),
+  )!;
+  if (damage === 'missing')
+    p.artifacts = p.artifacts.filter((r) => r !== visible);
+  else writeFileSync(join(p.resultsRoot, visible.path), 'corrupted');
+  const evidence = readAttemptEvidence(p);
+  expect(evidence.publication_valid).toBe(true);
+  expect(
+    evidence.artifacts.some((r) =>
+      r.path.endsWith('/coding-agent-workdir/visible.json'),
+    ),
+  ).toBe(true);
+  const measured = measureAttempt(evidence, requirements);
+  expect(measured.interaction.verdict).toBeNull();
+  expect(measured.criteria.map((r) => r.verdict)).toEqual(['pass', null]);
+  expect(measured.checks[0]!.verdict).toBe('pass');
+});
+
+test('supporting evidence links use exact attempt-root files without nested suffix aliases', () => {
+  const { p, requirements } = conversationPublication(
+    true,
+    {},
+    {},
+    {
+      'coding-agent-workdir/conversation.json': {},
+      'coding-agent-workdir/evidence/checks.json': [],
+      'coding-agent-workdir/verdict.json': {},
+    },
+  );
+  const measured = measureAttempt(readAttemptEvidence(p), requirements);
+  const run = p.artifacts[0]!.path.split('/')[0]!;
+  expect(measured.interaction.evidence.map((r) => r.path)).toEqual([
+    `${run}/conversation.json`,
+    `${run}/visible.json`,
+  ]);
+  expect(measured.checks[0]!.evidence.map((r) => r.path)).toEqual([
+    `${run}/evidence/checks.json`,
+  ]);
+  const legacy = readAttemptEvidence(p);
+  legacy.assessment_report = null;
+  const qa = measureAttempt(legacy, { ...requirements, mode: 'qa' });
+  expect(
+    qa.criteria[0]!.evidence.filter((r) =>
+      r.path.endsWith('/verdict.json'),
+    ).map((r) => r.path),
+  ).toEqual([`${run}/verdict.json`]);
+});
+
+test('exact check entries consume only their declared count before allocating wildcard records', () => {
+  const { p, requirements } = conversationPublication(false);
+  const evidence = readAttemptEvidence(p);
+  const record = evidence.checks![0]!;
+  const base = requirements.checks[0]!;
+  evidence.checks = [{ ...record }, { ...record }];
+  const measured = measureAttempt(evidence, {
+    ...requirements,
+    checks: [
+      { ...base, ordinal: 0, args: null },
+      { ...base, ordinal: 1 },
+    ],
+  });
+  expect(measured.checks.map((r) => r.verdict)).toEqual(['pass', 'pass']);
 });
 
 test('criterion check dependencies require the declared checker records without inferring their verdict', () => {

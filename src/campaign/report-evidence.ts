@@ -431,8 +431,13 @@ export function measureAttempt(
 } {
   if (e && !e.publication_valid) e = undefined;
   const refs = e?.artifacts ?? [];
-  const supporting = (suffix: string) =>
-    refs.filter((r) => r.path.endsWith(`/${suffix}`));
+  const manifests = refs.filter(
+    (r) => r.path.split('/').length === 2 && r.path.endsWith('/manifest.json'),
+  );
+  const runRoot =
+    manifests.length === 1 ? manifests[0]?.path.split('/')[0] : undefined;
+  const supporting = (path: string) =>
+    runRoot ? refs.filter((r) => r.path === `${runRoot}/${path}`) : [];
   const checksEvidence = supporting('evidence/checks.json').length
     ? supporting('evidence/checks.json')
     : supporting('verdict.json');
@@ -469,20 +474,21 @@ export function measureAttempt(
   const checks = [...(requirements?.checks ?? [])]
     .sort((a, b) => Number(a.args === null) - Number(b.args === null))
     .flatMap((c) => {
-      const matching = [...remainingChecks].filter(
-        (r) =>
-          r.phase === c.phase &&
-          r.check === c.check &&
-          r.negated === c.negated &&
-          (c.args === null ||
-            jcsCanonicalize(r.args) === jcsCanonicalize(c.args)),
-      );
+      const matching = [...remainingChecks]
+        .filter(
+          (r) =>
+            r.phase === c.phase &&
+            r.check === c.check &&
+            r.negated === c.negated &&
+            (c.args === null ||
+              jcsCanonicalize(r.args) === jcsCanonicalize(c.args)),
+        )
+        .slice(0, c.count);
       for (const record of matching) remainingChecks.delete(record);
       return Array.from(
         { length: c.count },
         (_, index): ObligationObservation => {
-          const record =
-            matching.length <= c.count ? matching[index] : undefined;
+          const record = matching[index];
           // Current emitters classify crashes. Retained false rows without that fact
           // cannot establish a behavioral failure in an independently measured check.
           const verdict =
