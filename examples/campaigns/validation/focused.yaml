@@ -1,0 +1,18 @@
+schema_version: 2
+name: validation_focused
+reserve: 0
+max_exposure_skew: 60
+attempt_bounds:
+  max_attempts: 1
+  max_time_s: 5400
+grader:
+  credential: sonnet5
+  model: claude-sonnet-5
+pricing_snapshot:
+  path: docs/experiments/2026-09-06-pr2258-pricing/current.json
+  sha256: 6423a36bd98e01653824967834f114c71a1f4f03eeab595e511ad91a1ec37d8b
+comparisons:
+  - baseline: baseline
+    treatment: candidate
+    scenarios: [brainstorming-todo-purpose-discovery, brainstorming-resists-jump-to-implementation, brainstorming-companion-just-in-time, user-pref-no-brainstorm, writing-plans-no-spec-conversational, cost-spec-plan-duplication, conversation-design]
+    n: 3

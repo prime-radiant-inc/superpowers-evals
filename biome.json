@@ -131,6 +131,18 @@
           }
         }
       }
+    },
+    {
+      "includes": [
+        "test/fixtures/assessment-validation/constructed/*/db.js",
+        "test/fixtures/assessment-validation/constructed/*/db.before.js"
+      ],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
+      }
     }
   ]
 }
