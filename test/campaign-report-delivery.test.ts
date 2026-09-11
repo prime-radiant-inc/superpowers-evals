@@ -1,14 +1,26 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import {
+  closeSync,
   existsSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
   mkdirSync,
+  openSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { renderCampaignReport } from '../src/appliance/campaign-render.ts';
-import { deliverComparisonReport } from '../src/campaign/report-delivery.ts';
+import * as credentialScope from '../src/appliance/credential-scope.ts';
+import { journalFsOps } from '../src/campaign/journal.ts';
+import {
+  deliverComparisonReport,
+  readReportDelivery,
+} from '../src/campaign/report-delivery.ts';
 import { readComparisonReport } from '../src/campaign/report-publication.ts';
 import { sealReport } from '../src/campaign/seal.ts';
 import {
@@ -248,3 +260,99 @@ for (const requested of [-1, 2])
       w.release();
     }
   });
+
+test('existing receipt observed after report flush still requires its own durable confirmation', () => {
+  const f = completed();
+  const first = deliverComparisonReport({
+    ...f,
+    processes,
+    now: () => Date.parse(fixtureTime(11)),
+  });
+  const receiptPath = join(f.campaignDir, 'report-delivery.json');
+  const bytes = readFileSync(receiptPath);
+  const stage = join(f.campaignDir, 'concurrent-receipt.stage');
+  writeFileSync(stage, bytes);
+  const stageFd = openSync(stage, 'r');
+  try {
+    fsyncSync(stageFd);
+  } finally {
+    closeSync(stageFd);
+  }
+  rmSync(receiptPath);
+  const directory = statSync(f.campaignDir);
+  let linked = false;
+  const realRead = credentialScope.readPinnedNoFollowFile;
+  const realSync = journalFsOps.fsync;
+  const read = spyOn(
+    credentialScope,
+    'readPinnedNoFollowFile',
+  ).mockImplementation((anchor, parts, label, required) => {
+    if (
+      !linked &&
+      anchor === f.campaignDir &&
+      parts.length === 1 &&
+      parts[0] === 'report-delivery.json'
+    ) {
+      // The competing publisher has synced the file, but not its new directory entry.
+      linkSync(stage, receiptPath);
+      linked = true;
+    }
+    return realRead(anchor, parts, label, required);
+  });
+  const sync = spyOn(journalFsOps, 'fsync').mockImplementation((fd) => {
+    const stat = fstatSync(fd);
+    if (linked && stat.dev === directory.dev && stat.ino === directory.ino)
+      throw new Error('receipt directory sync failed');
+    return realSync(fd);
+  });
+  try {
+    expect(() =>
+      deliverComparisonReport({
+        ...f,
+        processes,
+        now: () => {
+          throw new Error('must retain first clock');
+        },
+      }),
+    ).toThrow('receipt directory sync failed');
+    expect(readFileSync(receiptPath)).toEqual(bytes);
+  } finally {
+    read.mockRestore();
+    sync.mockRestore();
+  }
+  expect(
+    deliverComparisonReport({
+      ...f,
+      processes,
+      now: () => Date.parse(fixtureTime(21)),
+    }).delivery,
+  ).toEqual(first.delivery);
+});
+
+test('status withholds a visible receipt while its directory cannot be synced without changing artifacts', () => {
+  const f = completed();
+  const first = deliverComparisonReport({
+    ...f,
+    processes,
+    now: () => Date.parse(fixtureTime(11)),
+  });
+  const receiptPath = join(f.campaignDir, 'report-delivery.json');
+  const bytes = readFileSync(receiptPath);
+  const names = readdirSync(f.campaignDir).sort();
+  const directory = statSync(f.campaignDir);
+  const realSync = journalFsOps.fsync;
+  const sync = spyOn(journalFsOps, 'fsync').mockImplementation((fd) => {
+    const stat = fstatSync(fd);
+    if (stat.dev === directory.dev && stat.ino === directory.ino)
+      throw new Error('receipt directory sync failed');
+    return realSync(fd);
+  });
+  try {
+    expect(readReportDelivery(first.report)).toBeNull();
+    expect(readFileSync(receiptPath)).toEqual(bytes);
+    expect(readdirSync(f.campaignDir).sort()).toEqual(names);
+  } finally {
+    sync.mockRestore();
+  }
+  expect(readReportDelivery(first.report)).toEqual(first.delivery);
+});

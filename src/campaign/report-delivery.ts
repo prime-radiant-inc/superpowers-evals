@@ -9,6 +9,7 @@ import {
 } from '../contracts/campaign/experiment.ts';
 import type { Report } from '../contracts/campaign/report.ts';
 import { readCommittedPrefix } from './execution-journal.ts';
+import { fsyncDir } from './journal.ts';
 import {
   canonicalReportBytes,
   digestReportBytes,
@@ -75,7 +76,16 @@ export function readReportDelivery(report: Report): ReportDelivery | null {
         `${report.anchor.last_sequence}-${digest}`,
       );
   if (!lstatSync(directory, { throwIfNoEntry: false })) return null;
-  return readReceipt(directory, digest);
+  const receipt = readReceipt(directory, digest);
+  if (receipt) {
+    // Visibility alone cannot establish the receipt's directory durability.
+    try {
+      fsyncDir(directory);
+    } catch {
+      return null;
+    }
+  }
+  return receipt;
 }
 /** Publication completes before the independent receipt observes its endpoint. */
 export function deliverComparisonReport(
@@ -89,7 +99,14 @@ export function deliverComparisonReport(
     ? sealReport({ campaignDir: input.campaignDir, report })
     : publishReportSnapshot({ campaignDir: input.campaignDir, report });
   const existing = readReceipt(published.directory, published.digest);
-  if (existing) return { report, delivery: existing };
+  if (existing) {
+    publishReportFile(
+      published.directory,
+      'report-delivery.json',
+      `${jcsCanonicalize(existing)}\n`,
+    );
+    return { report, delivery: existing };
+  }
   const prefix = readCommittedPrefix(input.campaignDir);
   if (prefix.committed.at(-1)?.prefix_digest !== report.anchor.prefix_digest)
     throw new Error('report delivery journal prefix changed');
