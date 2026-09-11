@@ -46,15 +46,6 @@
     },
     {
       "phase": "post",
-      "check": "command-succeeds",
-      "args": [
-        "grep -qi \"none — requirements\\|none - requirements\" docs/superpowers/plans/*.md"
-      ],
-      "negated": false,
-      "count": 1
-    },
-    {
-      "phase": "post",
       "check": "file-exists",
       "args": [
         "docs/superpowers/specs/*.md"

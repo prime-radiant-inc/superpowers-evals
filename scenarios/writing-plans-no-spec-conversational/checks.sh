@@ -7,6 +7,6 @@ pre() {
 
 post() {
     file-exists 'docs/superpowers/plans/*.md'
-    command-succeeds 'grep -qi "none — requirements\|none - requirements" docs/superpowers/plans/*.md'
+    # QA assesses the Spec header wording and requirements against story.md.
     not file-exists 'docs/superpowers/specs/*.md'
 }
