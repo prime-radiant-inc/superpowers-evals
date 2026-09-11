@@ -235,3 +235,9 @@ and stale-sampler decisions use only genuine host records. Reservations cover
 both subject and grader throughout an attempt because the simulated user also
 uses the grader credential. Attempt overlap is journal-derived, role durations
 come from role files, and active-provider concurrency remains unknown.
+
+QA interaction completion remains unavailable without an independent endpoint
+record. Valid QA checks and criteria retain their own readiness and comparisons;
+there is no conjunction requiring the QA interaction row to pass. Delivery
+receipts expose per-measurement readiness and do not assert that all release
+obligations are complete.

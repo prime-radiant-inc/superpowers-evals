@@ -91,6 +91,8 @@ function verifyPublishedFailure(
         )
           cpSync(join(runDir, path), join(target, path), { recursive: true });
       }
+      if (mode === 'trace-unavailable')
+        rmSync(join(target, 'evidence/trajectory.json'), { force: true });
       writeFileSync(
         join(target, 'verdict.json'),
         JSON.stringify({

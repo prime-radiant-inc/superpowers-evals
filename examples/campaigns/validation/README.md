@@ -202,3 +202,9 @@ private home. Bound QA event streams and valid terminal capture twins can
 support visible-evidence dependencies; they establish neither conversation
 completion nor the correctness of a judgment. QA interaction completion remains
 unavailable without an independent endpoint record.
+
+QA interaction readiness is separate from check and criterion readiness. An
+unavailable independent QA endpoint record does not gate otherwise supported
+check/criterion comparisons. Inspect the readiness of each conclusion; the mere
+presence of a delivery receipt never establishes that every release obligation
+is complete.

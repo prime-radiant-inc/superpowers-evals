@@ -75,15 +75,18 @@ and 24-hour targets, and live comparison results remain pending.
 
 ## Independent-measurement integration boundary
 
-Task 6 preserves independent interaction, check, criterion and quantity
-observations, and labels unverified assessment scope. It does not establish
-live acceptance or instrument accuracy. Legacy QA capture currently retains
-its normalized trajectory but leaves native source logs under the campaign's
-excluded home; it also has no authenticated conversation-completion record.
-Consequently, QA obligations requiring native session or complete visible
-delivery evidence remain unavailable even where legacy grader rows and the
-aggregate verdict are retained. This is an integration gap, not proof that
-those obligations failed. Task 8 must exercise a real QA publication and
-resolve the narrow producer/mapping gap before claiming the 84/366-sample
-acceptance coverage. No normalized trace or summary is relabeled as native or
-complete delivery evidence.
+Task 6 introduced independent interaction, check, criterion and quantity
+observations with unverified assessment scope labeled explicitly. Task 8's
+production QA capture/publication fixture now proves selected native logs survive
+private-home removal, valid QA criterion rows survive the producer projection,
+and the exact Gauntlet event stream plus authenticated capture twins can support
+visible-evidence dependencies. Normalized traces are validated at the two exact
+producer paths; candidate-created nested aliases supply no such authority.
+
+QA still has no independent authenticated conversation endpoint record, so its
+interaction-completion measurement remains unavailable. That does not gate valid
+QA check or criterion comparisons: delivery readiness is recorded separately for
+each measurement. Capture presence does not establish complete delivery or the
+correctness of an interpretation. A report receipt does not imply that every
+release obligation is complete, and these offline gates do not establish the
+84/366-sample live acceptance coverage or instrument accuracy.

@@ -78,7 +78,7 @@ test('routine-use suite declares the fixed 36-attempt paired matrix', () => {
   expect(suite.reserve).toBe(0);
   expect(suite.attempt_bounds).toEqual({
     max_attempts: 1,
-    max_time_s: 900,
+    max_time_s: 2100,
   });
 
   expect(

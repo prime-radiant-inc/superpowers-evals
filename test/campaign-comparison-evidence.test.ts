@@ -516,7 +516,11 @@ function conversationPublication(
     },
     'visible.json': { text: 'delivered' },
     'evidence/checks.json': checks,
-    'evidence/trajectory.json': { steps: [] },
+    'evidence/trajectory.json': {
+      schema_version: 'ATIF-v1.7',
+      agent: { name: 'fixture', version: '1' },
+      steps: [{ step_id: 1, source: 'agent', message: 'invoked' }],
+    },
     'evidence/native/session.json': { text: 'invoked' },
     'evidence/output/source.txt': { text: 'source' },
     [`${out}/result.json`]: result,

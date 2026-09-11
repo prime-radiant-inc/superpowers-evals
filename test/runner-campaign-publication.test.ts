@@ -46,6 +46,7 @@ for (const fault of [
   'native-alias',
   'trace-alias',
   'corrupt-trace',
+  'malformed-trace',
   'corrupt-visible',
   'source-mismatch',
 ] as const)
@@ -138,6 +139,11 @@ for (const fault of [
         );
         rmSync(join(runResult.runDir, 'trajectory.json'));
       }
+      if (fault === 'malformed-trace')
+        writeFileSync(
+          join(runResult.runDir, 'trajectory.json'),
+          JSON.stringify({ steps: [{}] }),
+        );
       if (fault === 'corrupt-trace')
         writeFileSync(join(runResult.runDir, 'trajectory.json'), '{bad');
       if (fault === 'corrupt-visible')
