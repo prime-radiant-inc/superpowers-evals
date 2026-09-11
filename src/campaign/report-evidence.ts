@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import type { AtifTrajectory } from '../atif/types.ts';
+import { validateTrajectory } from '../atif/validate.ts';
 import {
   type CampaignIdentity,
   CampaignIdentitySchema,
@@ -193,10 +195,14 @@ export function readAttemptEvidence(args: {
       fail('checks', 'malformed authenticated check artifact');
     }
   }
-  if (bodies.has(`${runId}/trajectory.json`)) {
-    const trajectory = json('trajectory.json');
-    if (!Array.isArray(trajectory['steps']) || trajectory['steps'].length === 0)
-      fail('normalized_trace', 'malformed or empty normalized trajectory');
+  for (const path of ['trajectory.json', 'evidence/trajectory.json']) {
+    if (!bodies.has(`${runId}/${path}`)) continue;
+    try {
+      if (!validateTrajectory(json(path) as unknown as AtifTrajectory).ok)
+        throw new Error('invalid normalized trajectory');
+    } catch {
+      fail('normalized_trace', `malformed normalized trajectory: ${path}`);
+    }
   }
   if (object(v['error'])['stage'] === 'capture')
     fail(
@@ -501,7 +507,8 @@ export function measureAttempt(
   ): ArtifactRef[] => {
     const matches = (path: string) =>
       kind === 'normalized_trace'
-        ? path === `${runRoot}/trajectory.json`
+        ? path === `${runRoot}/trajectory.json` ||
+          path === `${runRoot}/evidence/trajectory.json`
         : kind === 'native_session'
           ? path.startsWith(`${runRoot}/evidence/native/`)
           : kind === 'output'
