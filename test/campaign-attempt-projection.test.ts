@@ -145,9 +145,12 @@ test('projection writes exact private files and synthesized identity files', () 
 
 test('colon-bearing attempt paths run local npm binaries and preserve logical ids', () => {
   const fx = projectionFixture();
-  const attemptIds = ['c1:s', 'c1%3As'];
+  const attemptIds = ['c1:s', 'c1%3As'] as const;
   try {
-    const preparedStages = attemptIds.map((attemptId) => stage(fx, attemptId));
+    const preparedStages = [
+      stage(fx, attemptIds[0]),
+      stage(fx, attemptIds[1]),
+    ] as const;
     const prepared = preparedStages[0];
     const codingAgentWorkdir = join(
       prepared.stagingDir,
