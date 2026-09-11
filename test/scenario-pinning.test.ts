@@ -13,6 +13,13 @@ import { repoRoot } from '../src/paths.ts';
 const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   // PR 2258 pilot uses Codex rollout anchors and its xhigh config fragment.
   'brainstorming-todo-shared-intent',
+  // Spec-to-plan handoff experiments freeze Codex model variants and depend on
+  // Codex transcript capture. Other harnesses remain outside this evidence set.
+  'brainstorming-spec-handoff-cancel',
+  'brainstorming-spec-handoff-fallback',
+  'brainstorming-spec-handoff-source-identity',
+  'writing-plans-source-identity-a',
+  'writing-plans-source-identity-b',
   'codex-windows-session-start-hook',
   'codex-subagent-wait-mapping',
   'codex-tool-mapping-comprehension',
