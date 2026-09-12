@@ -1,30 +1,138 @@
 # Repeatable PR and release validation — 2026-09-10
 
-Status: two reduced F28 comparisons are now complete. The fresh run after
-PR #68 retained all 28 attempts, cost $27.5884959 estimated with complete
-accounting, and published in 24m57s from execution acceptance. All 156
-executable checks passed; original composed outcomes are 24 pass, one fail,
-and three indeterminate. Evidence review found that the no-spec shell fix
-works, but percent-encoded attempt paths still interfere with Vite module
-resolution. Original reports, grading disagreements and missing external
-outputs remain visible. Publication/throughput are demonstrated; clean
-product-toolchain and semantic acceptance are not. R118 remains held and
-original 84/366 acceptance is deferred.
+Status: three reduced F28 comparisons are complete. The latest run after
+PR #69 publishes all 28 attempts in 23m21s for $29.174410925 estimated, with
+complete accounting. All 156 executable checks pass; original composed
+outcomes are 22 pass and six fail. Real toolchain execution and retained
+outputs are inspected separately from the uncalibrated grading results.
+Prior failures, grading disagreements and simulator limitations remain visible.
+R118 remains held and original 84/366 acceptance is deferred.
 
 ## Focused path verification after PR #69 — 2026-09-11
 
-Status: running. Drew authorized campaign
-`63a17c67-8767-404d-9960-98fd7b62969e` to verify the physical path correction
-in the same F28 comparison. Ordinary appliance preparation succeeded at Evals
-`bc8cce83dc42ab6e8ca92ce54624512d92c30617` and unchanged Gauntlet
-`aa08b72989fe59c57362c42f5d1bfe2c26417253`. Registration matches the preceding
-F28 in all experimental fields: same frozen baseline/candidate, 28 planned
-samples, n=1, cap eight, zero reserves/replacements, budgets, grading route and
-pricing. Only campaign identity/input digest, registration timestamp and Evals
-source revision differ. The first eight prepared directories use ASCII names;
-this confirms deployment but does not establish module execution or retention.
-The finished record will preserve original grades and evidence limits. R118
-remains held.
+Campaign `63a17c67-8767-404d-9960-98fd7b62969e` completed the authorized
+same F28 comparison after the physical-path correction. Ordinary appliance
+preparation succeeded at Evals `bc8cce83dc42ab6e8ca92ce54624512d92c30617`
+and unchanged Gauntlet `aa08b72989fe59c57362c42f5d1bfe2c26417253`.
+Baseline remains v6.3.0 `b36e0829c6d0140e93cfef2ca599b1b07d4a7797`,
+candidate remains dev `3a8bdc11e1db42955350d6d6f063f7a8e89aef58`.
+Registration comparison verifies every experimental field and summary unchanged
+from the preceding F28: 28 planned samples, n=1, cap eight, zero reserves or
+replacements, same subject routes, direct-Anthropic Sonnet grading, budgets and
+frozen pricing. Only campaign identity/input digest, timestamp and Evals SHA
+differ. No qualification record was attached.
+
+### Publication, timing and accounting
+
+Execution accepted `2026-09-12T00:14:29.608Z`, ended `00:37:46.397Z`, and
+published `00:37:50.844Z`: **1,401.236 seconds (23m21s)** from acceptance to
+publication. All 28 attempts are published and termination-verified. Subject
+cost is **$17.818844925**, grader **$11.355566**, combined **$29.174410925**;
+all three have 28/28 complete coverage under frozen estimates, not invoices.
+Summed attempt duration is 9,577.068 seconds, not campaign elapsed. The 137
+host samples record zero guard breaches, peak one-minute load 3.36 and no swap.
+Post-run doctor reports healthy with no run or sync lock.
+
+All **156 executable checks pass**. Criterion rows are **109 pass / seven
+fail**, all 116 with complete readiness and `not_calibrated` qualification.
+All 28 detail records are complete. Four conversation interactions have explicit
+completion records; the other 24 independent interaction endpoints remain
+unavailable by the fused-QA contract. All four assessments complete with valid
+native reports. Claude baseline conversation-design exits 1 for its accepted
+fail report; that is the CLI's verdict exit convention, not an assessment crash.
+No assessment timeout or indeterminate result occurred.
+
+Canonical report digest:
+`0a16093f66b4e300a81c0032a13b559fe7d3ef91020fd01b78e1c514ee6799c2`.
+Report, seal and delivery are retained at
+`/srv/quorum/superpowers-evals/campaigns/63a17c67-8767-404d-9960-98fd7b62969e-validation_focused`.
+All **1,188 selected files** from the 28 attempts match the canonical anchor's
+SHA-256 entries, and the downloaded report matches its delivery digest. Native
+sessions and raw artifacts remain private. Root and two reviewers inspected
+retained evidence; these are agent audits, not human gold or calibration.
+
+### Recorded outcomes, unchanged
+
+| Scenario | Claude v6.3.0 | Claude dev | Codex v6.3.0 | Codex dev |
+| --- | --- | --- | --- | --- |
+| companion just-in-time | fail | pass | pass | pass |
+| resists jump to implementation | pass | pass | pass | pass |
+| todo purpose discovery | fail | pass | fail | pass |
+| conversation design | fail | pass | pass | pass |
+| spec/plan duplication | pass | fail | pass | pass |
+| no-brainstorm preference | pass | pass | pass | pass |
+| conversational no-spec plan | pass | pass | fail | pass |
+
+The total is **22 pass / six fail / zero indeterminate**. These labels remain
+visible independently of the evidence findings below; their differences do not
+establish a causal release improvement at n=1.
+
+### Live path and evidence findings
+
+- **The observed path regression is corrected live.** Claude purpose baseline
+  runs two actual Vitest tests successfully in the original ASCII attempt
+  directory, retaining the component, test and configuration. Claude
+  no-brainstorm candidate builds 31 Vite modules in its retained project.
+  Both Codex purpose and both Codex no-brainstorm runs exercise real imports,
+  Vitest and Vite under retained nested worktrees. No subject execution shows
+  the prior encoded/decoded-path failure, missing npm executable, or product
+  relocation to `/tmp`. The relevant authored files are retained in all four
+  purpose runs, unlike the preceding campaign. Successful tool execution does
+  not by itself establish complete app behavior: initial missing-component red
+  runs, test-configuration errors and later application/test assertion failures
+  remain in the traces. Claude purpose candidate instead uses CDN React and
+  successfully compiles its retained JSX; that is not another Vite or browser
+  interaction test. Its temporary compiler install is not product relocation.
+- **Two narrow Claude failures have direct support.** Baseline companion puts
+  a React/Recharts question and companion offer in one native assistant text
+  block; candidate offers separately. Baseline purpose requests execution
+  method only and receives method only, then writes product files without
+  explicit saved-plan approval; candidate requests and receives plan review
+  plus execution method. These observations support those specific criteria,
+  not every judgment in the same reports.
+- **Purpose draft-permission grading remains inconsistent.** Both Codex arms
+  write their spec after scope-only approval and ask for review afterward.
+  Baseline is penalized while candidate's grader explicitly excuses that
+  ordering. Baseline's negative can fit the strict frozen criterion, but the
+  pass/fail pair does not establish a revision improvement. Separately, its
+  method-only plan handoff receives unsolicited plan approval from the
+  simulator; candidate actually asks both questions. Claude's purpose-answer
+  stimulus also differs: baseline receives a learning-demo option selection,
+  candidate the full prescribed state/events learning sentence. Draft
+  permission versus saved-artifact approval and stimulus differences remain
+  visible rather than being resolved by aggregate labels.
+- **Browser-scope and no-spec judgments have paired disputes.** Claude
+  conversation baseline selects a single-page, in-memory scope but is failed
+  for not clarifying browser access protocol, an additional demand absent from
+  the frozen criterion. Candidate has explicit browser-local/no-server wording.
+  Preserve both grades without treating the failed row as an established
+  product defect. Both Codex no-spec plans disclose no separate spec and put
+  the concrete version requirements in Global Constraints below the Spec line;
+  baseline fails that placement and candidate passes it. Both Claude plans put
+  the requirements directly in the header. All four deliver a plan without
+  fabricating a spec; the Codex label difference is not a clean artifact change.
+- **Duplication remains an uncalibrated document judgment.** Both Claude plans
+  reference their specs, repeat global constraints and add extensive code and
+  tests. Baseline passes and candidate fails; the candidate grader's
+  nearly-verbatim claim and line-count ratio overstate the demonstrated
+  repetition. Agreed scopes differ substantially. Both Codex plans pass and
+  retain real spec references and implementation detail. No plan-size or cost
+  difference here establishes an isolated economy regression or improvement.
+- **Useful behavior and simulator limits coexist.** All four arms honor the
+  no-brainstorm preference, and notification runs show clarification before
+  product work. Several simulations continue past their declared stopping
+  points into full specs, implementation, builds or handoffs; Claude baseline
+  resists-jump is explicitly steered toward TDD by the simulator. Recorded
+  cost includes that extra work. Conversation proposals remain prospective
+  and preserve the seeded page; Codex candidate's task-enrollment inference
+  and present-tense testing phrase remain assessor-noted ambiguities.
+
+This campaign supplies live evidence for the physical-path correction and again
+meets the focused execution/publication target within minutes. It preserves
+useful behavioral observations alongside six original failures, disputed
+judgments and protocol variation. The grading instrument remains uncalibrated;
+this record does not authorize R118 or establish broader release acceptance.
+No additional campaign, source change or grader experiment followed this run.
 
 ## Fresh focused comparison after PR #68 — 2026-09-11
 
