@@ -11,6 +11,21 @@ outputs remain visible. Publication/throughput are demonstrated; clean
 product-toolchain and semantic acceptance are not. R118 remains held and
 original 84/366 acceptance is deferred.
 
+## Focused path verification after PR #69 — 2026-09-11
+
+Status: running. Drew authorized campaign
+`63a17c67-8767-404d-9960-98fd7b62969e` to verify the physical path correction
+in the same F28 comparison. Ordinary appliance preparation succeeded at Evals
+`bc8cce83dc42ab6e8ca92ce54624512d92c30617` and unchanged Gauntlet
+`aa08b72989fe59c57362c42f5d1bfe2c26417253`. Registration matches the preceding
+F28 in all experimental fields: same frozen baseline/candidate, 28 planned
+samples, n=1, cap eight, zero reserves/replacements, budgets, grading route and
+pricing. Only campaign identity/input digest, registration timestamp and Evals
+source revision differ. The first eight prepared directories use ASCII names;
+this confirms deployment but does not establish module execution or retention.
+The finished record will preserve original grades and evidence limits. R118
+remains held.
+
 ## Fresh focused comparison after PR #68 — 2026-09-11
 
 Campaign `a1cffcff-bb74-42a9-a5ce-f920af4be4ad` ran the same frozen F28 once,
