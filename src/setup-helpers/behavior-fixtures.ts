@@ -547,3 +547,99 @@ export function createFinishingBranchWorktree(ctx: HelperContext): void {
     'utf8',
   );
 }
+
+// ─── code_review_planted_migration ──────────────────────────────────
+// A schema change whose defects live in the migration's operational
+// behavior rather than in the code's correctness: it is irreversible, it
+// rewrites a large table unbatched and untransacted, and the application
+// code in the same commit reads columns that do not exist until it runs.
+// A reviewer reading only for correctness finds nothing wrong — the JS is
+// clean and the SQL is valid.
+
+const MIGRATION_PACKAGE_JSON = `{
+  "name": "contacts-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module"
+}
+`;
+
+const MIGRATION_001 = `-- 001_init.sql
+CREATE TABLE users (
+  id           BIGSERIAL PRIMARY KEY,
+  full_name    TEXT NOT NULL,
+  email        TEXT NOT NULL UNIQUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX users_email_idx ON users (email);
+`;
+
+const MIGRATION_DB_INITIAL = `import { query } from './pool.js';
+
+export async function getUser(id) {
+  const rows = await query('SELECT id, full_name, email FROM users WHERE id = $1', [id]);
+  return rows[0] ?? null;
+}
+
+export async function listUsers(limit = 50) {
+  return query('SELECT id, full_name, email FROM users ORDER BY id LIMIT $1', [limit]);
+}
+`;
+
+const MIGRATION_002 = `-- 002_split_name.sql
+ALTER TABLE users ADD COLUMN first_name TEXT;
+ALTER TABLE users ADD COLUMN last_name  TEXT;
+
+UPDATE users
+   SET first_name = split_part(full_name, ' ', 1),
+       last_name  = substr(full_name, strpos(full_name, ' ') + 1);
+
+ALTER TABLE users ALTER COLUMN first_name SET NOT NULL;
+ALTER TABLE users ALTER COLUMN last_name  SET NOT NULL;
+
+ALTER TABLE users DROP COLUMN full_name;
+`;
+
+const MIGRATION_DB_PLANTED = `import { query } from './pool.js';
+
+export async function getUser(id) {
+  const rows = await query(
+    'SELECT id, first_name, last_name, email FROM users WHERE id = $1',
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+export async function listUsers(limit = 50) {
+  return query(
+    'SELECT id, first_name, last_name, email FROM users ORDER BY id LIMIT $1',
+    [limit],
+  );
+}
+
+export function displayName(user) {
+  return [user.first_name, user.last_name].filter(Boolean).join(' ');
+}
+`;
+
+export function createCodeReviewPlantedMigration(ctx: HelperContext): void {
+  ensureWorkdir(ctx.workdir);
+  runGit(['init', '-b', 'main'], ctx.workdir);
+  runGit(['config', 'user.email', 'drill@test.local'], ctx.workdir);
+  runGit(['config', 'user.name', 'Drill Test'], ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'package.json', MIGRATION_PACKAGE_JSON);
+  writeFixtureFile(ctx.workdir, 'migrations/001_init.sql', MIGRATION_001);
+  writeFixtureFile(ctx.workdir, 'src/db.js', MIGRATION_DB_INITIAL);
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(['commit', '-m', 'initial: users table with full_name'], ctx.workdir);
+
+  writeFixtureFile(ctx.workdir, 'migrations/002_split_name.sql', MIGRATION_002);
+  writeFixtureFile(ctx.workdir, 'src/db.js', MIGRATION_DB_PLANTED);
+  runGit(['add', '-A'], ctx.workdir);
+  runGit(
+    ['commit', '-m', 'split full_name into first_name and last_name'],
+    ctx.workdir,
+  );
+}
