@@ -34,10 +34,10 @@ export function isSkillInvocation(
   // 2. Shell tools: Bash, Shell, LocalShellCall
   if (/^(Bash|Shell|LocalShellCall)$/.test(call.tool ?? '')) {
     const cmd = String(call.args['command'] ?? call.args['cmd'] ?? '');
-    // Leading boundary: start-of-string or [\s'"/]
-    // Trailing boundary: end-of-string or [\s'";]
+    // Leading boundary: start-of-string or [\s'"/`]
+    // Trailing boundary: end-of-string or [\s'";`]
     const shellRe = new RegExp(
-      `(^|[\\s'"/])(skills/(superpowers/)?)?${safeDir}/SKILL\\.md([\\s'";]|$)`,
+      `(^|[\\s'"/\`])(skills/(superpowers/)?)?${safeDir}/SKILL\\.md([\\s'";\`]|$)`,
     );
     return shellRe.test(cmd);
   }

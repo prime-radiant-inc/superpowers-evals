@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "phase": "pre",
+      "check": "git-repo",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "git-branch",
+      "args": [
+        "main"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "assert-checkout-clean",
+      "args": [],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/specs/approved-cancellable-import-design.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/specs/cancellable-import-design.original.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/specs/cancellable-import-design.tentative.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/specs/cancellable-import-design.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": [
+        "cmp -s docs/superpowers/specs/cancellable-import-design.md docs/superpowers/specs/cancellable-import-design.tentative.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "pre",
+      "check": "command-succeeds",
+      "args": null,
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "skill-called",
+      "args": [
+        "superpowers:brainstorming"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "cmp -s docs/superpowers/specs/cancellable-import-design.md docs/superpowers/specs/cancellable-import-design.original.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": [
+        "git diff --quiet HEAD^ -- docs/superpowers/specs/cancellable-import-design.original.md docs/superpowers/specs/cancellable-import-design.tentative.md docs/superpowers/specs/approved-cancellable-import-design.md"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "command-succeeds",
+      "args": null,
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "file-exists",
+      "args": [
+        "docs/superpowers/plans"
+      ],
+      "negated": true,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-count",
+      "args": [
+        "commits",
+        "gte",
+        "2"
+      ],
+      "negated": false,
+      "count": 1
+    },
+    {
+      "phase": "post",
+      "check": "git-clean",
+      "args": [],
+      "negated": false,
+      "count": 1
+    }
+  ]
+}
