@@ -144,6 +144,27 @@ test('reports content and mode drift from the declared baseline', () => {
   }
 });
 
+test('accepts umask-driven group-write bits as git-normalized modes', () => {
+  const scenarioDir = tempDir();
+  const files: FixtureFile[] = [
+    { path: PLAN, content: 'PLAN\n' },
+    { path: SPEC, content: 'SPEC\n' },
+    { path: 'tools/run.sh', content: '#!/bin/sh\n', mode: '100755' },
+  ];
+  for (const file of files) writeFixture(scenarioDir, file);
+  writeManifest(scenarioDir, files);
+  try {
+    // git records only 100644/100755; checkout permission bits follow the
+    // host umask (0664/0775 under Ubuntu's default 002), so verification
+    // must compare git-normalized modes, not raw bits.
+    chmodSync(join(scenarioDir, 'fixtures', PLAN), 0o664);
+    chmodSync(join(scenarioDir, 'fixtures', 'tools/run.sh'), 0o775);
+    expect(validateBaselineManifest(scenarioDir)).toEqual([]);
+  } finally {
+    rmSync(scenarioDir, { recursive: true, force: true });
+  }
+});
+
 test('rejects unsafe, duplicate, and unsorted manifest file paths', () => {
   const { scenarioDir } = validScenario();
   try {

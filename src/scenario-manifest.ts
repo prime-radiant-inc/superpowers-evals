@@ -244,7 +244,10 @@ function digestAt(rootDir: string, relativePath: string): string {
 }
 
 function gitMode(stat: Stats): string {
-  return `100${(stat.mode & 0o7777).toString(8).padStart(3, '0')}`;
+  // git records only 100644/100755 for regular files; permission bits beyond
+  // the exec bit follow the host umask at checkout (0664 under Ubuntu's
+  // default 002) and must not count as drift.
+  return (stat.mode & 0o111) !== 0 ? '100755' : '100644';
 }
 
 function comparePaths(left: string, right: string): number {

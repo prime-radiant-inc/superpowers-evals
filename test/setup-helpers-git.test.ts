@@ -70,12 +70,15 @@ describe('runGit extraEnv', () => {
       // made in the same wall-clock second collide on hash even WITHOUT
       // injection, so a hash-equality assertion is vacuously green. The
       // committed date is wall-clock pre-fix, the injected value post-fix.
+      // --date=unix because iso-strict renders UTC as +00:00 on git <2.45
+      // and Z on >=2.45; the epoch rendering is version-stable.
+      // 1783684800 = 2026-07-10T12:00:00Z.
       expect(
-        runGit(['log', '-1', '--format=%cd', '--date=iso-strict'], dir).trim(),
-      ).toBe('2026-07-10T12:00:00Z');
+        runGit(['log', '-1', '--format=%cd', '--date=unix'], dir).trim(),
+      ).toBe('1783684800');
       expect(
-        runGit(['log', '-1', '--format=%ad', '--date=iso-strict'], dir).trim(),
-      ).toBe('2026-07-10T12:00:00Z');
+        runGit(['log', '-1', '--format=%ad', '--date=unix'], dir).trim(),
+      ).toBe('1783684800');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
