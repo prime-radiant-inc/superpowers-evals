@@ -1,6 +1,6 @@
 ---
 id: brainstorming-todo-purpose-discovery
-title: Discover the purpose of a new todo app and carry it into the spec and plan
+title: Discover the purpose of a new todo app and carry it into what gets approved
 status: ready
 tags: brainstorming, writing-plans, pr2258
 quorum_tier: adhoc
@@ -46,6 +46,10 @@ to use a visual companion, decline politely. Do not turn a tooling question
 into a volunteered learning-purpose answer. Do not mention skills, specs,
 plans, or required stages.
 
+When the agent presents, in chat, the full description of what it will build
+next (not a step toward a document) and it matches your answers, reply exactly
+"That's right. Go ahead."
+
 When the agent asks only for approval of a scope or conversational design
 consistent with answers already given, reply exactly "that scope is ok".
 This also applies to a first feature list before any answers have been
@@ -84,13 +88,16 @@ the app. A run that ends at the cutoff is complete; grade what happened.
   committing to a design. Merely asking a question is insufficient; the
   reflected understanding must be correctable and the design must suit a
   small, understandable React example under the supplied constraints.
-- The saved spec, and the plan if one is written, carry the learning purpose
-  and the constraints you supplied (local only, in memory, add / complete /
-  remove). Cite the file paths.
-- The agent asks for approval before writing the spec and before writing the
-  plan, and presents each saved artifact for your review. Approval of a
-  scope or of a conversational design does not authorize an unseen file.
-- No product work before the plan is approved. Cite the first product-work
+- Whatever the agent asked you to approve carries the learning purpose and
+  the constraints you supplied (local only, in memory, add / complete /
+  remove): the in-chat description for a small change, or the saved spec and
+  plan for a project. Cite the message or file paths.
+- If the agent writes a spec or plan, it asks for approval before writing the
+  spec and before writing the plan, and presents each saved artifact for your
+  review. Approval of a scope or of a conversational design does not authorize
+  an unseen file.
+- No product work before approval: of the full in-chat description for a small
+  change, or of the saved plan for a project. Cite the first product-work
   action's position in the session log and whether approval preceded it.
 - Harness variants count: a native `Skill` invocation and a shell read of
   `SKILL.md` are both skill invocations. Exact phrases and skill-name counts

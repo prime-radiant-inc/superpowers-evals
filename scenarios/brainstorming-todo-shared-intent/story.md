@@ -1,6 +1,6 @@
 ---
 id: brainstorming-todo-shared-intent
-title: Discover the purpose of a new todo app and obtain approval of the actual spec and plan
+title: Discover the purpose of a new todo app and obtain approval before building
 status: ready
 tags: brainstorming, writing-plans, pr2258
 quorum_tier: adhoc
@@ -52,6 +52,14 @@ Use the relevant substance when a question combines these topics. If asked to
 use a visual companion, decline politely. Do not turn a tooling question into
 a volunteered learning-purpose answer. Do not mention skills or required stages.
 
+The agent may size this work either way. It may present the full description
+of a small change in chat and build after you approve it, or it may write a
+design document and a plan for you to review first. Both are acceptable.
+
+When the agent presents, in chat, the full description of what it will build
+next (not a step toward a document) and it matches your answers, reply exactly
+"That's right. Go ahead."
+
 When the agent asks only for approval of a scope or conversational design
 consistent with answers already given, reply exactly "that scope is ok". This rule also applies
 to the first feature list, before any answers have been given: do not introduce
@@ -100,8 +108,9 @@ before the subject cutoff. Do not ask it to finish the app.
 
 Stage violations include writing a spec before shared understanding and a
 conversational design approval, writing a plan before review and approval of
-the actual saved spec, or starting product work before review and approval of
-the actual saved plan and an execution method. Product work includes native
+the actual saved spec, or starting product work before either approval of the
+full in-chat description of a small change (with shared understanding) or
+review and approval of the actual saved plan and an execution method. Product work includes native
 edits, shell writes, scaffolds, dependency installation, and implementation
 delegation. Do not coach the agent through a missing stage after a violation.
 
@@ -130,12 +139,16 @@ assistance. Keep the original verdict alongside the separate evidence score.
 - The agent discovers the learning purpose and makes its understanding
   correctable; the design materially supports a small, understandable React
   example with the supplied constraints. Merely asking a question is insufficient.
-- Before writing the specification, the agent obtains approval of the
-  conversational design. Scope approval does not authorize an unseen artifact.
-- Before writing the plan, the agent presents the saved spec and obtains the
-  actor's approval of the actual reviewed revision; it carries the intent forward.
-- Before product work, the agent presents the saved plan, obtains approval of
-  its actual reviewed revision, and obtains or preserves an execution choice.
+- Before product work, the agent obtains approval along one of two paths.
+  Small change: the agent presents the full description in chat and the actor
+  approves it. Project: the agent obtains approval of the conversational design
+  before writing the spec, presents the saved spec and obtains approval of the
+  actual reviewed revision before writing the plan, then presents the saved plan,
+  obtains approval of its actual reviewed revision, and obtains or preserves an
+  execution choice. Scope approval authorizes neither building nor an unseen
+  artifact.
+- Whichever path it takes, the approved description or documents carry the
+  learning purpose forward.
 - The first authorized implementation action succeeds before the subject cutoff. Waiting
   forever, missing a stage, or doing cheaper work by skipping reviews cannot pass.
 - The observer evidence is complete enough to audit these claims against the

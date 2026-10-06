@@ -14,8 +14,8 @@ post() {
     # Native Write/Edit only; shell writes are the Gauntlet-Agent's to judge.
     check-transcript skill-before-implementation-tool superpowers:brainstorming Write
     check-transcript skill-before-implementation-tool superpowers:brainstorming Edit
-    # A new project must produce a saved spec, and the spec must carry the
-    # hidden learning purpose the actor only reveals when asked.
-    file-exists 'docs/superpowers/specs/*.md'
-    command-succeeds 'grep -qiE "learn" docs/superpowers/specs/*.md'
+    # The agent may size this as a small change agreed in chat (no spec) or a
+    # project with a saved spec. A saved spec must carry the hidden learning
+    # purpose the actor only reveals when asked.
+    command-succeeds 'for f in docs/superpowers/specs/*.md; do [ -e "$f" ] || exit 0; grep -qiE "learn" "$f" || exit 1; done'
 }

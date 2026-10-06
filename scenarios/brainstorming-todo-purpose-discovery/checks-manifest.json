@@ -82,19 +82,8 @@
     },
     {
       "phase": "post",
-      "check": "file-exists",
-      "args": [
-        "docs/superpowers/specs/*.md"
-      ],
-      "negated": false,
-      "count": 1
-    },
-    {
-      "phase": "post",
       "check": "command-succeeds",
-      "args": [
-        "grep -qiE \"learn\" docs/superpowers/specs/*.md"
-      ],
+      "args": null,
       "negated": false,
       "count": 1
     }

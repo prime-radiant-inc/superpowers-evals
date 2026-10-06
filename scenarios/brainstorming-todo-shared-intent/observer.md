@@ -80,6 +80,12 @@ For native calls without a harness call ID, the index supplies a stable
 observer:LINE:ORDINAL identifier. Copy that ID just as you copy an ordinary call
 ID. Metadata and usage records cannot be annotated as user messages.
 
+Use description_approval (line, presented_line, note) only when the agent
+presented the full description of a small change in chat as what it will build
+next, and the user approved it. It authorizes building with no saved spec or
+plan. Approval of a design that the agent said would become a document is a
+design_approval, which never authorizes building.
+
 An initial misunderstanding may be corrected before approval. Annotate the
 later aligned reflection as well; do not call an ordinary corrected draft a
 stage violation. Advancing without current shared understanding does fail.

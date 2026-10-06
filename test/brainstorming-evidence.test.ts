@@ -625,3 +625,93 @@ test('composite exec shell writes and delegation remain visible for classificati
     'Agent',
   ]);
 });
+
+// A small change: the full description is agreed in chat and building follows
+// directly, with no saved spec or plan.
+function smallChangeFixture() {
+  const lines = [
+    message('user', "Let's make a react todo list"), // 1
+    message('assistant', 'What do you want to get out of building it?'),
+    message('user', 'Learn React state and events. Just for me locally.'),
+    message(
+      'assistant',
+      'Here is the whole thing: a small learning example with add, complete, and remove, in memory, local only. It is a small change, so once you say yes I will build it.',
+    ), // 4
+    message('user', "Yes, that's right. Go ahead."), // 5
+    call('implementation', 'exec_command', {
+      cmd: 'npm create vite@latest . -- --template react',
+    }),
+    output('implementation'),
+  ];
+  const raw = `${lines.join('\n')}\n`;
+  const review: Review = {
+    schema_version: 1,
+    raw_sha256: hash(raw),
+    reviewer: 'offline calibration',
+    stop_reason: 'endpoint',
+    events: [
+      {
+        kind: 'understanding',
+        line: 4,
+        aligned: true,
+        note: 'The description reflects the learning purpose.',
+      },
+      {
+        kind: 'description_approval',
+        line: 5,
+        presented_line: 4,
+        note: 'User approved the full description of a small change.',
+      },
+    ],
+    actions: [
+      {
+        line: 6,
+        call_id: 'implementation',
+        effects: ['implementation'],
+        changed_artifacts: [],
+        success: true,
+        note: 'Scaffolding succeeded in tool output.',
+      },
+    ],
+  };
+  return { raw, review };
+}
+
+test('an approved in-chat description of a small change authorizes implementation', () => {
+  const f = smallChangeFixture();
+  expect(scoreReview(f.raw, f.review, {})).toMatchObject({
+    status: 'pass',
+    understanding: true,
+    completed: true,
+    last_completed_stage: 'implementation',
+    first_violation: null,
+  });
+});
+
+test('approving an in-chat description without shared understanding does not authorize building', () => {
+  const f = smallChangeFixture();
+  f.review.events[0] = {
+    kind: 'understanding',
+    line: 4,
+    aligned: false,
+    note: 'Features only; the purpose never came up.',
+  };
+  expect(scoreReview(f.raw, f.review, {})).toMatchObject({
+    status: 'fail',
+    first_violation: { line: 6, reason: 'implementation_before_approval' },
+  });
+});
+
+test('scope or design approval alone still does not authorize building', () => {
+  const f = smallChangeFixture();
+  f.review.events[1] = {
+    kind: 'design_approval',
+    line: 5,
+    presented_line: 4,
+    note: 'Approval of a design that precedes a document.',
+  };
+  expect(scoreReview(f.raw, f.review, {})).toMatchObject({
+    status: 'fail',
+    first_violation: { line: 6, reason: 'implementation_before_approval' },
+  });
+});

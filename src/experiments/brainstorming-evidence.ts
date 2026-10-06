@@ -75,6 +75,16 @@ const EventSchema = z.discriminatedUnion('kind', [
       note,
     })
     .strict(),
+  // Approval of the full description of a small change, presented in chat as
+  // what will be built. Unlike design_approval, it authorizes building.
+  z
+    .object({
+      kind: z.literal('description_approval'),
+      line,
+      presented_line: line,
+      note,
+    })
+    .strict(),
   z
     .object({
       kind: z.literal('artifact_approval'),
@@ -213,6 +223,7 @@ interface Score {
     | 'none'
     | 'understanding'
     | 'design'
+    | 'description'
     | 'spec'
     | 'plan'
     | 'implementation';
@@ -339,6 +350,7 @@ export function scoreReview(
     }
 
     let design = false;
+    let description = false;
     let spec = false;
     let plan = false;
     let method = false;
@@ -353,6 +365,7 @@ export function scoreReview(
           result.understanding = event.aligned;
           if (!event.aligned) {
             design = false;
+            description = false;
             spec = false;
             plan = false;
           }
@@ -362,6 +375,9 @@ export function scoreReview(
           // design with shared understanding authorizes a specification write.
           design = result.understanding;
           if (design) result.last_completed_stage = 'design';
+        } else if (event.kind === 'description_approval') {
+          description = result.understanding;
+          if (description) result.last_completed_stage = 'description';
         } else if (event.kind === 'execution_choice') {
           method = true;
         } else {
@@ -403,7 +419,8 @@ export function scoreReview(
           action.effects.includes('implementation') ||
           action.effects.includes('delegation');
         // An indivisible call cannot obtain approval of an artifact it changes.
-        if (product && (!plan || !method || changedSpec || changedPlan)) {
+        const planned = plan && method && !changedSpec && !changedPlan;
+        if (product && !planned && !description) {
           violation(action.line, 'implementation_before_approval');
         }
         if (changedSpec) {
@@ -414,8 +431,7 @@ export function scoreReview(
         if (
           product &&
           action.success &&
-          plan &&
-          method &&
+          ((plan && method) || description) &&
           !result.first_violation
         ) {
           result.completed = true;
