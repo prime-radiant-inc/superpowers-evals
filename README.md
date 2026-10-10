@@ -315,6 +315,9 @@ costs.
 
 ## Operator Guides
 
+- [quick-evals/README.md](quick-evals/README.md) - fast local tools that
+  drive real sessions against simulated humans on your own logins, for
+  tuning a skill before a quorum run. Not isolated; read its safety notes.
 - [docs/scenario-authoring.md](docs/scenario-authoring.md) - scenario anatomy,
   story/AC craft, setup helpers, check verbs, and authoring traps.
 - [docs/appliance-runbook.md](docs/appliance-runbook.md) - shared remote
