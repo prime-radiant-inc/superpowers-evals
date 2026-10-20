@@ -62,6 +62,10 @@ physical_file() {
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 evals_root=$(cd "$script_dir/.." && pwd -P)
 image_tag="superpowers-evals:local"
+# The everyharness base image publishes linux/amd64 only. Without an explicit
+# platform, Docker on an arm64 host asks for arm64 and the build fails with
+# "no match for platform in manifest"; pinning it runs under emulation instead.
+image_platform="linux/amd64"
 
 container_name=""
 superpowers_root=""
@@ -528,6 +532,7 @@ run_up() {
   local run_args=(
     -d
     --init
+    --platform "$image_platform"
     --name "$container_name"
     --user "$(id -u):$(id -g)"
     --workdir /workspace/evals
@@ -610,6 +615,7 @@ case "$command" in
   build)
     resolve_gauntlet_root
     docker build \
+      --platform "$image_platform" \
       --build-context "gauntlet=$gauntlet_root" \
       -t "$image_tag" \
       -f "$evals_root/container/Dockerfile" \

@@ -102,7 +102,7 @@ case "$1" in
     # Faithful to real docker run: "$1" here is the fake-Docker
     # subcommand itself, so the positional arguments start at index 2 and
     # the FIRST non-flag token after the known value-taking options
-    # (--name, --cidfile, --user, --workdir, --env, --mount, plus their =
+    # (--name, --cidfile, --platform, --user, --workdir, --env, --mount, plus their =
     # forms) is the image; everything after the image is the container
     # command. An option-position-blind scan would let a misplaced option
     # pass here while real docker treats it as part of the container
@@ -134,8 +134,8 @@ case "$1" in
         --name=*) name="\${arg#--name=}" ;;
         --cidfile) expect_value=cidfile ;;
         --cidfile=*) cidfile="\${arg#--cidfile=}" ;;
-        --user|--workdir|--env|--mount) expect_value=skip ;;
-        --user=*|--workdir=*|--env=*|--mount=*) ;;
+        --platform|--user|--workdir|--env|--mount) expect_value=skip ;;
+        --platform=*|--user=*|--workdir=*|--env=*|--mount=*) ;;
         -*) ;;
         *) image_seen=true ;;
       esac
@@ -485,6 +485,23 @@ describe('scripts/evals-container', () => {
         `gauntlet=${realpathSync(harness.gauntletRoot)}`,
       );
       expect(args[args.length - 1]).toBe(REPO);
+    } finally {
+      rmSync(harness.root, { recursive: true, force: true });
+    }
+  });
+
+  test('build and up target linux/amd64, the only platform the base image publishes', () => {
+    const harness = makeHarness();
+    try {
+      expect(runWrapper(harness, ['build']).status).toBe(0);
+      expect(runWrapper(harness, ['up']).status).toBe(0);
+
+      for (const command of ['build', 'run']) {
+        const args = dockerCommand(harness.dockerLog, command);
+        const platformIndex = args.indexOf('--platform');
+        expect(platformIndex).toBeGreaterThanOrEqual(0);
+        expect(args[platformIndex + 1]).toBe('linux/amd64');
+      }
     } finally {
       rmSync(harness.root, { recursive: true, force: true });
     }
@@ -1305,6 +1322,7 @@ describe('scripts/evals-container scoped mode', () => {
       const VALUE_TAKING = new Set([
         '--name',
         '--cidfile',
+        '--platform',
         '--user',
         '--workdir',
         '--env',
