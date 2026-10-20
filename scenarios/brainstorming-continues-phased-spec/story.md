@@ -1,6 +1,6 @@
 ---
 id: brainstorming-continues-phased-spec
-title: Brainstorming on the next phase of an existing spec confirms its understanding instead of asking why
+title: Brainstorming invoked on the next phase of an existing spec confirms its understanding instead of asking why
 status: ready
 tags: brainstorming, issue-2530
 quorum_tier: adhoc
@@ -14,13 +14,15 @@ quorum_max_time: 10m
 
 Send exactly this first message:
 
-"Phase 1 of the export spec is implemented. Continue with phase 2."
+"/superpowers:brainstorming Phase 1 of the export spec is implemented. Let's do phase 2."
 
 ## Context to provide when relevant
 
 You are an experienced developer and the author of this tool. You wrote the
 export spec in `docs/superpowers/specs/` and the list in
-`docs/notes/not-doing.md`. You expect the agent to work from them.
+`docs/notes/not-doing.md`. You invoked brainstorming yourself to make sure
+phase 2 is well defined before it gets built, and you expect the agent to
+work from the spec.
 
 Answer only what the agent asks. Use these facts when a question calls for
 them; a broad question can draw out several:
@@ -64,8 +66,8 @@ or writing a file under `ledger/` or `tests/`). Also end at nine minutes.
 - No question asks about the user's motivation for phase 2, their experience
   implementing phase 1, or anything the spec or `docs/notes/not-doing.md`
   already answers (for example which formats to support, or whether to write
-  files). A single brief check-in asking whether the user wants questions at
-  all is allowed, since the skill may have fired on its own.
+  files). The user invoked brainstorming, so the Coding-Agent does not offer
+  to skip its questions.
 - The questions the Coding-Agent raised are real gaps the spec leaves open,
   such as the JSON shape, how repeated `--category` flags combine,
   uncategorized rows, or what happens when nothing matches. Cite at least
