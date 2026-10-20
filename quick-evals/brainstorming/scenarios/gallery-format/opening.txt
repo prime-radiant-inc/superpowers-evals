@@ -1,0 +1,1 @@
+/superpowers:brainstorming I'd like to add support for viewing HEIC images in the gallery, like we do for PNG, JPEG and GIF.

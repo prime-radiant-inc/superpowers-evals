@@ -44,6 +44,7 @@ Usage: converse.sh -s SCENARIO -a ARM -P PLUGIN_DIR [-H HARNESS] [-t MAX_TURNS] 
   -o OUT_DIR     Results root (default /tmp/brainstorming-converse/<timestamp>).
 
 TURN_TIMEOUT sets how many seconds one subject turn may take (default 900).
+CLAUDE_MODEL sets the Claude worker's --model (default: the account default).
 
 Writes OUT_DIR/ARM/SCENARIO/ (plus codex-sessions/ or pi-sessions/):
   transcript.md   the conversation
@@ -118,7 +119,7 @@ claude_trust() {
 if [ "$HARNESS" = claude ]; then
   claude_trust '.projects[$dir].hasTrustDialogAccepted = true' \
     || { echo "error: could not mark $WORK trusted in $CLAUDE_JSON" >&2; exit 1; }
-  LAUNCH=("$CSD" launch "$NAME" "$WORK" -- --setting-sources project --strict-mcp-config --plugin-dir "$PLUGIN")
+  LAUNCH=("$CSD" launch "$NAME" "$WORK" -- --setting-sources project --strict-mcp-config --plugin-dir "$PLUGIN" ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"})
 elif [ "$HARNESS" = pi ]; then
   # Same launcher trick as Codex: the plugin root and model travel in a
   # per-run script, since the worker doesn't inherit this environment.
