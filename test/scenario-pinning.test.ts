@@ -28,6 +28,11 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'conversation-review-feedback',
   'conversation-verification',
   'conversation-config-repair',
+  // Issue 2530 brainstorming first-message conversations share that
+  // Claude/Codex-only conversation coverage.
+  'brainstorming-explicit-request-grounds-first-question',
+  'brainstorming-continues-phased-spec',
+  'brainstorming-auto-trigger-checks-in',
   // Builder campaign fixture: intentionally limited to the Serf harness and
   // Linux, where its Go toolchain and SDD subagent workflow are validated.
   'serf-builder-fractals',
