@@ -33,6 +33,7 @@ const INTENTIONAL_PINNED_SCENARIOS = new Set<string>([
   'brainstorming-explicit-request-grounds-first-question',
   'brainstorming-continues-phased-spec',
   'brainstorming-auto-trigger-checks-in',
+  'brainstorming-detailed-new-project',
   // Builder campaign fixture: intentionally limited to the Serf harness and
   // Linux, where its Go toolchain and SDD subagent workflow are validated.
   'serf-builder-fractals',
