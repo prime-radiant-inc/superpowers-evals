@@ -38,10 +38,13 @@ if [ "$ROOT" != curated ]; then
     || { echo "error: no .agents/plugins/marketplace.json in $ROOT" >&2; exit 2; }
   # Codex installs a local marketplace plugin with `git clone`, which drops
   # uncommitted edits. Snapshot the files as they are on disk into a
-  # throwaway repo so Codex tests exactly what's there.
+  # throwaway repo so Codex tests exactly what's there. Auto-gc stays off:
+  # a commit can start a background gc that packs the loose objects while
+  # Codex's clone is still copying them, and the clone fails.
   SNAP="$CODEX_HOME/plugin-snapshot"
   { rsync -a --exclude .git "$ROOT/" "$SNAP/" \
-    && git -C "$SNAP" init -q && git -C "$SNAP" add -A \
+    && git -C "$SNAP" init -q && git -C "$SNAP" config gc.auto 0 \
+    && git -C "$SNAP" config maintenance.auto false && git -C "$SNAP" add -A \
     && git -C "$SNAP" -c user.email=t@t -c user.name=t commit -qm snapshot; } > "$LOG" 2>&1 \
     || fail "snapshotting $ROOT failed"
   { "$REAL" plugin marketplace add "$SNAP" && "$REAL" plugin add superpowers@superpowers-dev; } >> "$LOG" 2>&1 \
